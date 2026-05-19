@@ -1,0 +1,42 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Pico Debug (Zephyr)",
+      "cwd": "${workspaceFolder}",
+      "executable": "${workspaceFolder}/build/zephyr/zephyr.elf",
+      "request": "launch",
+      "type": "cortex-debug",
+      "servertype": "openocd",
+      "serverpath": "${command:raspberry-pi-pico.getOpenOCDRoot}/openocd",
+      "searchDir": [
+        "${command:raspberry-pi-pico.getOpenOCDRoot}/scripts"
+      ],
+      "toolchainPrefix": "arm-zephyr-eabi",
+      "armToolchainPath": "${command:raspberry-pi-pico.getZephyrSDKPath}/gnu/arm-zephyr-eabi/bin",
+      "device": "${command:raspberry-pi-pico.getChipUppercase}",
+      "svdFile": "${userHome}/.pico-sdk/sdk/2.2.0/src/${command:raspberry-pi-pico.getChip}/hardware_regs/${command:raspberry-pi-pico.getChipUppercase}.svd",
+      "configFiles": [
+        "interface/cmsis-dap.cfg",
+        "target/rp2350.cfg"
+      ],
+      "runToEntryPoint": "main",
+      "openOCDLaunchCommands": [
+        "adapter speed 5000"
+      ],
+      "rtos": "Zephyr",
+      "preLaunchTask": "Compile Project"
+    },
+    {
+      "name": "Debug PC Tests",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/test_build/pc_test_runner.exe",
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "miDebuggerPath": "C:/msys64/ucrt64/bin/gdb.exe",
+      "MIMode": "gdb",
+      "preLaunchTask": "Build PC Tests"
+    }
+  ]
+}

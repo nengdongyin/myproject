@@ -1,0 +1,1242 @@
+/**
+ * @file param_manager.c
+ * @brief 参数管理核心框架实现
+ *
+ * 提供全局生命周期管理、哈希表操作、模块注册、读写分派、
+ * flush/save/load/reset 等所有功能的运行时实现。
+ *
+ * 全局状态: 单例 g_pm 结构体，包含:
+ *   - module_head / module_tail  模块链表 (按 MODULE_INIT_ORDER 排序)
+ *   - hash[PARAM_HASH_SIZE]      参数哈希表 (开放寻址/线性探测)
+ *   - storage                    持久化后端驱动
+ *   - stats                      运行时统计信息
+ */
+
+#include "param_manager.h"
+#include "param_manager_port.h"
+#include "app_param_manager.h"
+#include "module_ids.h"
+#include <string.h>
+#include <stdio.h>
+
+/**
+ * @brief 模块初始化顺序表 (编译期常量，来自 MODULE_INIT_ORDER)
+ */
+static const uint16_t g_module_order[] = {MODULE_INIT_ORDER};
+#define MODULE_ORDER_COUNT (sizeof(g_module_order) / sizeof(g_module_order[0]))
+
+/**
+ * @brief 全局单例 — 参数管理器所有运行时状态
+ */
+static struct
+{
+    param_module_node_t *module_head;     /**< 有序模块链表头 */
+    param_module_node_t *module_tail;     /**< 有序模块链表尾 (用于尾插) */
+    const param_storage_drv_t *storage;   /**< 持久化后端驱动 */
+    param_entry_t *hash[PARAM_HASH_SIZE]; /**< 参数哈希表 */
+    uint8_t initialized : 1;              /**< 初始化标志 */
+    param_stats_t stats;                  /**< 统计信息 */
+} g_pm;
+
+/* ================================================================
+ *  全局状态访问器
+ * ================================================================ */
+
+/** @brief 获取当前持久化后端驱动 (供子模块内部使用) */
+const param_storage_drv_t *param_get_storage(void)
+{
+    return g_pm.storage;
+}
+
+/** @brief 运行时替换持久化后端驱动 */
+void param_set_storage(const param_storage_drv_t *storage)
+{
+    g_pm.storage = storage;
+}
+
+/* ================================================================
+ *  统计计数器
+ * ================================================================ */
+
+/** @brief dirty 统计计数 +1 */
+void param_stats_dirty_inc(void) { g_pm.stats.dirty_count++; }
+/** @brief dirty 统计计数 -1 (防负数) */
+void param_stats_dirty_dec(void)
+{
+    if (g_pm.stats.dirty_count > 0)
+    {
+        g_pm.stats.dirty_count--;
+    }
+}
+
+/** @brief 模块注册计数 +1 */
+void param_stats_module_inc(void) { g_pm.stats.module_count++; }
+/** @brief 参数注册计数 +n */
+void param_stats_params_add(uint16_t n) { g_pm.stats.param_count += n; }
+/** @brief 若参数标记了 PERSIST 则 persist_count +1 */
+void param_stats_persist_inc(param_entry_t *e)
+{
+    if (e && (entry_flags(e) & PARAM_FLAG_PERSIST))
+        g_pm.stats.persist_count++;
+}
+
+/* ================================================================
+ *  哈希表 — Thomas Wang 整数哈希 + 开放寻址线性探测
+ * ================================================================ */
+
+/**
+ * @brief Thomas Wang 的 32-bit 整数哈希函数
+ *
+ * 用于将 param_id 均匀分散到哈希槽，消除简单取模带来的聚集问题。
+ * 哈希表大小 PARAM_HASH_SIZE 必须为 2 的幂，以保证 & (N-1) 等价于 % N。
+ *
+ * @param param_id 参数 ID
+ * @return 哈希槽索引 [0, PARAM_HASH_SIZE-1]
+ */
+static inline uint8_t hash_index(uint32_t param_id)
+{
+    uint32_t h = param_id;
+    h = (h ^ 61) ^ (h >> 16);
+    h = h + (h << 3);
+    h = h ^ (h >> 4);
+    h = h * 0x27d4eb2d;
+    h = h ^ (h >> 15);
+    return (uint8_t)(h & (PARAM_HASH_SIZE - 1));
+}
+
+/**
+ * @brief 哈希表插入 — 开放寻址 + 线性探测
+ *
+ * 从 hash_index() 算出的初始槽开始，最坏遍历 PARAM_HASH_SIZE 次。
+ * 若表满则返回 false。
+ *
+ * @param entry 要插入的参数条目
+ * @return true 成功，false 表满
+ */
+static bool hash_insert(param_entry_t *entry)
+{
+    uint8_t slot = hash_index(entry->param_id);
+    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++)
+    {
+        if (!g_pm.hash[slot])
+        {
+            g_pm.hash[slot] = entry;
+            return true;
+        }
+        slot = (slot + 1) & (PARAM_HASH_SIZE - 1);
+    }
+    return false;
+}
+
+/**
+ * @brief 哈希表查找 — 开放寻址 + 线性探测
+ *
+ * 遇到空槽 (NULL) 即停止，意味着目标一定不存在。
+ * 最坏 O(N)，平均 O(1)。
+ *
+ * @param param_id 参数 ID
+ * @return 找到的条目指针，NULL 表示不存在
+ */
+static param_entry_t *hash_find(uint32_t param_id)
+{
+    uint8_t slot = hash_index(param_id);
+    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++)
+    {
+        param_entry_t *e = g_pm.hash[slot];
+        if (!e)
+            return NULL;
+        if (e->param_id == param_id)
+            return e;
+        slot = (slot + 1) & (PARAM_HASH_SIZE - 1);
+    }
+    return NULL;
+}
+
+/** @brief 防重复的哈希插入 — 若已存在则返回 true (幂等) */
+bool param_hash_insert_entry(param_entry_t *entry)
+{
+    if (hash_find(entry->param_id))
+        return true;
+    return hash_insert(entry);
+}
+
+/* ================================================================
+ *  模块链表 — 按 MODULE_INIT_ORDER 有序插入
+ * ================================================================ */
+
+param_module_node_t *param_module_find(uint16_t module_id)
+{
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        if (m->module_id == module_id)
+            return m;
+        m = m->next;
+    }
+    return NULL;
+}
+
+/** @brief 查找模块在 g_module_order 中的位置索引 (越靠前越小) */
+static inline uint16_t get_module_order_index(uint16_t module_id)
+{
+    for (uint16_t i = 0; i < MODULE_ORDER_COUNT; i++)
+    {
+        if (g_module_order[i] == module_id)
+            return i;
+    }
+    return MODULE_ORDER_COUNT; /* 未在 ORDER 中的模块排末尾 */
+}
+
+/**
+ * @brief 将模块节点按 ORDER 顺序插入有序链表
+ *
+ * 遍历链表找到第一个 ORDER 索引大于当前模块的位置，插入其前。
+ * 不在 ORDER 中的模块 (索引 == MODULE_ORDER_COUNT) 始终排在末尾。
+ *
+ * 三种情况:
+ *   - 空链表: 直接作为 head+tail
+ *   - 头插: ORDER < head 的 ORDER
+ *   - 中插: 找到 prev->ORDER < new->ORDER < curr->ORDER 的位置
+ *   - 尾插: 排最后
+ *
+ * @param node 要插入的模块节点
+ */
+void param_module_node_insert(param_module_node_t *node)
+{
+    uint16_t new_order = get_module_order_index(node->module_id);
+
+    node->next = NULL;
+
+    /* 空链表 */
+    if (!g_pm.module_head)
+    {
+        g_pm.module_head = node;
+        g_pm.module_tail = node;
+        return;
+    }
+
+    /* 头插: 当前模块的 ORDER 比 head 还靠前 */
+    if (new_order < get_module_order_index(g_pm.module_head->module_id))
+    {
+        node->next = g_pm.module_head;
+        g_pm.module_head = node;
+        return;
+    }
+
+    /* 中插: 在 prev 和 curr 之间找到插入点 */
+    param_module_node_t *prev = g_pm.module_head;
+    param_module_node_t *curr = g_pm.module_head->next;
+
+    while (curr)
+    {
+        uint16_t curr_order = get_module_order_index(curr->module_id);
+        if (new_order < curr_order)
+        {
+            prev->next = node;
+            node->next = curr;
+            return;
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+
+    /* 尾插 */
+    prev->next = node;
+    g_pm.module_tail = node;
+}
+
+static param_entry_t *find_entry(uint32_t param_id)
+{
+    return hash_find(param_id);
+}
+
+param_entry_t *param_entry_find(uint32_t param_id)
+{
+    return find_entry(param_id);
+}
+
+/* ================================================================
+ *  生命周期: init / deinit
+ * ================================================================ */
+
+/**
+ * @brief 初始化参数管理框架
+ *
+ * 驱动由工厂函数预初始化后传入，此函数仅存储指针。
+ *
+ * @param storage 持久化后端驱动 (可为 NULL)
+ * @return PARAM_OK 成功，PARAM_ERR_BUSY 重复初始化
+ */
+int param_init(const param_storage_drv_t *storage)
+{
+    if (g_pm.initialized)
+        return PARAM_ERR_BUSY;
+
+    memset(&g_pm, 0, sizeof(g_pm));
+    g_pm.storage = storage;
+
+    g_pm.initialized = 1;
+    return PARAM_OK;
+}
+
+/**
+ * @brief 反初始化
+ *
+ * 逆序调用 storage->deinit() 和所有模块的 vtable->deinit()，
+ * 最后 memset 清零全局状态。
+ */
+void param_deinit(void)
+{
+    LOCK();
+
+    if (g_pm.storage && g_pm.storage->deinit)
+        g_pm.storage->deinit(g_pm.storage->ctx);
+
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        param_module_node_t *next = m->next;
+        if (m->vtable && m->vtable->deinit)
+            m->vtable->deinit(m);
+        m->next = NULL;
+        m = next;
+    }
+
+    memset(&g_pm, 0, sizeof(g_pm));
+    UNLOCK();
+}
+
+/* ================================================================
+ *  模块注册
+ *
+ *  注册流程:
+ *    1. 检查模块是否已注册 (module_id 重复)
+ *    2. 检查所有参数 ID 是否冲突
+ *    3. 参数插入哈希表
+ *    4. 模块节点按 ORDER 插入有序链表
+ *    5. 更新统计信息
+ * ================================================================ */
+
+int param_module_register(param_module_t *module,
+                          param_entry_t **entries,
+                          uint16_t count)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!module || !entries || count == 0)
+        return PARAM_ERR_INVALID_ID;
+
+    LOCK();
+
+    if (param_module_find(module->node.module_id))
+    {
+        UNLOCK();
+        return PARAM_ERR_ALREADY_REG;
+    }
+
+    for (uint16_t i = 0; i < count; i++)
+    {
+        if (!entries[i])
+            continue;
+        if (hash_find(entries[i]->param_id))
+        {
+            UNLOCK();
+            return PARAM_ERR_ALREADY_REG;
+        }
+    }
+
+    module->node.table = entries;
+    module->node.param_count = count;
+
+    for (uint16_t i = 0; i < count; i++)
+    {
+        if (!entries[i])
+            continue;
+        if (!hash_insert(entries[i]))
+        {
+            UNLOCK();
+            return PARAM_ERR_NO_MEMORY;
+        }
+    }
+
+    param_module_node_insert(&module->node);
+
+    param_stats_module_inc();
+    param_stats_params_add(count);
+
+    for (uint16_t i = 0; i < count; i++)
+        param_stats_persist_inc(entries[i]);
+
+    UNLOCK();
+    return PARAM_OK;
+}
+
+/* ================================================================
+ *  读写操作 — vtable 分派
+ *
+ *  所有 param_write / param_read 类的操作都遵循同一模式:
+ *    1. 检查初始化状态
+ *    2. 获取锁
+ *    3. 通过哈希表找到 param_entry
+ *    4. 调用 entry->vtable->xxx() 分派
+ *    5. 根据返回值更新模块 dirty 标记
+ *    6. 释放锁
+ * ================================================================ */
+
+/** @brief 写入参数 (缓存模式，不立即刷硬件，标记 dirty) */
+int param_write(uint32_t param_id, param_value_t value)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+
+    int ret = e->vtable->write(e, value);
+    if (ret == PARAM_OK)
+    {
+        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+        if (m && m->vtable && m->vtable->mark_dirty)
+        {
+            LOCK();
+            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
+            UNLOCK();
+        }
+    }
+    return ret;
+}
+
+/** @brief 写入参数缓存 (跳过 apply 回调，仅更新缓存 + 标记 dirty) */
+int param_write_cache(uint32_t param_id, param_value_t value)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+
+    int ret = e->vtable->write_cache(e, value);
+    if (ret == PARAM_OK)
+    {
+        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+        if (m && m->vtable && m->vtable->mark_dirty)
+        {
+            LOCK();
+            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
+            UNLOCK();
+        }
+    }
+    return ret;
+}
+
+/** @brief 立即写入参数 (直通硬件/回调，不产生 dirty) */
+int param_write_immediate(uint32_t param_id, param_value_t value)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+
+    int ret = e->vtable->write_immediate(e, value);
+    if (ret == PARAM_OK)
+    {
+        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+        if (m && m->vtable && m->vtable->clear_dirty)
+        {
+            LOCK();
+            m->vtable->clear_dirty(m, PARAM_LOCAL_ID(param_id));
+            UNLOCK();
+        }
+    }
+    return ret;
+}
+
+/** @brief 原始字节流写入 (EXEC 参数自动路由到 exec_cb) */
+int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!data || len == 0)
+        return PARAM_ERR_INVALID_ID;
+
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+
+    int ret = e->vtable->write_raw(e, data, len);
+    if (ret == PARAM_OK)
+    {
+        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+        if (m && m->vtable && m->vtable->mark_dirty)
+        {
+            LOCK();
+            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
+            UNLOCK();
+        }
+    }
+    return ret;
+}
+
+/** @brief 读取参数当前缓存值 */
+int param_read(uint32_t param_id, param_value_t *value)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!value)
+        return PARAM_ERR_INVALID_ID;
+
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+
+    LOCK();
+    int ret = e->vtable->read(e, value);
+    UNLOCK();
+    return ret;
+}
+
+/**
+ * @brief 原始字节流读取参数
+ *
+ * len 作为 [in/out] 参数: 输入为缓冲区容量, 输出为实际拷贝字节数。
+ * data 可为 NULL, 此时仅更新 *len 为参数数据总大小, 不拷贝。
+ * 缓冲区容量不足时静默截断, 不返回错误。
+ */
+int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!len || *len == 0)
+        return PARAM_ERR_INVALID_ID;
+
+    LOCK();
+    param_entry_t *e = param_entry_find(param_id);
+    if (!e)
+    {
+        UNLOCK();
+        return PARAM_ERR_INVALID_ID;
+    }
+
+    param_type_t t = entry_type(e);
+    uint16_t total;
+    const uint8_t *src;
+
+    switch (t)
+    {
+    case PARAM_TYPE_UINT:
+    case PARAM_TYPE_INT:
+    case PARAM_TYPE_FLOAT:
+    case PARAM_TYPE_BOOL:
+    case PARAM_TYPE_ENUM:
+    case PARAM_TYPE_EXEC:
+        total = sizeof(param_value_t);
+        src = (const uint8_t *)entry_cache(e);
+        break;
+    case PARAM_TYPE_BLOB:
+        total = ((param_blob_entry_t *)e)->blob_size;
+        src = (const uint8_t *)entry_cache(e)->ptr;
+        break;
+    case PARAM_TYPE_STRING:
+        total = ((param_string_entry_t *)e)->max_len + 1;
+        src = (const uint8_t *)entry_cache(e)->ptr;
+        break;
+    default:
+        UNLOCK();
+        return PARAM_ERR_TYPE_MISMATCH;
+    }
+
+    if (src && data)
+    {
+        uint16_t copy = (*len < total) ? *len : total;
+        memcpy(data, src, copy);
+        *len = copy;
+    }
+    else if (!data)
+    {
+        *len = total;
+    }
+
+    UNLOCK();
+    return PARAM_OK;
+}
+
+/* ---- 类型化读写包装函数 ---- */
+
+/** @brief uint32_t 类型写入快捷函数 */
+int param_write_u32(uint32_t id, uint32_t val)
+{
+    param_value_t v = {.u32 = val};
+    return param_write(id, v);
+}
+/** @brief int32_t 类型写入快捷函数 */
+int param_write_i32(uint32_t id, int32_t val)
+{
+    param_value_t v = {.i32 = val};
+    return param_write(id, v);
+}
+/** @brief float 类型写入快捷函数 */
+int param_write_f32(uint32_t id, float val)
+{
+    param_value_t v = {.f32 = val};
+    return param_write(id, v);
+}
+/** @brief bool 类型写入快捷函数 */
+int param_write_bool(uint32_t id, bool val)
+{
+    param_value_t v = {.b = val};
+    return param_write(id, v);
+}
+
+/** @brief uint32_t 类型读取快捷函数 */
+int param_read_u32(uint32_t id, uint32_t *val)
+{
+    param_value_t v;
+    int ret = param_read(id, &v);
+    if (ret == PARAM_OK && val)
+        *val = v.u32;
+    return ret;
+}
+/** @brief int32_t 类型读取快捷函数 */
+int param_read_i32(uint32_t id, int32_t *val)
+{
+    param_value_t v;
+    int ret = param_read(id, &v);
+    if (ret == PARAM_OK && val)
+        *val = v.i32;
+    return ret;
+}
+/** @brief float 类型读取快捷函数 */
+int param_read_f32(uint32_t id, float *val)
+{
+    param_value_t v;
+    int ret = param_read(id, &v);
+    if (ret == PARAM_OK && val)
+        *val = v.f32;
+    return ret;
+}
+/** @brief bool 类型读取快捷函数 */
+int param_read_bool(uint32_t id, bool *val)
+{
+    param_value_t v;
+    int ret = param_read(id, &v);
+    if (ret == PARAM_OK && val)
+        *val = v.b;
+    return ret;
+}
+
+/**
+ * @brief STRING 类型读取到调用者缓冲区
+ *
+ * 末尾始终补 '\0'。buf_size 不足时静默截断，不返回错误。
+ */
+int param_read_string(uint32_t id, char *buf, uint16_t buf_size)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!buf || buf_size == 0)
+        return PARAM_ERR_INVALID_ID;
+
+    param_entry_t *e = param_entry_find(id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+    if (entry_type(e) != PARAM_TYPE_STRING)
+        return PARAM_ERR_TYPE_MISMATCH;
+
+    LOCK();
+    const char *src = (const char *)entry_cache(e)->ptr;
+    if (!src)
+    {
+        UNLOCK();
+        return PARAM_ERR_NOT_FOUND;
+    }
+
+    uint16_t copy = buf_size - 1;
+    strncpy(buf, src, copy);
+    buf[copy] = '\0';
+    UNLOCK();
+
+    return PARAM_OK;
+}
+
+/**
+ * @brief STRING 类型写入，复用 vtable->write 路径
+ *
+ * 超 max_len 时由底层 cache_update_string 静默截断并补 '\0'。
+ */
+int param_write_string(uint32_t id, const char *str)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!str)
+        return PARAM_ERR_INVALID_ID;
+
+    param_entry_t *e = param_entry_find(id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+    if (entry_type(e) != PARAM_TYPE_STRING)
+        return PARAM_ERR_TYPE_MISMATCH;
+
+    param_value_t value = { .ptr = (void *)str };
+    int ret = e->vtable->write(e, value);
+    if (ret == PARAM_OK)
+    {
+        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(id));
+        if (m && m->vtable && m->vtable->mark_dirty)
+        {
+            LOCK();
+            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(id));
+            UNLOCK();
+        }
+    }
+
+    return ret;
+}
+
+/**
+ * @brief 获取参数数据大小 (字节数)
+ *
+ * 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) → sizeof(param_value_t) = 8
+ * BLOB → blob_size
+ * STRING → max_len + 1 (含结尾 '\0')
+ * 未注册 → 0
+ */
+uint16_t param_get_size(uint32_t param_id)
+{
+    param_entry_t *e = param_entry_find(param_id);
+    if (!e)
+        return 0;
+
+    switch (entry_type(e))
+    {
+    case PARAM_TYPE_UINT:
+    case PARAM_TYPE_INT:
+    case PARAM_TYPE_FLOAT:
+    case PARAM_TYPE_BOOL:
+    case PARAM_TYPE_ENUM:
+    case PARAM_TYPE_EXEC:
+        return sizeof(param_value_t);
+    case PARAM_TYPE_BLOB:
+        return ((param_blob_entry_t *)e)->blob_size;
+    case PARAM_TYPE_STRING:
+        return ((param_string_entry_t *)e)->max_len + 1;
+    default:
+        return 0;
+    }
+}
+
+/* ================================================================
+ *  exec / flush / save / load
+ * ================================================================ */
+
+/**
+ * @brief 执行模块命令
+ *
+ * 仅当 cmd_id 已作为 PARAM_FLAG_EXEC 参数注册且模块存在 exec_cb 时执行。
+ * 未注册的命令返回 PARAM_ERR_NOT_FOUND。
+ * user_arg 传入后封装为 param_value_t 联合体再传给回调。
+ */
+int param_exec(uint32_t cmd_id, void *user_arg)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    LOCK();
+    param_entry_t *e = param_entry_find(cmd_id);
+    if (!e || !(entry_flags(e) & PARAM_FLAG_EXEC))
+    {
+        UNLOCK();
+        return PARAM_ERR_NOT_FOUND;
+    }
+    param_module_node_t *m = param_module_find(PARAM_MODULE_ID(cmd_id));
+    if (!m)
+    {
+        UNLOCK();
+        return PARAM_ERR_NOT_FOUND;
+    }
+    param_exec_fn cb = m->exec_cb;
+    UNLOCK();
+    param_value_t arg = {.ptr = user_arg};
+    return cb ? cb(PARAM_LOCAL_ID(cmd_id), arg) : PARAM_ERR_NOT_FOUND;
+}
+
+/**
+ * @brief 将所有模块的 dirty 参数刷入硬件
+ *
+ * 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，对每个 dirty 模块调用 module->vtable->flush。
+ * 即使某个模块 flush 失败，仍会继续处理后续模块，错误计数累加到 flush_error_count。
+ *
+ * @return PARAM_OK 全部成功，或最后一个失败的错误码
+ */
+int param_flush(void)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    int last_err = PARAM_OK;
+
+    LOCK();
+
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        if (m->dirty && m->vtable && m->vtable->flush)
+        {
+            int ret = m->vtable->flush(m);
+            if (ret != PARAM_OK)
+            {
+                last_err = ret;
+                g_pm.stats.flush_error_count++;
+            }
+        }
+        m = m->next;
+    }
+
+    UNLOCK();
+    return last_err;
+}
+
+/** @brief 校验 module_id 是否在 MODULE_INIT_ORDER 中 */
+static bool module_order_contains(const uint16_t *order, uint16_t count,
+                                  uint16_t module_id)
+{
+    for (uint16_t i = 0; i < count; i++)
+        if (order[i] == module_id)
+            return true;
+    return false;
+}
+
+/**
+ * @brief 校验所有已注册模块是否都在 MODULE_INIT_ORDER 中
+ *
+ * 未覆盖的模块计入 flush_order_miss_count。
+ * @return PARAM_OK 全部覆盖，PARAM_ERR_NOT_FOUND 存在未覆盖模块
+ */
+int param_check_flush_integrity(void)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    g_pm.stats.flush_order_miss_count = 0;
+
+    LOCK();
+
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        if (!module_order_contains(g_module_order, MODULE_ORDER_COUNT,
+                                   m->module_id))
+        {
+            g_pm.stats.flush_order_miss_count++;
+        }
+        m = m->next;
+    }
+
+    UNLOCK();
+
+    if (g_pm.stats.flush_order_miss_count > 0)
+        return PARAM_ERR_NOT_FOUND;
+
+    return PARAM_OK;
+}
+
+/**
+ * @brief 保存所有 PARAM_FLAG_PERSIST 参数到持久化存储
+ *
+ * 遍历哈希表，对每个 entry 调用 entry->vtable->save()。
+ * 仅当 entry 的 flags 含 PARAM_FLAG_PERSIST 时才实际写入 (由子类实现判断)。
+ *
+ * @return PARAM_OK 成功，或第一个失败的错误码
+ */
+int param_save_all(void)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!g_pm.storage || !g_pm.storage->save)
+        return PARAM_ERR_NOT_FOUND;
+
+    LOCK();
+    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++)
+    {
+        param_entry_t *e = g_pm.hash[i];
+        if (!e)
+            continue;
+        int ret = e->vtable->save(e);
+        if (ret != 0)
+        {
+            UNLOCK();
+            return ret;
+        }
+    }
+    UNLOCK();
+    return PARAM_OK;
+}
+
+/** @brief 保存单个参数到持久化存储 */
+int param_save_one(uint32_t param_id)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!g_pm.storage || !g_pm.storage->save)
+        return PARAM_ERR_NOT_FOUND;
+    LOCK();
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
+    {
+        UNLOCK();
+        return PARAM_ERR_INVALID_ID;
+    }
+    int ret = e->vtable->save(e);
+    UNLOCK();
+    return ret;
+}
+
+/* ================================================================
+ *  存储后端分区管理
+ * ================================================================ */
+
+int param_storage_get_active_partition(uint8_t *index)
+{
+    if (!g_pm.storage || !g_pm.storage->get_active_partition)
+        return PARAM_ERR_NOT_FOUND;
+    return g_pm.storage->get_active_partition(g_pm.storage->ctx, index);
+}
+
+int param_storage_set_active_partition(uint8_t index)
+{
+    if (!g_pm.storage || !g_pm.storage->set_active_partition)
+        return PARAM_ERR_NOT_FOUND;
+    return g_pm.storage->set_active_partition(g_pm.storage->ctx, index);
+}
+
+int param_reload_storage(const param_storage_drv_t *new_storage)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    if (g_pm.storage && g_pm.storage->deinit)
+        g_pm.storage->deinit(g_pm.storage->ctx);
+
+    g_pm.storage = new_storage;
+
+    return param_load_all();
+}
+
+/**
+ * @brief 从持久化存储加载所有参数
+ *
+ * 两阶段执行:
+ *   1. LOAD 阶段: 遍历哈希表，对所有 entry 调用 entry->vtable->load()
+ *      将存储的值恢复到 entry->cache。仅收集第一个错误码。
+ *      (即使某个 entry 加载失败，仍继续加载后续 entry)
+ *   2. INIT 阶段: 按链表顺序遍历模块 (即 MODULE_INIT_ORDER)，
+ *      对每个模块调用 vtable->init()。通常用于将恢复的缓存值下发到硬件。
+ *
+ * 两阶段分离的意义: 确保 init 回调中通过 param_read() 能读到正确的缓存值。
+ */
+int param_load_all(void)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!g_pm.storage || !g_pm.storage->load)
+        return PARAM_ERR_NOT_FOUND;
+    int first_err = PARAM_OK;
+
+    LOCK();
+
+    /* 第一阶段: 遍历哈希表，恢复所有 entry 的缓存值 */
+    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++)
+    {
+        param_entry_t *e = g_pm.hash[i];
+        if (!e)
+            continue;
+        int ret = e->vtable->load(e);
+        if (ret != 0 && first_err == PARAM_OK)
+            first_err = (ret < 0) ? ret : PARAM_ERR_FLASH_FAIL;
+    }
+
+    UNLOCK();
+
+    /* 第二阶段: 按 MODULE_INIT_ORDER 顺序初始化每个模块 */
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        if (m->vtable && m->vtable->init)
+            m->vtable->init(m);
+        m = m->next;
+    }
+
+    return first_err;
+}
+
+/** @brief 从持久化存储加载单个参数 */
+int param_load_one(uint32_t param_id)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!g_pm.storage || !g_pm.storage->load)
+        return PARAM_ERR_NOT_FOUND;
+
+    param_entry_t *e;
+    int ret;
+
+    LOCK();
+    e = find_entry(param_id);
+    if (!e)
+    {
+        UNLOCK();
+        return PARAM_ERR_INVALID_ID;
+    }
+    ret = e->vtable->load(e);
+    if (ret == PARAM_OK)
+    {
+        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+        if (m && m->vtable && m->vtable->mark_dirty)
+            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
+    }
+    UNLOCK();
+
+    if (ret == PARAM_OK)
+        ret = e->vtable->write(e, *entry_cache(e));
+
+    return ret;
+}
+
+/* ================================================================
+ *  reset / stats / foreach / range / validate
+ * ================================================================ */
+
+/**
+ * @brief 重置所有参数为默认值
+ *
+ * 两阶段:
+ *   1. RESET 阶段: 遍历哈希表重置所有 entry 为默认值
+ *   2. INIT 阶段: 遍历模块链表调用 vtable->init()，将默认值下发到硬件
+ *
+ * 与 param_load_all 对称: 数据来源不同 (默认值 vs Flash)，
+ * 但缓存 → 硬件生效的路径一致。
+ *
+ * @return PARAM_OK
+ */
+int param_reset_all(void)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    LOCK();
+
+    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++)
+    {
+        param_entry_t *e = g_pm.hash[i];
+        if (!e)
+            continue;
+        e->vtable->reset(e);
+    }
+
+    UNLOCK();
+
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        if (m->vtable && m->vtable->init)
+            m->vtable->init(m);
+        m = m->next;
+    }
+
+    return PARAM_OK;
+}
+
+/** @brief 重置指定参数为默认值，并标记 dirty 以便刷入硬件 */
+int param_reset_one(uint32_t param_id)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    param_entry_t *e;
+    int ret;
+
+    LOCK();
+    e = find_entry(param_id);
+    if (!e)
+    {
+        UNLOCK();
+        return PARAM_ERR_INVALID_ID;
+    }
+    ret = e->vtable->reset(e);
+    if (ret == PARAM_OK)
+    {
+        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+        if (m && m->vtable && m->vtable->mark_dirty)
+            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
+    }
+    UNLOCK();
+
+    if (ret == PARAM_OK)
+        ret = e->vtable->write(e, *entry_cache(e));
+
+    return ret;
+}
+
+/** @brief 获取全局统计信息快照 */
+void param_get_stats(param_stats_t *stats)
+{
+    if (!g_pm.initialized)
+        return;
+    if (stats)
+    {
+        LOCK();
+        *stats = g_pm.stats;
+        UNLOCK();
+    }
+}
+
+/** @brief 清零统计计数器 (dirty/error/miss) */
+void param_clear_stats(void)
+{
+    if (!g_pm.initialized)
+        return;
+    LOCK();
+    g_pm.stats.dirty_count = 0;
+    g_pm.stats.flush_error_count = 0;
+    g_pm.stats.flush_order_miss_count = 0;
+    UNLOCK();
+}
+
+/**
+ * @brief 遍历指定模块或全部模块的参数条目
+ *
+ * @param module_id 模块 ID (0 表示全部)
+ * @param cb        回调，返回 false 终止遍历
+ * @param user_data 用户上下文
+ */
+void param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data)
+{
+    if (!g_pm.initialized || !cb)
+        return;
+    LOCK();
+
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        if (module_id == 0 || m->module_id == module_id)
+        {
+            for (uint16_t i = 0; i < m->param_count; i++)
+            {
+                param_entry_t *e = m->table[i];
+                if (!e)
+                    continue;
+                if (!cb(e, user_data))
+                {
+                    UNLOCK();
+                    return;
+                }
+            }
+        }
+        m = m->next;
+    }
+    UNLOCK();
+}
+
+/**
+ * @brief 运行时设置参数的范围 (仅 App UINT/INT/FLOAT 类型)
+ *
+ * @param param_id 参数 ID
+ * @param min_val  新最小值 (NULL 表示不改)
+ * @param max_val  新最大值 (NULL 表示不改)
+ * @return PARAM_OK 成功，或错误码
+ */
+int param_set_range(uint32_t param_id,
+                    const param_value_t *min_val,
+                    const param_value_t *max_val)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    LOCK();
+    param_entry_t *e = find_entry(param_id);
+    if (!e || !is_app(e))
+    {
+        UNLOCK();
+        return PARAM_ERR_INVALID_ID;
+    }
+
+    param_type_t t = entry_type(e);
+    if (t != PARAM_TYPE_UINT && t != PARAM_TYPE_INT && t != PARAM_TYPE_FLOAT)
+    {
+        UNLOCK();
+        return PARAM_ERR_TYPE_MISMATCH;
+    }
+
+    param_range_entry_t *re = (param_range_entry_t *)e;
+    if (min_val)
+        re->min = *min_val;
+    if (max_val)
+        re->max = *max_val;
+    re->has_range = 1;
+    app_clamp_entry(e);
+
+    UNLOCK();
+    return PARAM_OK;
+}
+
+/** @brief 对所有已注册参数执行范围裁剪 (仅 App UINT/INT/FLOAT) */
+void param_validate_all(void)
+{
+    if (!g_pm.initialized)
+        return;
+    LOCK();
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        for (uint16_t i = 0; i < m->param_count; i++)
+        {
+            param_entry_t *e = m->table[i];
+            if (e)
+                app_clamp_entry(e);
+        }
+        m = m->next;
+    }
+    UNLOCK();
+}
+
+/** @brief 遍历所有已注册模块节点 */
+void param_module_foreach(param_module_iter_fn cb, void *ctx)
+{
+    if (!g_pm.initialized || !cb)
+        return;
+    LOCK();
+    param_module_node_t *m = g_pm.module_head;
+    while (m)
+    {
+        cb(m, ctx);
+        m = m->next;
+    }
+    UNLOCK();
+}
+
+#ifdef PARAM_MODULE_AUTO_REGISTER
+
+/**
+ * @brief 编译器段自动注册 —
+ *        遍历链接器脚本定义的 .rodata.param_modules 段边界，
+ *        依次调用每个模块的 init 函数
+ *
+ * param_modules_start[] / param_modules_end[] 由链接器脚本提供，
+ * 指向同一 rodata 段的起止地址。
+ */
+extern const param_module_reg_t param_modules_start[];
+extern const param_module_reg_t param_modules_end[];
+
+int param_modules_register_all(void)
+{
+    const param_module_reg_t *p;
+    for (p = param_modules_start; p < param_modules_end; p++)
+    {
+        if (p->init)
+            p->init();
+    }
+    return PARAM_OK;
+}
+
+#endif

@@ -1,0 +1,268 @@
+#ifndef IP_PARAM_MANAGER_H
+#define IP_PARAM_MANAGER_H
+
+#include "param_manager.h"
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+    /**
+     * @file ip_param_manager.h
+     * @brief IP (硬件寄存器) 参数子系统 — 基于 driver 回调的直通参数管理
+     *
+     * IP 参数不直接操作硬件地址。硬件细节 (基址、偏移、位宽) 全部由 driver 封装。
+     * 框架通过 read_cb / write_cb / init_cb 回调与 driver 通信。
+     *
+     * 关键约束:
+     *   - ip_param_t 前 20B 与 param_entry_head_t 布局一致，可使用统一访问器
+     *   - 最多支持 64 个参数 (IP_DIRTY_MAP_BITS = 64)
+     *   - dirty 追踪使用 64-bit 位图 (ip_instance_t::dirty_map)
+     */
+
+    typedef struct ip_instance ip_instance_t;
+
+    /**
+     * @brief IP Driver 读回调
+     * @param driver   driver 私有数据指针
+     * @param local_id 参数局部 ID (0~63)
+     * @param value    [out] 读出的值
+     * @return PARAM_OK 成功
+     */
+    typedef int (*ip_read_cb)(void *driver, uint16_t local_id, param_value_t *value);
+
+    /**
+     * @brief IP Driver 写回调
+     * @param driver   driver 私有数据指针
+     * @param local_id 参数局部 ID
+     * @param value    待写入的值
+     * @return PARAM_OK 成功
+     */
+    typedef int (*ip_write_cb)(void *driver, uint16_t local_id, param_value_t value);
+
+    /**
+ * @brief IP Driver 批量 flush 回调 (可选)
+ *
+ * 在逐参数 write_cb 全部调用之后触发。
+ * 驱动可在此执行批量操作 (如 I2C burst write)。
+ * 置 NULL 时仅走 write_cb 逐参数路径。
+ *
+ * @param driver    driver 私有数据指针
+ * @param dirty_map 脏参数位图
+ * @return PARAM_OK 成功
+ */
+    typedef int (*ip_flush_fn)(void *driver, uint64_t dirty_map);
+
+    /**
+     * @brief IP Driver 初始化回调
+     * @param driver driver 私有数据指针
+     * @return PARAM_OK 成功
+     */
+    typedef int (*ip_init_cb)(void *driver);
+
+    /**
+     * @brief IP 参数条目 (前 20B 与 param_entry_head_t 一致)
+     */
+    typedef struct
+    {
+        PARAM_ENTRY_HEAD();
+    } ip_param_t;
+
+/** IP dirty_map 位数上限 */
+#define IP_DIRTY_MAP_BITS 64
+
+    /**
+     * @brief IP 实例 (嵌入 param_module_node 作为统一链表节点)
+     *
+     * 与 App 模块共用单条全局链表，通过 ip_module_vtable 区分行为。
+     */
+    struct ip_instance
+    {
+        param_module_node_t node; /**< 基类链表节点 */
+        void *driver;             /**< driver 私有数据 */
+        ip_read_cb read_cb;       /**< 读硬件回调 */
+        ip_write_cb write_cb;     /**< 写硬件回调 */
+        ip_flush_fn flush_cb;     /**< 批量 flush 回调 (NULL 回退 write_cb) */
+        ip_init_cb init_cb;       /**< 初始化回调 */
+        uint64_t dirty_map;       /**< 64-bit 脏位图: bit[i]=1 表示第 i 个参数 dirty */
+    };
+
+    /**
+     * @brief 注册 IP Driver 及其参数表
+     *
+     * 参数条目和 driver 实例均静态分配，零 malloc。
+     * 注册过程: 哈希插入 + 统一链表插入 (按 MODULE_INIT_ORDER 排序)。
+     *
+     * @param inst    IP 实例指针 (静态分配)
+     * @param entries 参数条目指针数组
+     * @param count   参数数量 (<= 64)
+     * @return PARAM_OK 成功，PARAM_ERR_ALREADY_REG 重复注册，
+     *         PARAM_ERR_OUT_OF_RANGE count > 64，PARAM_ERR_NO_MEMORY 哈希表满
+     */
+    int ip_driver_register(ip_instance_t *inst,
+                           param_entry_t **entries,
+                           uint16_t count);
+
+    /**
+     * @brief IP 读写动作类型
+     */
+    typedef enum
+    {
+        IP_READ = 0,
+        IP_WRITE = 1
+    } ip_action_t;
+
+    /**
+     * @brief IP 控制接口 (调试用) — 直接向 driver 发起读/写
+     *
+     * 绕过参数缓存，直接与 driver 通信。仅支持 1/2/4 字节传输。
+     *
+     * @param ip_id    IP 模块 ID
+     * @param local_id 局部参数 ID
+     * @param data     数据缓冲区
+     * @param len      数据长度 (1/2/4)
+     * @param action   IP_READ 或 IP_WRITE
+     * @return PARAM_OK 成功，或错误码
+     */
+    int ip_control(uint16_t ip_id, uint16_t local_id, uint8_t *data,
+                   uint8_t len, ip_action_t action);
+
+/**
+ * @brief IP 读快捷宏
+ * @sa ip_control(ip_id, local_id, data, len, IP_READ)
+ */
+#define ip_read(ip_id, local_id, data, len) \
+    ip_control(ip_id, local_id, data, len, IP_READ)
+
+/**
+ * @brief IP 写快捷宏
+ * @sa ip_control(ip_id, local_id, data, len, IP_WRITE)
+ */
+#define ip_write(ip_id, local_id, data, len) \
+    ip_control(ip_id, local_id, data, len, IP_WRITE)
+
+/**
+ * @name IP 参数条目定义宏
+ *
+ * 与 App 宏类似，但 vtable 指向 &ip_vtable 且无范围校验字段。
+ * @{
+ */
+
+/** @brief 定义 IP UINT 类型参数 */
+#define PARAM_IP_UINT(_name, _id, _flags, _def) \
+    static ip_param_t _name = {                 \
+        .base = {(_id), &ip_vtable},            \
+        .type = PARAM_TYPE_UINT,                \
+        .flags = (_flags),                      \
+        .dirty = 0,                             \
+        .cache = {.u32 = (_def)},               \
+        .default_val = {.u32 = (_def)},         \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief 定义 IP INT 类型参数 */
+#define PARAM_IP_INT(_name, _id, _flags, _def) \
+    static ip_param_t _name = {                \
+        .base = {(_id), &ip_vtable},           \
+        .type = PARAM_TYPE_INT,                \
+        .flags = (_flags),                     \
+        .dirty = 0,                            \
+        .cache = {.i32 = (_def)},              \
+        .default_val = {.i32 = (_def)},        \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief 定义 IP FLOAT 类型参数 */
+#define PARAM_IP_FLOAT(_name, _id, _flags, _def) \
+    static ip_param_t _name = {                  \
+        .base = {(_id), &ip_vtable},             \
+        .type = PARAM_TYPE_FLOAT,                \
+        .flags = (_flags),                       \
+        .dirty = 0,                              \
+        .cache = {.f32 = (_def)},                \
+        .default_val = {.f32 = (_def)},          \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief 定义 IP BOOL 类型参数 */
+#define PARAM_IP_BOOL(_name, _id, _flags, _def) \
+    static ip_param_t _name = {                 \
+        .base = {(_id), &ip_vtable},            \
+        .type = PARAM_TYPE_BOOL,                \
+        .flags = (_flags),                      \
+        .dirty = 0,                             \
+        .cache = {.b = (_def)},                 \
+        .default_val = {.b = (_def)},           \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/**
+ * @brief 定义 IP EXEC 命令
+ *
+ * 注册一个 PARAM_FLAG_EXEC 标记的伪参数条目。不可通过 param_write 写入，
+ * 仅由 param_exec 触发。框架保证 param_write_raw / param_write_immediate
+ * 遇到 EXEC 参数时自动路由到模块的 exec_cb 回调，arg 为 param_value_t 联合体。
+ * dump 输出为 "EXEC" (不显示值)，flags 列显示 "E"。
+ *
+ * @param _name 命令变量名
+ * @param _id   命令 ID (MAKE_PARAM_ID 风格)
+ */
+#define PARAM_IP_EXEC(_name, _id)    \
+    static ip_param_t _name = {      \
+        .base = {(_id), &ip_vtable}, \
+        .type = PARAM_TYPE_EXEC,     \
+        .flags = PARAM_FLAG_EXEC,    \
+        .dirty = 0,                  \
+        .cache = {.u32 = 0},         \
+        .default_val = {.u32 = 0},   \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @} */
+
+/**
+ * @brief 定义 IP Driver 实例 (静态分配)
+ *
+ * 使用示例:
+ * @code
+ * IP_DRIVER_DEFINE(sensor, IP_SENSOR, "OV4689_Sensor_IP",
+ *                  &g_sensor_dev, sensor_read, sensor_write, NULL);
+ * @endcode
+ *
+ * @param _ip_name IP 实例名 (生成 _ip_name##_instance)
+ * @param _ip_id   模块 ID
+ * @param _label   调试名称
+ * @param _drv     driver 私有数据指针
+ * @param _rd      读回调
+ * @param _wr      写回调 (可 NULL)
+ * @param _fl      flush 回调 (可 NULL, 回退逐参数 write_cb)
+ */
+#define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, _drv, _rd, _wr, _fl) \
+    static ip_instance_t _ip_name##_instance = {                        \
+        .node = {                                                       \
+            .module_id = (_ip_id),                                      \
+            .name = (_label),                                           \
+            .vtable = &ip_module_vtable,                                \
+            .exec_cb = NULL,                                            \
+        },                                                              \
+        .driver = (_drv),                                               \
+        .read_cb = (_rd),                                               \
+        .write_cb = (_wr),                                              \
+        .flush_cb = (_fl),                                              \
+        .init_cb = NULL,                                                \
+    }
+
+/**
+ * @brief 定义 IP Driver 注册函数
+ *
+ * @param _ip_name IP 实例名 (与 IP_DRIVER_DEFINE 中相同)
+ * @param _entries 参数表数组
+ */
+#define IP_DRIVER_INIT(_ip_name, _entries)                            \
+    void _ip_name##_init(void)                                        \
+    {                                                                 \
+        ip_driver_register(&_ip_name##_instance,                      \
+                           (_entries),                                \
+                           sizeof(_entries) / sizeof((_entries)[0])); \
+    }
+
+#ifdef __cplusplus
+}
+#endif
+#endif /* IP_PARAM_MANAGER_H */

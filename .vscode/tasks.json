@@ -1,0 +1,156 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Compile Project",
+      "type": "shell",
+      "command": "${command:raspberry-pi-pico.getWestPath}",
+      "args": [
+        "build",
+        "-p",
+        "auto",
+        "-b",
+        "rpi_pico2/rp2350a/m33/w",
+        "-d",
+        "\"${workspaceFolder}/build\"",
+        "\"${workspaceFolder}\"",
+        "--",
+        "-DOPENOCD=${command:raspberry-pi-pico.getOpenOCDRoot}/openocd",
+        "-DOPENOCD_DEFAULT_PATH=${command:raspberry-pi-pico.getOpenOCDRoot}/scripts"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${command:raspberry-pi-pico.getZephyrWorkspacePath}",
+        "env": {
+          "PATH": "${command:raspberry-pi-pico.getGitPath}:${env:PATH}:"
+        }
+      },
+      "windows": {
+        "options": {
+          "env": {
+            "Path": "${command:raspberry-pi-pico.getGitPath};${env:Path};"
+          },
+          "shell": {
+            "executable": "cmd.exe",
+            "args": [
+              "/d",
+              "/c"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "label": "Flash",
+      "type": "shell",
+      "group": {
+        "kind": "build"
+      },
+      "command": "\"${command:raspberry-pi-pico.getWestPath}\"",
+      "args": [
+        "flash",
+        "--build-dir",
+        "\"${workspaceFolder}/build\""
+      ],
+      "options": {
+        "cwd": "${command:raspberry-pi-pico.getZephyrWorkspacePath}"
+      }
+    },
+    {
+      "label": "Run Project",
+      "type": "shell",
+      "command": "\"${command:raspberry-pi-pico.getPicotoolPath}\"",
+      "args": [
+        "load",
+        "\"${workspaceFolder}/build/zephyr/zephyr.elf\"",
+        "-fx"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": [],
+      "dependsOrder": "sequence",
+      "dependsOn": "Compile Project"
+    },
+    {
+      "label": "Build PC Tests",
+      "type": "shell",
+      "command": "C:/msys64/ucrt64/bin/gcc.exe",
+      "args": [
+        "-std=c17",
+        "-g",
+        "-O0",
+        "-Wall",
+        "-DPARAM_MANAGER_NO_OS",
+        "-Isrc",
+        "-Isrc/test/core",
+        "-Isrc/test/core/unity",
+        "-Isrc/test/param_manager",
+        "-Isrc/test/ymodem/unit",
+        "-Isrc/test/ymodem/mocks",
+        "-Isrc/test/protocol_chain",
+        "-Isrc/test/imperx",
+        "-Isrc/test/camyu",
+        "-Isrc/core/param_manager/core",
+        "-Isrc/core/param_manager/port",
+        "-Isrc/core/protocol_parser",
+        "-Isrc/protocols/ymodem/src",
+        "-Isrc/protocols/imperx",
+        "-Isrc/protocols/camyu",
+        "src/test/core/unified_test_main.c",
+        "src/test/core/test_suite.c",
+        "src/test/core/unity/unity.c",
+        "src/test/param_manager/test_main.c",
+        "src/test/param_manager/test_common.c",
+        "src/test/param_manager/test_read_write.c",
+        "src/test/param_manager/test_boundary.c",
+        "src/test/param_manager/test_init_order.c",
+        "src/test/param_manager/test_error_handling.c",
+        "src/test/param_manager/test_load_save.c",
+        "src/test/param_manager/test_flush.c",
+        "src/test/param_manager/test_reset.c",
+        "src/test/param_manager/test_other.c",
+        "src/test/param_manager/test_multi_bank.c",
+        "src/test/ymodem/unit/test_common.c",
+        "src/test/ymodem/unit/test_sender.c",
+        "src/test/ymodem/unit/test_receiver.c",
+        "src/test/ymodem/mocks/mock_time.c",
+        "src/test/protocol_chain/test_chain.c",
+        "src/test/imperx/test_imperx.c",
+        "src/test/camyu/test_camyu.c",
+        "src/core/param_manager/core/param_manager.c",
+        "src/core/param_manager/core/app_param_manager.c",
+        "src/core/param_manager/core/ip_param_manager.c",
+        "src/core/protocol_parser/protocol_parser.c",
+        "src/core/protocol_parser/protocol_chain.c",
+        "src/protocols/ymodem/src/ymodem_common.c",
+        "src/protocols/ymodem/src/ymodem_sender.c",
+        "src/protocols/ymodem/src/ymodem_receiver.c",
+        "src/protocols/imperx/protocol_parser_imperx.c",
+        "src/protocols/camyu/protocol_parser_camyu.c",
+        "-o",
+        "${workspaceFolder}/test_build/pc_test_runner.exe"
+      ],
+      "group": {
+        "kind": "build"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      },
+      "problemMatcher": "$gcc",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    }
+  ]
+}

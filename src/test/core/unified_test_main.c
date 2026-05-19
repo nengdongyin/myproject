@@ -1,0 +1,37 @@
+#include <stdio.h>
+#define UNITY_OUTPUT_CHAR(a) putchar(a)
+#include "unity.h"
+#include "test_suite.h"
+
+extern const test_suite_t _ts_param_manager;
+extern const test_suite_t _ts_ymodem_common;
+extern const test_suite_t _ts_ymodem_sender;
+extern const test_suite_t _ts_ymodem_receiver;
+extern const test_suite_t _ts_protocol_chain;
+extern const test_suite_t _ts_imperx;
+extern const test_suite_t _ts_camyu;
+
+//uint32_t mock_time_ms;
+
+// uint32_t system_get_time_ms(void)
+// {
+//     return mock_time_ms;
+// }
+
+int main(void)
+{
+    printf("=== Test Suite Runner ===\n");
+
+    test_suite_add(&_ts_param_manager);
+    test_suite_add(&_ts_ymodem_common);
+    test_suite_add(&_ts_ymodem_sender);
+    test_suite_add(&_ts_ymodem_receiver);
+    test_suite_add(&_ts_protocol_chain);
+    test_suite_add(&_ts_imperx);
+    test_suite_add(&_ts_camyu);
+
+    int failures = test_suite_run_all();
+    (void)failures;
+    while (1) {}
+    return 0;
+}
