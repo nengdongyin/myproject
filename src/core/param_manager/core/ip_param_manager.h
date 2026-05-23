@@ -26,20 +26,20 @@ extern "C"
     /**
      * @brief IP Driver 读回调
      * @param driver   driver 私有数据指针
-     * @param local_id 参数局部 ID (0~63)
+     * @param param_id 全局唯一参数 ID (MAKE_PARAM_ID 风格)
      * @param value    [out] 读出的值
      * @return PARAM_OK 成功
      */
-    typedef int (*ip_read_cb)(void *driver, uint16_t local_id, param_value_t *value);
+    typedef int (*ip_read_cb)(void *driver, uint32_t param_id, param_value_t *value);
 
     /**
      * @brief IP Driver 写回调
      * @param driver   driver 私有数据指针
-     * @param local_id 参数局部 ID
+     * @param param_id 全局唯一参数 ID
      * @param value    待写入的值
      * @return PARAM_OK 成功
      */
-    typedef int (*ip_write_cb)(void *driver, uint16_t local_id, param_value_t value);
+    typedef int (*ip_write_cb)(void *driver, uint32_t param_id, param_value_t value);
 
     /**
  * @brief IP Driver 批量 flush 回调 (可选)

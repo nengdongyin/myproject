@@ -494,7 +494,7 @@ static int app_write(param_entry_t *e, param_value_t value)
     const app_type_handler_t *h = &g_type_handlers[t];
     if (!h->pre_write(e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
-    uint16_t m_id = (uint16_t)(e->param_id >> 16);
+    uint16_t m_id = (uint16_t)PARAM_MODULE_ID(e->param_id);
     param_module_node_t *node = param_module_find(m_id);
     param_module_t *m = (param_module_t *)node;
     if (m && m->apply) {
@@ -544,7 +544,7 @@ static int app_write_immediate(param_entry_t *e, param_value_t value)
     if (entry_flags(e) & (PARAM_FLAG_READONLY | PARAM_FLAG_EXEC))
         return PARAM_ERR_READONLY;
 
-    uint16_t m_id = (uint16_t)(e->param_id >> 16);
+    uint16_t m_id = (uint16_t)PARAM_MODULE_ID(e->param_id);
     param_module_node_t *node = param_module_find(m_id);
     param_module_t *m = (param_module_t *)node;
     if (!m || !m->apply) return PARAM_ERR_NOT_FOUND;
@@ -578,7 +578,7 @@ static int app_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len)
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(e->param_id));
         if (!m || !m->exec_cb) return PARAM_ERR_NOT_FOUND;
         param_value_t arg = { .ptr = (void *)data };
-        return m->exec_cb(PARAM_LOCAL_ID(e->param_id), arg);
+        return m->exec_cb(e->param_id, arg);
     }
     if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
 

@@ -39,8 +39,7 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
     const cmd_map_entry_t *e = cmd_map_lookup((uint16_t)pri->parsed_id);
     if (e) {
         if (cmd == IMPERX_CMD_WRITE) {
-            int ret = param_write_raw(e->param_id, pri->parsed_data,
-                                      pri->parsed_len);
+            int ret = param_write_raw(e->param_id, pri->parsed_data, pri->parsed_len);
             param_flush();
             param_dump(PARAM_MODULE_ID(e->param_id), dump_cb, NULL);
         } else {

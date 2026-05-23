@@ -14,9 +14,9 @@ static int sys_apply_cb(uint32_t param_id, param_value_t value)
     return PARAM_OK;
 }
 
-static int sys_exec_cb(uint16_t local_id, param_value_t arg)
+static int sys_exec_cb(uint32_t param_id, param_value_t arg)
 {
-    if (local_id == 0x01)
+    if (param_id == MAKE_PARAM_ID(MODULE_SYS, 0x01))
     {
         uint8_t idx = *(uint8_t *)arg.ptr;
         const param_storage_drv_t *drv = param_get_storage();

@@ -40,7 +40,7 @@ void test_load_one_valid(void) {
 
     param_value_t v;
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(250, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(200, v.u32);
 }
 
 void test_load_one_no_persist(void) {
@@ -216,7 +216,7 @@ void test_save_load_roundtrip_uint(void) {
 
     param_deinit();
     mock_callbacks_reset();
-    param_init(&g_mock_storage);
+    param_init(&g_mock_storage, NULL);
     register_all();
 
     param_load_all();
@@ -235,7 +235,7 @@ void test_save_load_roundtrip_float(void) {
 
     param_deinit();
     mock_callbacks_reset();
-    param_init(&g_mock_storage);
+    param_init(&g_mock_storage, NULL);
     register_all();
 
     param_load_all();

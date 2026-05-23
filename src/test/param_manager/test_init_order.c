@@ -79,7 +79,7 @@ void test_init_normal(void)
 {
     param_deinit();
     mock_storage_reset();
-    int ret = param_init(&g_mock_storage);
+    int ret = param_init(&g_mock_storage, NULL);
     TEST_ASSERT_PARAM_OK(ret);
 }
 
@@ -87,13 +87,13 @@ void test_init_null_storage(void)
 {
     param_deinit();
     mock_storage_reset();
-    int ret = param_init(NULL);
+    int ret = param_init(NULL, NULL);
     TEST_ASSERT_PARAM_OK(ret);
 }
 
 void test_init_twice(void)
 {
-    int ret = param_init(&g_mock_storage);
+    int ret = param_init(&g_mock_storage, NULL);
     TEST_ASSERT_PARAM_ERR(ret, PARAM_ERR_BUSY);
 }
 
@@ -109,7 +109,7 @@ void test_deinit_multiple_modules(void)
     param_module_register(&order_applet_module, applet_params, PARAM_COUNT(applet_params));
 
     param_deinit();
-    param_init(&g_mock_storage);
+    param_init(&g_mock_storage, NULL);
     TEST_ASSERT_PARAM_OK(PARAM_OK);
 }
 

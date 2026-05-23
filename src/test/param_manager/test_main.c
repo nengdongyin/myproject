@@ -10,7 +10,7 @@ void pm_setup(void)
     mock_storage_reset();
     mock_storage2_reset();
     mock_callbacks_reset();
-    param_init(&g_mock_storage);
+    param_init(&g_mock_storage, NULL);
 }
 
 void pm_teardown(void)

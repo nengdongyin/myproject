@@ -106,7 +106,7 @@ void test_bank_init_with_null_driver(void)
     mock_storage2_reset();
     mock_callbacks_reset();
 
-    int ret = param_init(NULL);
+    int ret = param_init(NULL, NULL);
     TEST_ASSERT_EQUAL_INT(PARAM_OK, ret);
 
     register_all();

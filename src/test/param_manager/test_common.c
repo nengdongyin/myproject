@@ -315,29 +315,29 @@ void mock_ip_reset(void)
     memset(&g_ip_write_last_value, 0, sizeof(g_ip_write_last_value));
 }
 
-int mock_ip_read(void *drv, uint16_t local_id, param_value_t *value)
+int mock_ip_read(void *drv, uint32_t param_id, param_value_t *value)
 {
     (void)drv;
-    (void)local_id;
+    (void)param_id;
     g_ip_read_call_count++;
     memset(value, 0, sizeof(*value));
     return PARAM_OK;
 }
 
-int mock_ip_write_ok(void *drv, uint16_t local_id, param_value_t value)
+int mock_ip_write_ok(void *drv, uint32_t param_id, param_value_t value)
 {
     (void)drv;
-    (void)local_id;
+    (void)param_id;
     g_ip_write_call_count++;
     g_ip_write_last_value = value;
     g_ip_write_last_ret = PARAM_OK;
     return PARAM_OK;
 }
 
-int mock_ip_write_fail(void *drv, uint16_t local_id, param_value_t value)
+int mock_ip_write_fail(void *drv, uint32_t param_id, param_value_t value)
 {
     (void)drv;
-    (void)local_id;
+    (void)param_id;
     g_ip_write_call_count++;
     g_ip_write_last_value = value;
     g_ip_write_last_ret = PARAM_ERR_NOT_FOUND;

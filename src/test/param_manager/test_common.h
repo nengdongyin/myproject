@@ -165,9 +165,9 @@ extern param_value_t g_ip_write_last_value;
 
 void mock_ip_reset(void);
 
-int mock_ip_read(void *drv, uint16_t local_id, param_value_t *value);
-int mock_ip_write_ok(void *drv, uint16_t local_id, param_value_t value);
-int mock_ip_write_fail(void *drv, uint16_t local_id, param_value_t value);
+int mock_ip_read(void *drv, uint32_t param_id, param_value_t *value);
+int mock_ip_write_ok(void *drv, uint32_t param_id, param_value_t value);
+int mock_ip_write_fail(void *drv, uint32_t param_id, param_value_t value);
 int mock_ip_init_ok(void *drv);
 
 /* ================================================================

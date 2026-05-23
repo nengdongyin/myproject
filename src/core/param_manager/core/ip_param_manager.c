@@ -64,7 +64,7 @@ static int ip_param_write(param_entry_t *e, param_value_t value)
 {
     ip_param_t *ip = (ip_param_t *)e;
     if (ip->flags & PARAM_FLAG_EXEC) return PARAM_ERR_READONLY;
-    ip_instance_t *inst = ip_find((uint16_t)(e->param_id >> 16));
+    ip_instance_t *inst = ip_find((uint16_t)PARAM_MODULE_ID(e->param_id));
     if (!inst) return PARAM_ERR_NOT_FOUND;
 
     LOCK();
@@ -87,13 +87,12 @@ static int ip_write_immediate(param_entry_t *e, param_value_t value)
     if (ip->flags & PARAM_FLAG_EXEC) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(e->param_id));
         if (!m || !m->exec_cb) return PARAM_ERR_NOT_FOUND;
-        return m->exec_cb(PARAM_LOCAL_ID(e->param_id), value);
+        return m->exec_cb(e->param_id, value);
     }
-    ip_instance_t *inst = ip_find((uint16_t)(e->param_id >> 16));
+    ip_instance_t *inst = ip_find((uint16_t)PARAM_MODULE_ID(e->param_id));
     if (!inst || !inst->write_cb) return PARAM_ERR_NOT_FOUND;
 
-    uint16_t lid = PARAM_LOCAL_ID(e->param_id);
-    int ret = inst->write_cb(inst->driver, lid, value);
+    int ret = inst->write_cb(inst->driver, e->param_id, value);
     if (ret == PARAM_OK) {
         LOCK();
         ip->cache = value;
@@ -113,7 +112,7 @@ static int ip_param_write_raw(param_entry_t *e, const uint8_t *data, uint16_t le
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(e->param_id));
         if (!m || !m->exec_cb) return PARAM_ERR_NOT_FOUND;
         param_value_t arg = { .ptr = (void *)data };
-        return m->exec_cb(PARAM_LOCAL_ID(e->param_id), arg);
+        return m->exec_cb(e->param_id, arg);
     }
     if (len > sizeof(param_value_t)) return PARAM_ERR_TYPE_MISMATCH;
 
@@ -132,13 +131,13 @@ static int ip_param_write_raw(param_entry_t *e, const uint8_t *data, uint16_t le
 static int ip_flush_one(param_entry_t *e)
 {
     ip_param_t *ip = (ip_param_t *)e;
-    ip_instance_t *inst = ip_find((uint16_t)(e->param_id >> 16));
+    ip_instance_t *inst = ip_find((uint16_t)PARAM_MODULE_ID(e->param_id));
     if (!inst || !inst->write_cb) return PARAM_ERR_NOT_FOUND;
 
     uint16_t lid = PARAM_LOCAL_ID(e->param_id);
     if (!((inst->dirty_map >> lid) & 1)) return PARAM_OK;
 
-    int ret = inst->write_cb(inst->driver, lid, ip->cache);
+    int ret = inst->write_cb(inst->driver, e->param_id, ip->cache);
     if (ret != PARAM_OK) return ret;
 
     if (ip->dirty) {
@@ -178,7 +177,7 @@ static int ip_param_load(param_entry_t *e)
     int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)&ip->cache, sizeof(param_value_t));
     if (ret == 0) {
         if (ip->dirty == 0) { param_stats_dirty_inc(); ip->dirty = 1; }
-        param_module_node_t *m = param_module_find((uint16_t)(e->param_id >> 16));
+        param_module_node_t *m = param_module_find((uint16_t)PARAM_MODULE_ID(e->param_id));
         if (m && m->vtable && m->vtable->mark_dirty)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(e->param_id));
     }
@@ -191,7 +190,7 @@ static int ip_param_reset(param_entry_t *e)
     *entry_cache_ptr(e) = *entry_default(e);
     param_entry_clear_dirty(e);
 
-    ip_instance_t *inst = ip_find((uint16_t)(e->param_id >> 16));
+    ip_instance_t *inst = ip_find((uint16_t)PARAM_MODULE_ID(e->param_id));
     if (inst) {
         inst->dirty_map &= ~(1ULL << PARAM_LOCAL_ID(e->param_id));
         if (inst->dirty_map == 0)
@@ -272,7 +271,7 @@ static int ip_module_flush(param_module_node_t *m)
         if ((inst->dirty_map >> i) & 1) {
             ip_param_t *p = (ip_param_t *)m->table[i];
             if (p && inst->write_cb) {
-                int ret = inst->write_cb(inst->driver, i, p->cache);
+                int ret = inst->write_cb(inst->driver, p->base.param_id, p->cache);
                 if (ret != PARAM_OK) return ret;
             }
         }
@@ -435,14 +434,14 @@ int ip_control(uint16_t ip_id, uint16_t local_id, uint8_t *data,
         param_value_t val;
         memset(&val, 0, sizeof(val));
         memcpy(&val, data, len);
-        int ret = inst->write_cb(inst->driver, local_id, val);
+        int ret = inst->write_cb(inst->driver, MAKE_PARAM_ID(ip_id, local_id), val);
         UNLOCK();
         return ret;
     } else {
         if (!inst->read_cb) { UNLOCK(); return PARAM_ERR_NOT_FOUND; }
         param_value_t val;
         memset(&val, 0, sizeof(val));
-        int ret = inst->read_cb(inst->driver, local_id, &val);
+        int ret = inst->read_cb(inst->driver, MAKE_PARAM_ID(ip_id, local_id), &val);
         if (ret == PARAM_OK) memcpy(data, &val, len);
         UNLOCK();
         return ret;

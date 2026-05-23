@@ -308,7 +308,7 @@ void test_string_save_load(void) {
     mock_flush_reset();
     mock_init_reset();
     mock_ip_reset();
-    param_init(&g_mock_storage);
+    param_init(&g_mock_storage, NULL);
 
     memset(g_str_buf, 0, sizeof(g_str_buf));
     param_module_register(&test_str_mod_module, g_str_entries, 1);

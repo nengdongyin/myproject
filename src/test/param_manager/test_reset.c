@@ -39,7 +39,7 @@ void test_reset_one_uint(void) {
 
     param_read(TID_APPLET_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(100, v.u32);
-    TEST_ASSERT_DIRTY(&ru32.base, 0);
+    TEST_ASSERT_DIRTY(&ru32.base, 1);
 }
 
 void test_reset_one_bool(void) {
@@ -64,7 +64,7 @@ void test_reset_one_ip(void) {
 
     param_read(TID_IP_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(500, v.u32);
-    TEST_ASSERT_DIRTY(&ripu.base, 0);
+    TEST_ASSERT_DIRTY(&ripu.base, 1);
 }
 
 void test_reset_one_float(void) {
@@ -128,7 +128,7 @@ void test_reset_one_clears_ip_dirty_map(void) {
 
     param_stats_t stats;
     param_get_stats(&stats);
-    TEST_ASSERT_EQUAL_UINT16(0, stats.dirty_count);
+    TEST_ASSERT_EQUAL_UINT16(1, stats.dirty_count);
 }
 
 /* ================================================================

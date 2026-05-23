@@ -1,6 +1,8 @@
 #include "param_manager_init.h"
 #include <stdio.h>
+#include <string.h>
 #include "param_manager.h"
+#include "lwevt/lwevt.h"
 #include "param_storage_flashdb.h"
 #include "sensor_module.h"
 #include "auto_exp_control.h"
@@ -13,12 +15,30 @@ static void dump_cb(const char *line, void *user_data)
     printf("%s\n", line);
 }
 
+static volatile uint8_t s_notify_depth = 0;
+
+static void on_param_changed(uint32_t param_id, param_value_t new_value)
+{
+    if (s_notify_depth > 0)
+        return;
+    s_notify_depth++;
+
+    lwevt_t evt;
+    evt.type = PARAM_EVT_CHANGED;
+    evt.msg.param_changed.param_id = param_id;
+    memcpy(&evt.msg.param_changed.new_value, &new_value, sizeof(new_value));
+    lwevt_dispatch_ex(&evt, PARAM_EVT_CHANGED);
+
+    s_notify_depth--;
+}
+
 void param_manager_init(void)
 {
     const param_storage_drv_t *storage = param_storage_flashdb_create();
     if (!storage)
         return;
-    param_init(storage);
+    lwevt_init();
+    param_init(storage, on_param_changed);
 
 
 #ifdef PARAM_MODULE_AUTO_REGISTER

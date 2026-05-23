@@ -21,6 +21,8 @@ target_include_directories(app PRIVATE
     src/lib/flashdb/inc
     src/lib/flashdb/port/fal/inc
     src/lib/flashdb/config
+    src/lib/lwevt/src/include
+    src/lib/lwevt/user_config
     src/bsp/rp2350
     src/modules/app/auto_exp
     src/modules/ip/sensor
@@ -119,6 +121,7 @@ else()
       src/lib/flashdb/port/fal/src/fal.c
       src/lib/flashdb/port/fal/src/fal_flash.c
       src/lib/flashdb/port/fal/src/fal_partition.c
+      src/lib/lwevt/src/lwevt/lwevt.c
       src/modules/app/auto_exp/ae_instance.c
       src/modules/app/auto_exp/auto_exp_control.c
       src/modules/ip/sensor/sensor_module.c

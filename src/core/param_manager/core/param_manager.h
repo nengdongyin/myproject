@@ -100,6 +100,20 @@ extern "C"
     typedef struct param_module_node param_module_node_t;
 
     /**
+     * @brief 参数变化通知回调
+     *
+     * 当参数值通过 param_write / param_write_cache / param_write_immediate /
+     * param_write_string 成功写入后调用。
+     * 回调在 vtable->write 的 LOCK/UNLOCK 区域之外执行。
+     * 回调内禁止调用 param_write / param_write_cache / param_write_immediate /
+     * param_write_string，是否防重入由回调实现者自行决定。
+     *
+     * @param param_id  发生变化的参数 ID
+     * @param new_value 写入后的新值
+     */
+    typedef void (*param_notify_fn)(uint32_t param_id, param_value_t new_value);
+
+    /**
      * @brief App 参数写入时调用的校验/转换回调
      * @param param_id 参数 ID
      * @param value    待写入的新值
@@ -121,11 +135,11 @@ extern "C"
      * 参数时，框架自动路由到此回调。arg 为 param_value_t 联合体，可通过 .u32 / .i32 /
      * .f32 / .b / .ptr 按需取值。
      *
-     * @param local_id 命令本地 ID (低 16 位, 框架已解码)
+     * @param param_id 全局唯一参数 ID (MAKE_PARAM_ID 风格)
      * @param arg      命令参数 (param_value_t 联合体)
      * @return PARAM_OK 成功，其他值表示失败
      */
-    typedef int (*param_exec_fn)(uint16_t local_id, param_value_t arg);
+    typedef int (*param_exec_fn)(uint32_t param_id, param_value_t arg);
 
     /**
      * @brief 模块级虚函数表 (vtable)
@@ -477,9 +491,10 @@ extern "C"
      * 驱动由工厂函数预初始化后传入，此函数仅存储指针。
      *
      * @param storage 持久化后端驱动 (可为 NULL)
+     * @param notify  参数变化通知回调 (可为 NULL, 由回调实现者自行处理防重入)
      * @return PARAM_OK 成功，PARAM_ERR_BUSY 重复初始化
      */
-    int param_init(const param_storage_drv_t *storage);
+    int param_init(const param_storage_drv_t *storage, param_notify_fn notify);
 
     /**
      * @brief 反初始化，释放所有资源
@@ -608,7 +623,7 @@ extern "C"
      * @brief 执行模块命令
      *
      * 校验 cmd_id 已作为 PARAM_FLAG_EXEC 参数注册，随后查找模块节点，
-     * 调用其 exec_cb(local_id, arg)。框架已解码 local_id (低 16 位)，
+     * 调用其 exec_cb(param_id, arg) 直接传入全局唯一参数 ID。
      * arg 为 param_value_t 联合体，由 user_arg 转换而成。
      *
      * - param_write / param_write_raw / param_write_immediate 遇到

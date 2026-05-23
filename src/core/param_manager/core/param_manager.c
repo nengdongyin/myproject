@@ -36,6 +36,7 @@ static struct
     param_entry_t *hash[PARAM_HASH_SIZE]; /**< 参数哈希表 */
     uint8_t initialized : 1;              /**< 初始化标志 */
     param_stats_t stats;                  /**< 统计信息 */
+    param_notify_fn notify_cb;            /**< 参数变化通知回调 (可为 NULL) */
 } g_pm;
 
 /* ================================================================
@@ -267,13 +268,14 @@ param_entry_t *param_entry_find(uint32_t param_id)
  * @param storage 持久化后端驱动 (可为 NULL)
  * @return PARAM_OK 成功，PARAM_ERR_BUSY 重复初始化
  */
-int param_init(const param_storage_drv_t *storage)
+int param_init(const param_storage_drv_t *storage, param_notify_fn notify)
 {
     if (g_pm.initialized)
         return PARAM_ERR_BUSY;
 
     memset(&g_pm, 0, sizeof(g_pm));
     g_pm.storage = storage;
+    g_pm.notify_cb = notify;
 
     g_pm.initialized = 1;
     return PARAM_OK;
@@ -403,6 +405,8 @@ int param_write(uint32_t param_id, param_value_t value)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
             UNLOCK();
         }
+        if (g_pm.notify_cb)
+            g_pm.notify_cb(param_id, value);
     }
     return ret;
 }
@@ -427,6 +431,8 @@ int param_write_cache(uint32_t param_id, param_value_t value)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
             UNLOCK();
         }
+        if (g_pm.notify_cb)
+            g_pm.notify_cb(param_id, value);
     }
     return ret;
 }
@@ -451,6 +457,8 @@ int param_write_immediate(uint32_t param_id, param_value_t value)
             m->vtable->clear_dirty(m, PARAM_LOCAL_ID(param_id));
             UNLOCK();
         }
+        if (g_pm.notify_cb)
+            g_pm.notify_cb(param_id, value);
     }
     return ret;
 }
@@ -691,6 +699,8 @@ int param_write_string(uint32_t id, const char *str)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(id));
             UNLOCK();
         }
+        if (g_pm.notify_cb)
+            g_pm.notify_cb(id, value);
     }
 
     return ret;
@@ -759,7 +769,7 @@ int param_exec(uint32_t cmd_id, void *user_arg)
     param_exec_fn cb = m->exec_cb;
     UNLOCK();
     param_value_t arg = {.ptr = user_arg};
-    return cb ? cb(PARAM_LOCAL_ID(cmd_id), arg) : PARAM_ERR_NOT_FOUND;
+    return cb ? cb(cmd_id, arg) : PARAM_ERR_NOT_FOUND;
 }
 
 /**
