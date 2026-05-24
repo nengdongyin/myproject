@@ -8,7 +8,7 @@ PARAM_BOOL    (erdo, TID_APPLET_RDONLY, PARAM_FLAG_PERSIST|PARAM_FLAG_READONLY, 
 PARAM_TABLE(applet_params, &eu32.base, &erdo.base);
 PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ErrApplet", mock_flush_ok, mock_apply_ok);
 
-PARAM_IP_UINT  (eip, TID_IP_UINT, PARAM_FLAG_PERSIST, 500);
+PARAM_IP_UINT  (eip, TID_IP_UINT, PARAM_FLAG_PERSIST, 500,   500,   500);
 PARAM_TABLE(ip_params, &eip.base);
 IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ErrIP", NULL, NULL, mock_ip_write_ok, NULL);
 

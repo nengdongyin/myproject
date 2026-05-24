@@ -129,6 +129,13 @@ extern "C"
     typedef int (*param_flush_fn)(void *flush_ctx);
 
     /**
+     * @brief App 模块初始化回调
+     * @param ctx 模块注册时提供的上下文指针
+     * @return PARAM_OK 成功
+     */
+    typedef int (*param_init_fn)(void *ctx);
+
+    /**
      * @brief 模块命令执行回调
      *
      * 当 param_write / param_write_raw / param_write_immediate 遇到 PARAM_FLAG_EXEC
@@ -180,9 +187,13 @@ extern "C"
         int (*read)(param_entry_t *e, param_value_t *value);
         /** 写入参数缓存 (不立即刷硬件) */
         int (*write)(param_entry_t *e, param_value_t value);
-        /** 写入参数缓存 (跳过 apply 回调, 仅更新缓存 + 标记 dirty) */
+        /** 写入参数缓存:
+         *   - App 参数: 跳过 apply 回调，仅更新缓存 + 标记 dirty
+         *   - IP 参数:  与 write 行为相同 (IP 无 apply 回调) */
         int (*write_cache)(param_entry_t *e, param_value_t value);
-        /** 写入参数缓存并立即刷入硬件，不产生 dirty 标记 */
+        /** 立即写入参数:
+         *   - IP 参数: 通过 write_cb 直通硬件，更新缓存，不产生 dirty 标记
+         *   - App 参数: 执行 apply 校验 + 更新缓存 + 清除 dirty，不写硬件 (硬件写入由 param_flush 触发) */
         int (*write_immediate)(param_entry_t *e, param_value_t value);
         /** 原始字节流写入 */
         int (*write_raw)(param_entry_t *e, const uint8_t *data, uint16_t len);
@@ -213,11 +224,13 @@ extern "C"
     };
 
 /**
- * @brief 公共头部宏 — 所有 App/IP 参数的前 20B 布局一致
+ * @brief 公共头部宏 — 所有 App/IP 参数的前 20B 布局一致 (内部实现细节)
  *
  * 展开为 param_entry_t base + type + flags + dirty +
  *         param_value_t cache + param_value_t default_val [+ name]。
- * 这意味着 ip_param_t 和 param_entry_head_t 可安全互转。
+ * 这意味着所有派生参数结构体都可安全互转。
+ *
+ * @internal 应用层代码不应直接使用此宏，请使用 PARAM_UINT / PARAM_INT 等定义宏。
  */
 #define PARAM_ENTRY_HEAD()     \
     param_entry_t base;        \
@@ -234,106 +247,6 @@ extern "C"
 #else
 #define IF_PARAM_DEBUG_NAME(x)
 #define PARAM_DEBUG_NAME_INIT(nm)
-#endif
-
-    /**
-     * @brief 公共头部具名结构体 — 提供编译期偏移量计算
-     *
-     * 所有统一访问器 (entry_type / entry_cache 等) 通过此类型强转实现。
-     */
-    typedef struct
-    {
-        PARAM_ENTRY_HEAD();
-    } param_entry_head_t;
-
-    /** @brief 判断参数是否为 App 类型 (vtable == &app_vtable) */
-    static inline bool is_app(const param_entry_t *e)
-    {
-        return e && e->vtable == &app_vtable;
-    }
-
-    /** @brief 判断参数是否为 IP 类型 (vtable == &ip_vtable) */
-    static inline bool is_ip(const param_entry_t *e)
-    {
-        return e && e->vtable == &ip_vtable;
-    }
-
-    /**
-     * @name 统一访问器
-     *
-     * 通过 param_entry_t * 基类指针 + param_entry_head_t 强转，
-     * 对 App 和 IP 参数均适用。偏移量在编译期计算。
-     * @{
-     */
-
-    /** @brief 获取参数类型 */
-    static inline param_type_t entry_type(const param_entry_t *e)
-    {
-        return ((const param_entry_head_t *)e)->type;
-    }
-
-    /** @brief 获取参数属性标志 */
-    static inline uint16_t entry_flags(const param_entry_t *e)
-    {
-        return ((const param_entry_head_t *)e)->flags;
-    }
-
-    void param_stats_dirty_dec(void);
-
-    /** @brief 获取参数 dirty 标志 */
-    static inline uint8_t entry_dirty(const param_entry_t *e)
-    {
-        return ((const param_entry_head_t *)e)->dirty;
-    }
-
-    /** @brief 设置参数 dirty 标志 */
-    static inline void entry_set_dirty(param_entry_t *e, uint8_t v)
-    {
-        ((param_entry_head_t *)e)->dirty = v;
-    }
-
-    /**
-     * @brief 清除参数 dirty 标志并同步全局统计
-     *
-     * 仅在 dirty==1 时执行递减，避免重复清零导致计数错误。
-     */
-    static inline void param_entry_clear_dirty(param_entry_t *e)
-    {
-        if (entry_dirty(e))
-        {
-            entry_set_dirty(e, 0);
-            param_stats_dirty_dec();
-        }
-    }
-
-    /** @brief 获取缓存值指针（可写） */
-    static inline param_value_t *entry_cache_ptr(param_entry_t *e)
-    {
-        return &((param_entry_head_t *)e)->cache;
-    }
-
-    /** @brief 获取缓存值（只读） */
-    static inline const param_value_t *entry_cache(const param_entry_t *e)
-    {
-        return &((const param_entry_head_t *)e)->cache;
-    }
-
-    /** @brief 获取默认值（只读） */
-    static inline const param_value_t *entry_default(const param_entry_t *e)
-    {
-        return &((const param_entry_head_t *)e)->default_val;
-    }
-
-    /** @} */
-
-#ifdef PARAM_DEBUG_NAME
-    /** @brief 获取参数调试名称 (仅 PARAM_DEBUG_NAME 开启时可用) */
-    static inline const char *param_entry_name(const param_entry_t *e)
-    {
-        return ((const param_entry_head_t *)e)->name;
-    }
-#else
-#define param_entry_name(e) "?"
 #endif
 
     /**
@@ -463,7 +376,7 @@ extern "C"
         param_module_node_t node; /**< 基类节点 */
         param_apply_fn apply;     /**< 参数写入时的校验/转换回调 */
         param_flush_fn flush;     /**< 刷入硬件的回调 */
-        param_flush_fn init;      /**< 模块初始化回调 */
+        param_init_fn init;       /**< 模块初始化回调 */
         void *flush_ctx;          /**< flush/init 回调的上下文指针 */
     };
 
@@ -526,6 +439,10 @@ extern "C"
      * 只更新缓存值并标记 dirty，不调用模块的 apply 回调。
      * 适用场景: apply_cb 内部需要对值做裁剪修正，避免重入 param_write。
      *
+     * App/IP 差异:
+     *   - App 参数: 跳过 apply，与 param_write 的区别在于不触发业务校验。
+     *   - IP 参数:  与 param_write 行为完全相同 (IP 无 apply 回调)。
+     *
      * @param param_id 参数 ID
      * @param value    新值
      * @return PARAM_OK 成功，或错误码
@@ -533,7 +450,13 @@ extern "C"
     int param_write_cache(uint32_t param_id, param_value_t value);
 
     /**
-     * @brief 立即写入参数 (直通硬件，不产生 dirty)
+     * @brief 立即写入参数
+     *
+     * 行为取决于参数所属模块类型:
+     *   - IP 参数: 通过 write_cb 直通硬件，更新缓存，不产生 dirty。
+     *   - App 参数: 执行 apply 校验回调，更新缓存并清除 dirty 标记。
+     *     注意: App 参数不会写硬件，实际硬件写入由 param_flush() 触发。
+     *
      * @param param_id 参数 ID
      * @param value    新值
      * @return PARAM_OK 成功，或错误码
@@ -722,43 +645,6 @@ extern "C"
 
     /** @} */ /* public_api */
 
-    /**
-     * @defgroup internal_api 子类内部 API — 仅供 ip_manager / App_manager 调用
-     * @{
-     */
-
-    /** @brief 获取当前持久化后端驱动 */
-    const param_storage_drv_t *param_get_storage(void);
-    /** @brief 通过 module_id 查找模块节点 (遍历链表) */
-    param_module_node_t *param_module_find(uint16_t module_id);
-    /** @brief 通过 param_id 查找参数条目 (哈希查找) */
-    param_entry_t *param_entry_find(uint32_t param_id);
-    /** @brief 注册 App 模块及其参数表 */
-    int param_module_register(param_module_t *module,
-                              param_entry_t **entries,
-                              uint16_t count);
-    /** @brief dirty 统计计数 +1 */
-    void param_stats_dirty_inc(void);
-    /** @brief dirty 统计计数 -1 (防负数) */
-    void param_stats_dirty_dec(void);
-    /** @brief 模块注册计数 +1 */
-    void param_stats_module_inc(void);
-    /** @brief 参数注册计数 +n */
-    void param_stats_params_add(uint16_t n);
-    /** @brief 若参数标记了 PERSIST 则 persist_count +1 */
-    void param_stats_persist_inc(param_entry_t *e);
-    /** @brief 哈希插入 (幂等: 已存在则跳过) */
-    bool param_hash_insert_entry(param_entry_t *entry);
-    /** @brief 按 MODULE_INIT_ORDER 有序插入模块节点到链表 */
-    void param_module_node_insert(param_module_node_t *node);
-
-    /** 模块遍历回调 */
-    typedef void (*param_module_iter_fn)(param_module_node_t *m, void *ctx);
-    /** @brief 遍历所有已注册模块节点 */
-    void param_module_foreach(param_module_iter_fn cb, void *ctx);
-
-/** @} */ /* internal_api */
-
 /**
  * @brief 定义参数表 (静态数组)
  * @param _name 数组名
@@ -774,10 +660,6 @@ extern "C"
 #define PARAM_COUNT(_arr) (sizeof(_arr) / sizeof((_arr)[0]))
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-    _Static_assert(offsetof(param_entry_head_t, base) == 0,
-                   "param_entry_head_t.base must be first");
-    _Static_assert(offsetof(param_entry_head_t, type) == sizeof(param_entry_t),
-                   "param_entry_head_t.type offset mismatch");
     _Static_assert(offsetof(param_module_node_t, module_id) == sizeof(void *),
                    "param_module_node_t.module_id offset mismatch");
 #endif

@@ -19,8 +19,8 @@ static int mock_init_seq_applet(void *ctx)
     return PARAM_OK;
 }
 
-PARAM_IP_UINT(ip_p1, TID_IP_UINT, PARAM_FLAG_PERSIST, 100);
-PARAM_IP_FLOAT(ip_p2, TID_IP_FLOAT, PARAM_FLAG_PERSIST, 1.0f);
+PARAM_IP_UINT(ip_p1, TID_IP_UINT, PARAM_FLAG_PERSIST, 100,   100,   100);
+PARAM_IP_FLOAT(ip_p2, TID_IP_FLOAT, PARAM_FLAG_PERSIST, 1.0f,  1.0f,  1.0f);
 
 PARAM_TABLE(ip_params, &ip_p1.base, &ip_p2.base);
 

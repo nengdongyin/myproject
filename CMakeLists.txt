@@ -74,6 +74,7 @@ if(TEST_MODE)
       src/core/param_manager/core/param_manager.c
       src/core/param_manager/core/app_param_manager.c
       src/core/param_manager/core/ip_param_manager.c
+      src/core/param_manager/core/param_data_ops.c
       src/core/param_manager/core/param_dump.c
       src/core/param_manager/port/param_manager_port.c
       src/protocols/ymodem/src/ymodem_common.c
@@ -101,6 +102,7 @@ else()
       src/core/param_manager/core/param_manager.c
       src/core/param_manager/core/app_param_manager.c
       src/core/param_manager/core/ip_param_manager.c
+      src/core/param_manager/core/param_data_ops.c
       src/core/param_manager/core/param_dump.c
       src/core/param_manager/port/param_manager_port.c
       src/core/param_manager/port/param_storage_flashdb.c

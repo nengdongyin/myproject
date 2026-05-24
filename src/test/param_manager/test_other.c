@@ -5,8 +5,8 @@ DEF_TEST_UINT  (ou32, TID_APPLET_UINT, PARAM_FLAG_PERSIST, 100, 0, 200);
 DEF_TEST_INT   (oi32, TID_APPLET_INT,  PARAM_FLAG_PERSIST, 0, -50, 50);
 PARAM_BOOL     (oboo, TID_APPLET_BOOL, PARAM_FLAG_PERSIST, true);
 
-PARAM_IP_UINT  (oipu, TID_IP_UINT,  PARAM_FLAG_PERSIST, 500);
-PARAM_IP_FLOAT (oipf, TID_IP_FLOAT, PARAM_FLAG_PERSIST, 2.0f);
+PARAM_IP_UINT  (oipu, TID_IP_UINT,  PARAM_FLAG_PERSIST, 500,   500,   500);
+PARAM_IP_FLOAT (oipf, TID_IP_FLOAT, PARAM_FLAG_PERSIST, 2.0f,  2.0f,  2.0f);
 
 PARAM_TABLE(applet_params, &ou32.base, &oi32.base, &oboo.base);
 PARAM_TABLE(ip_params, &oipu.base, &oipf.base);
@@ -228,8 +228,13 @@ void test_blob_write_read(void) {
         PARAM_DEBUG_NAME_INIT(test_blob)
     };
 
+    static param_entry_t *entries[] = { &test_blob.base };
+    PARAM_MODULE_DEFINE(test_blob_mod, (uint16_t)PARAM_MODULE_ID(TID_APPLET_BLOB),
+                        "BlobMod", NULL, mock_apply_ok);
+    param_module_register(&test_blob_mod_module, entries, 1);
+
     param_value_t v = { .ptr = data };
-    int ret = app_vtable.write(&test_blob.base, v);
+    int ret = param_write(TID_APPLET_BLOB, v);
     TEST_ASSERT_PARAM_OK(ret);
 
     TEST_ASSERT_EQUAL_UINT8(0xAB, g_blob_buf_other[0]);
@@ -281,8 +286,12 @@ void test_string_truncation(void) {
     };
     memset(buf, 0, sizeof(buf));
 
+    static param_entry_t *trunc_entries[] = { &trunc_str.base };
+    PARAM_MODULE_DEFINE(trunc_mod, STR_TEST_MODULE, "TruncMod", NULL, mock_apply_ok);
+    param_module_register(&trunc_mod_module, trunc_entries, 1);
+
     param_value_t v = { .ptr = (void *)"HelloWorld" };
-    int ret = app_vtable.write(&trunc_str.base, v);
+    int ret = param_write(STR_TEST_ID, v);
     TEST_ASSERT_PARAM_OK(ret);
     TEST_ASSERT_EQUAL_STRING("Hello", buf);
 }

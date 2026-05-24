@@ -1,4 +1,5 @@
 #include "param_manager.h"
+#include "param_manager_internal.h"
 #include "app_param_manager.h"
 #include "module_ids.h"
 

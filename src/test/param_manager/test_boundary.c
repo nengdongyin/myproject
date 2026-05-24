@@ -7,8 +7,8 @@ DEF_TEST_FLOAT (bf32, TID_APPLET_FLOAT,PARAM_FLAG_PERSIST, 1.5f, 0.0f, 3.0f);
 static const int32_t g_benm_vals[] = {10, 20, 30};
 PARAM_ENUM     (benm, TID_APPLET_ENUM, PARAM_FLAG_PERSIST, 10, g_benm_vals, 3);
 
-PARAM_IP_UINT  (ipu,  TID_IP_UINT,  PARAM_FLAG_PERSIST, 500);
-PARAM_IP_FLOAT (ipf,  TID_IP_FLOAT, PARAM_FLAG_PERSIST, 2.0f);
+PARAM_IP_UINT  (ipu,  TID_IP_UINT,  PARAM_FLAG_PERSIST, 500,   500,   500);
+PARAM_IP_FLOAT (ipf,  TID_IP_FLOAT, PARAM_FLAG_PERSIST, 2.0f,  2.0f,  2.0f);
 PARAM_IP_BOOL  (ipb,  TID_IP_BOOL,  PARAM_FLAG_PERSIST, false);
 
 PARAM_TABLE(applet_params, &bu32.base, &bi32.base, &bf32.base, &benm.base);
@@ -166,7 +166,7 @@ void test_register_duplicate_param_across_modules(void) {
  *  IP 位图边界
  * ================================================================ */
 void test_ip_max_64_params(void) {
-    static ip_param_t ip_arr[64];
+    static param_entry_head_t ip_arr[64];
     static param_entry_t *ip_table[64];
     for (int i = 0; i < 64; i++) {
         memset(&ip_arr[i], 0, sizeof(ip_arr[i]));
@@ -182,7 +182,7 @@ void test_ip_max_64_params(void) {
 }
 
 void test_ip_too_many_params(void) {
-    static ip_param_t ip_arr[65];
+    static param_entry_head_t ip_arr[65];
     static param_entry_t *ip_table[65];
     for (int i = 0; i < 65; i++) {
         memset(&ip_arr[i], 0, sizeof(ip_arr[i]));

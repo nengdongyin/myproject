@@ -130,6 +130,7 @@
         "src/core/param_manager/core/param_manager.c",
         "src/core/param_manager/core/app_param_manager.c",
         "src/core/param_manager/core/ip_param_manager.c",
+        "src/core/param_manager/core/param_data_ops.c",
         "src/core/protocol_parser/protocol_parser.c",
         "src/core/protocol_parser/protocol_chain.c",
         "src/protocols/ymodem/src/ymodem_common.c",

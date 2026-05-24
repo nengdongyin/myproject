@@ -11,6 +11,7 @@
 
 #include "param_dump.h"
 #include "param_manager.h"
+#include "param_manager_internal.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -351,17 +352,27 @@ static const param_entry_fmt_fn g_dump_formatters[PARAM_TYPE_COUNT] = {
 };
 
 /**
- * @brief IP 参数格式化 — 不访问 range 字段 (ip_param_t 无 has_range/min/max)
+ * @brief IP 参数格式化 — 范围列固定为空 (IP 不使用范围校验)
  *
- * 与 App 同类型共享值格式化逻辑，但范围列固定为空。
+ * 与 App 同类型共享值格式化逻辑。
  * 通过 PARAM_ENTRY_HEAD 统一访问器读取 cache/type/flags/dirty，
  * 按 param_type_t 分派到具体值格式，绝不对 param_range_entry_t 强制转型。
  */
 static void fmt_ip(param_entry_t *e, const char *name,
                    char *line, uint16_t size)
 {
-    param_value_t v = *entry_cache(e);
     param_type_t t = entry_type(e);
+
+    if (t == PARAM_TYPE_BLOB) {
+        fmt_blob(e, name, line, size);
+        return;
+    }
+    if (t == PARAM_TYPE_STRING) {
+        fmt_string(e, name, line, size);
+        return;
+    }
+
+    param_value_t v = *entry_cache(e);
     uint16_t flags = entry_flags(e);
     uint8_t dirty = entry_dirty(e);
 

@@ -44,7 +44,9 @@ static void sensor_on_param_changed(lwevt_t *evt)
         break;
     case PID_IP_SENSOR_FPS:
         printf("[sensor] fps changed: %u\n", v.u32);
-        sensor_reg_write(&g_sensor_dev, 0x08, v.u32);
+        param_value_t exposure_max;
+        exposure_max.u32 = (uint32_t)(990000u / (v.u32 + 1));
+        param_set_range(PID_IP_SENSOR_EXPOSURE, NULL, &exposure_max);
         break;
     default:
         break;
@@ -162,14 +164,14 @@ static int sensor_exec(uint32_t param_id, param_value_t arg)
 }
 
 
-PARAM_IP_UINT (ip_sensor_exposure,   PID_IP_SENSOR_EXPOSURE,   PARAM_FLAG_PERSIST, 10000);
-PARAM_IP_FLOAT(ip_sensor_gain,       PID_IP_SENSOR_GAIN,       PARAM_FLAG_PERSIST, 1.0f);
-PARAM_IP_UINT (ip_sensor_fps,        PID_IP_SENSOR_FPS,        PARAM_FLAG_PERSIST, 30);
-PARAM_IP_INT  (ip_sensor_resolution, PID_IP_SENSOR_RESOLUTION, PARAM_FLAG_PERSIST, 1);
+PARAM_IP_UINT (ip_sensor_exposure,   PID_IP_SENSOR_EXPOSURE,   PARAM_FLAG_PERSIST, 10000,  10000, 10000);
+PARAM_IP_FLOAT(ip_sensor_gain,       PID_IP_SENSOR_GAIN,       PARAM_FLAG_PERSIST, 1.0f,   1.0f,  1.0f);
+PARAM_IP_UINT (ip_sensor_fps,        PID_IP_SENSOR_FPS,        PARAM_FLAG_PERSIST, 30,     30,    30);
+PARAM_IP_INT  (ip_sensor_resolution, PID_IP_SENSOR_RESOLUTION, PARAM_FLAG_PERSIST, 1,      1,     1);
 PARAM_IP_EXEC (ip_sensor_shutdown,   PID_IP_SENSOR_SHUTDOWN);
-PARAM_IP_UINT (ip_sensor_roi_x,      PID_IP_SENSOR_ROI_X,      PARAM_FLAG_PERSIST, 1920);
-PARAM_IP_UINT (ip_sensor_frame_cnt,  PID_IP_SENSOR_FRAME_CNT,  PARAM_FLAG_READONLY, 0);
-PARAM_IP_UINT (ip_sensor_cur_luma,  PID_IP_SENSOR_CUR_LUMA,   PARAM_FLAG_READONLY, 0);
+PARAM_IP_UINT (ip_sensor_roi_x,      PID_IP_SENSOR_ROI_X,      PARAM_FLAG_PERSIST, 1920,   1920,  1920);
+PARAM_IP_UINT (ip_sensor_frame_cnt,  PID_IP_SENSOR_FRAME_CNT,  PARAM_FLAG_READONLY, 0,      0,     0);
+PARAM_IP_UINT (ip_sensor_cur_luma,  PID_IP_SENSOR_CUR_LUMA,   PARAM_FLAG_READONLY, 0,      0,     0);
 
 PARAM_TABLE(sensor_params,
     &ip_sensor_exposure.base,
