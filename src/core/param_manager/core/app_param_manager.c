@@ -96,14 +96,16 @@ static int app_write_immediate(param_entry_t *e, param_value_t value)
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
     if (entry_flags(e) & PARAM_FLAG_EXEC) {
-        if (!m->node.exec_cb) return PARAM_ERR_NOT_FOUND;
-        int ret = m->node.exec_cb(e->param_id, value);
-        if (ret == PARAM_OK) {
-            LOCK();
-            param_entry_clear_dirty(e);
-            UNLOCK();
+        if (m->exec) {
+            int ret = m->exec(m->ctx, e->param_id, value);
+            if (ret == PARAM_OK) {
+                LOCK();
+                param_entry_clear_dirty(e);
+                UNLOCK();
+            }
+            return ret;
         }
-        return ret;
+        return PARAM_ERR_NOT_FOUND;
     }
 
     if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
@@ -131,15 +133,17 @@ static int app_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len)
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
     if (entry_flags(e) & PARAM_FLAG_EXEC) {
-        if (!m->node.exec_cb) return PARAM_ERR_NOT_FOUND;
-        param_value_t arg = { .ptr = (void *)data };
-        int ret = m->node.exec_cb(e->param_id, arg);
-        if (ret == PARAM_OK) {
-            LOCK();
-            param_entry_clear_dirty(e);
-            UNLOCK();
+        if (m->exec) {
+            param_value_t arg = { .ptr = (void *)data };
+            int ret = m->exec(m->ctx, e->param_id, arg);
+            if (ret == PARAM_OK) {
+                LOCK();
+                param_entry_clear_dirty(e);
+                UNLOCK();
+            }
+            return ret;
         }
-        return ret;
+        return PARAM_ERR_NOT_FOUND;
     }
 
     if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
@@ -228,7 +232,7 @@ static int app_module_flush(param_module_node_t *m)
 {
     param_module_t *mod = (param_module_t *)m;
     if (mod->flush) {
-        int ret = mod->flush(mod->flush_ctx);
+        int ret = mod->flush(mod->ctx);
         if (ret != PARAM_OK) return ret;
     }
     for (uint16_t i = 0; i < m->param_count; i++) {
@@ -249,8 +253,16 @@ static int app_module_init(param_module_node_t *m)
     param_module_t *mod = (param_module_t *)m;
     m->dirty = 0;
     if (mod->init)
-        return mod->init(mod->flush_ctx);
+        return mod->init(mod->ctx);
     return PARAM_OK;
+}
+
+static int app_module_exec(param_module_node_t *m, uint32_t cmd_id, param_value_t arg)
+{
+    param_module_t *mod = (param_module_t *)m;
+    if (mod->exec)
+        return mod->exec(mod->ctx, cmd_id, arg);
+    return PARAM_ERR_NOT_FOUND;
 }
 
 static void app_module_deinit(param_module_node_t *m)
@@ -263,6 +275,7 @@ const param_module_vtable_t app_module_vtable = {
     .clear_dirty = app_module_clear_dirty,
     .flush       = app_module_flush,
     .init        = app_module_init,
+    .exec        = app_module_exec,
     .reset       = app_module_reset,
     .deinit      = app_module_deinit,
 };

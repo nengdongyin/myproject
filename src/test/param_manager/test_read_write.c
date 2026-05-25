@@ -16,7 +16,7 @@ PARAM_TABLE(applet_params,
 );
 
 PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "TestApplet",
-                    NULL, mock_apply_ok);
+                    NULL, NULL, mock_apply_ok, NULL, NULL);
 
 static void register_params(void)
 {

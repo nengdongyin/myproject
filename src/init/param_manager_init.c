@@ -19,7 +19,7 @@ static volatile uint8_t s_notify_depth = 0;
 
 static void on_param_changed(uint32_t param_id, param_value_t new_value)
 {
-    if (s_notify_depth > 0)
+    if (s_notify_depth > 4)
         return;
     s_notify_depth++;
 

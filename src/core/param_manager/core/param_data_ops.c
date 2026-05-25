@@ -4,7 +4,7 @@
  *
  * 提供 g_param_data_ops[PARAM_TYPE_COUNT] 编译期分派表，
  * 包含 cache_update / read / save / load / reset 五种纯数据操作。
- * App 和 IP 各自的控制策略 (pre_write+apply / write_cb+dirty_map)
+ * App 和 IP 各自的控制策略 (pre_write+apply / write+dirty_map)
  * 通过此表复用数据通路，消除代码重复。
  */
 

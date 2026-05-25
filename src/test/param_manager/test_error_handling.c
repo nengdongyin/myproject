@@ -6,11 +6,11 @@ DEF_TEST_UINT (eu32, TID_APPLET_UINT, PARAM_FLAG_PERSIST, 100, 0, 200);
 PARAM_BOOL    (erdo, TID_APPLET_RDONLY, PARAM_FLAG_PERSIST|PARAM_FLAG_READONLY, false);
 
 PARAM_TABLE(applet_params, &eu32.base, &erdo.base);
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ErrApplet", mock_flush_ok, mock_apply_ok);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ErrApplet", NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
 
 PARAM_IP_UINT  (eip, TID_IP_UINT, PARAM_FLAG_PERSIST, 500,   500,   500);
 PARAM_TABLE(ip_params, &eip.base);
-IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ErrIP", NULL, NULL, mock_ip_write_ok, NULL);
+IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ErrIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
 
 static void register_all(void)
 {
@@ -95,7 +95,7 @@ void test_flush_applet_cb_fails(void) {
 }
 
 void test_flush_ip_write_cb_fails(void) {
-    test_ip_instance.write_cb = mock_ip_write_fail;
+    test_ip_instance.write = mock_ip_write_fail;
     register_all();
 
     param_value_t v = { .u32 = 100 };
@@ -113,7 +113,7 @@ void test_flush_ip_write_cb_fails(void) {
  *  flush integrity check
  * ================================================================ */
 void test_flush_integrity_all_covered(void) {
-    PARAM_MODULE_DEFINE(tmod, MODULE_AUTO_EXP, "Tmod", NULL, NULL);
+    PARAM_MODULE_DEFINE(tmod, MODULE_AUTO_EXP, "Tmod", NULL, NULL, NULL, NULL, NULL);
     DEF_TEST_UINT(tp, MAKE_PARAM_ID(MODULE_AUTO_EXP, 0), 0, 50, 0, 100);
     PARAM_TABLE(tparams, &tp.base);
     param_module_register(&tmod_module, tparams, PARAM_COUNT(tparams));
@@ -121,7 +121,7 @@ void test_flush_integrity_all_covered(void) {
 }
 
 void test_flush_integrity_unordered_module(void) {
-    PARAM_MODULE_DEFINE(unord, TEST_MODULE_UNORDERED, "Unordered", NULL, NULL);
+    PARAM_MODULE_DEFINE(unord, TEST_MODULE_UNORDERED, "Unordered", NULL, NULL, NULL, NULL, NULL);
     DEF_TEST_UINT(uparam, TID_APPLET2_UINT, 0, 50, 0, 100);
     PARAM_TABLE(uparams, &uparam.base);
 

@@ -13,7 +13,7 @@ extern "C"
  * @brief IP (FPGA IP 可配置属性) 参数子系统 — 基于 driver 回调的参数管理
  *
  * IP 参数不直接操作硬件地址。硬件细节 (基址、偏移、位宽、FIFO 协议) 全部由
- * driver 封装。框架通过 read_cb / write_cb / init_cb 回调与 driver 通信。
+ * driver 封装。框架通过 read / write / init 回调与 driver 通信。
  *
  * 支持类型: UINT / INT / FLOAT / BOOL / BLOB / STRING / EXEC
  *
@@ -36,7 +36,7 @@ extern "C"
      * @param value    [out] 读出的值
      * @return PARAM_OK 成功
      */
-    typedef int (*ip_read_cb)(void *driver, uint32_t param_id, param_value_t *value);
+    typedef int (*ip_read_fn)(void *driver, uint32_t param_id, param_value_t *value);
 
     /**
      * @brief IP Driver 写回调
@@ -45,14 +45,14 @@ extern "C"
      * @param value    待写入的值
      * @return PARAM_OK 成功
      */
-    typedef int (*ip_write_cb)(void *driver, uint32_t param_id, param_value_t value);
+    typedef int (*ip_write_fn)(void *driver, uint32_t param_id, param_value_t value);
 
     /**
  * @brief IP Driver 批量 flush 回调 (可选)
  *
- * 在逐参数 write_cb 全部调用之后触发。
+ * 在逐参数 write 全部调用之后触发。
  * 驱动可在此执行批量操作 (如 I2C burst write)。
- * 置 NULL 时仅走 write_cb 逐参数路径。
+ * 置 NULL 时仅走 write 逐参数路径。
  *
  * @param driver    driver 私有数据指针
  * @param dirty_map 脏参数位图
@@ -65,7 +65,16 @@ extern "C"
      * @param driver driver 私有数据指针
      * @return PARAM_OK 成功
      */
-    typedef int (*ip_init_cb)(void *driver);
+    typedef int (*ip_init_fn)(void *driver);
+
+    /**
+     * @brief IP Driver 命令执行回调
+     * @param driver   driver 私有数据指针
+     * @param param_id 命令 ID
+     * @param arg      命令参数
+     * @return PARAM_OK 成功
+     */
+    typedef int (*ip_exec_fn)(void *driver, uint32_t param_id, param_value_t arg);
 
 /** IP dirty_map 位数上限 */
 #define IP_DIRTY_MAP_BITS 64
@@ -79,10 +88,11 @@ extern "C"
     {
         param_module_node_t node; /**< 基类链表节点 */
         void *driver;             /**< driver 私有数据 */
-        ip_read_cb read_cb;       /**< 读硬件回调 */
-        ip_write_cb write_cb;     /**< 写硬件回调 */
-        ip_flush_fn flush_cb;     /**< 批量 flush 回调 (NULL 回退 write_cb) */
-        ip_init_cb init_cb;       /**< 初始化回调 */
+        ip_read_fn read;       /**< 读硬件回调 */
+        ip_write_fn write;     /**< 写硬件回调 */
+        ip_flush_fn flush;     /**< 批量 flush 回调 (NULL 回退 write) */
+        ip_init_fn init;       /**< 初始化回调 */
+        ip_exec_fn exec;       /**< 命令执行回调 */
         uint64_t dirty_map;       /**< 64-bit 脏位图: bit[i]=1 表示第 i 个参数 dirty */
     };
 
@@ -274,7 +284,7 @@ extern "C"
  *
  * 注册一个 PARAM_FLAG_EXEC 标记的伪参数条目。不可通过 param_write 写入，
  * 仅由 param_exec 触发。框架保证 param_write_raw / param_write_immediate
- * 遇到 EXEC 参数时自动路由到模块的 exec_cb 回调，arg 为 param_value_t 联合体。
+ * 遇到 EXEC 参数时自动路由到模块的 exec 回调，arg 为 param_value_t 联合体。
  * dump 输出为 "EXEC" (不显示值)，flags 列显示 "E"。
  *
  * @param _name 命令变量名
@@ -295,33 +305,38 @@ extern "C"
 /**
  * @brief 定义 IP Driver 实例 (静态分配)
  *
+ * 参数顺序按生命周期排列: driver → init → read → write → exec → flush
+ *
  * 使用示例:
  * @code
  * IP_DRIVER_DEFINE(sensor, IP_SENSOR, "OV4689_Sensor_IP",
- *                  &g_sensor_dev, sensor_read, sensor_write, NULL);
+ *                  &g_sensor_dev, sensor_init_cb, sensor_read,
+ *                  sensor_write, sensor_exec, NULL);
  * @endcode
  *
  * @param _ip_name IP 实例名 (生成 _ip_name##_instance)
  * @param _ip_id   模块 ID
  * @param _label   调试名称
  * @param _drv     driver 私有数据指针
+ * @param _init    初始化回调 (可 NULL)
  * @param _rd      读回调
  * @param _wr      写回调 (可 NULL)
- * @param _fl      flush 回调 (可 NULL, 回退逐参数 write_cb)
+ * @param _exec    exec 命令回调 (可 NULL)
+ * @param _fl      flush 回调 (可 NULL, 回退逐参数 write)
  */
-#define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, _drv, _rd, _wr, _fl) \
+#define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, _drv, _init, _rd, _wr, _exec, _fl) \
     static ip_instance_t _ip_name##_instance = {                        \
         .node = {                                                       \
             .module_id = (_ip_id),                                      \
             .name = (_label),                                           \
             .vtable = &ip_module_vtable,                                \
-            .exec_cb = NULL,                                            \
         },                                                              \
         .driver = (_drv),                                               \
-        .read_cb = (_rd),                                               \
-        .write_cb = (_wr),                                              \
-        .flush_cb = (_fl),                                              \
-        .init_cb = NULL,                                                \
+        .read = (_rd),                                               \
+        .write = (_wr),                                              \
+        .exec = (_exec),                                             \
+        .flush = (_fl),                                              \
+        .init = (_init),                                             \
     }
 
 /**

@@ -123,10 +123,10 @@ extern "C"
 
     /**
      * @brief App 模块 flush 回调 — 将缓存的参数批量写入硬件
-     * @param flush_ctx 模块注册时提供的上下文指针
-     * @return PARAM_OK 成功，其他值表示失败
+     * @param ctx 模块注册时提供的上下文指针
+     * @return PARAM_OK 成功
      */
-    typedef int (*param_flush_fn)(void *flush_ctx);
+    typedef int (*param_flush_fn)(void *ctx);
 
     /**
      * @brief App 模块初始化回调
@@ -142,11 +142,12 @@ extern "C"
      * 参数时，框架自动路由到此回调。arg 为 param_value_t 联合体，可通过 .u32 / .i32 /
      * .f32 / .b / .ptr 按需取值。
      *
+     * @param ctx      App 模块为 ctx (业务实例), IP 模块为 driver
      * @param param_id 全局唯一参数 ID (MAKE_PARAM_ID 风格)
      * @param arg      命令参数 (param_value_t 联合体)
      * @return PARAM_OK 成功，其他值表示失败
      */
-    typedef int (*param_exec_fn)(uint32_t param_id, param_value_t arg);
+    typedef int (*param_exec_fn)(void *ctx, uint32_t param_id, param_value_t arg);
 
     /**
      * @brief 模块级虚函数表 (vtable)
@@ -164,6 +165,8 @@ extern "C"
         int (*flush)(param_module_node_t *m);
         /** 模块初始化 */
         int (*init)(param_module_node_t *m);
+        /** 模块命令执行 */
+        int (*exec)(param_module_node_t *m, uint32_t cmd_id, param_value_t arg);
         /** 模块重置 */
         void (*reset)(param_module_node_t *m);
         /** 模块去初始化 */
@@ -192,7 +195,7 @@ extern "C"
          *   - IP 参数:  与 write 行为相同 (IP 无 apply 回调) */
         int (*write_cache)(param_entry_t *e, param_value_t value);
         /** 立即写入参数:
-         *   - IP 参数: 通过 write_cb 直通硬件，更新缓存，不产生 dirty 标记
+         *   - IP 参数: 通过 write 直通硬件，更新缓存，不产生 dirty 标记
          *   - App 参数: 执行 apply 校验 + 更新缓存 + 清除 dirty，不写硬件 (硬件写入由 param_flush 触发) */
         int (*write_immediate)(param_entry_t *e, param_value_t value);
         /** 原始字节流写入 */
@@ -284,7 +287,7 @@ extern "C"
      * @brief 命令型参数 (EXEC)
      *
      * 仅通过 PARAM_FLAG_EXEC 标记注册，不可通过 param_write 写入。
-     * 由 param_exec / param_write_raw / param_write_immediate 路由到 exec_cb。
+     * 由 param_exec / param_write_raw / param_write_immediate 路由到 exec。
      */
     typedef struct
     {
@@ -362,14 +365,13 @@ extern "C"
         const char *name;                    /**< 模块名称 (调试用) */
         param_entry_t **table;               /**< 参数条目指针数组 */
         const param_module_vtable_t *vtable; /**< 指向模块级 vtable */
-        param_exec_fn exec_cb;               /**< 模块命令执行回调 (可为 NULL，arg 为 param_value_t) */
         uint8_t dirty : 1;                   /**< 模块级 dirty 标志 */
     };
 
     /**
      * @brief App 模块 (模块基类派生)
      *
-     * 在 param_module_node 基础上增加 apply/flush/init 回调。
+     * 在 param_module_node 基础上增加 apply/flush/init/exec 回调。
      */
     struct param_module
     {
@@ -377,7 +379,8 @@ extern "C"
         param_apply_fn apply;     /**< 参数写入时的校验/转换回调 */
         param_flush_fn flush;     /**< 刷入硬件的回调 */
         param_init_fn init;       /**< 模块初始化回调 */
-        void *flush_ctx;          /**< flush/init 回调的上下文指针 */
+        param_exec_fn exec;       /**< 模块命令执行回调 */
+        void *ctx;                /**< 模块私有上下文 (init/exec/flush 回调传入) */
     };
 
     /**
@@ -453,7 +456,7 @@ extern "C"
      * @brief 立即写入参数
      *
      * 行为取决于参数所属模块类型:
-     *   - IP 参数: 通过 write_cb 直通硬件，更新缓存，不产生 dirty。
+     *   - IP 参数: 通过 write 直通硬件，更新缓存，不产生 dirty。
      *   - App 参数: 执行 apply 校验回调，更新缓存并清除 dirty 标记。
      *     注意: App 参数不会写硬件，实际硬件写入由 param_flush() 触发。
      *
@@ -546,15 +549,15 @@ extern "C"
      * @brief 执行模块命令
      *
      * 校验 cmd_id 已作为 PARAM_FLAG_EXEC 参数注册，随后查找模块节点，
-     * 调用其 exec_cb(param_id, arg) 直接传入全局唯一参数 ID。
+     * 调用其 exec(param_id, arg) 直接传入全局唯一参数 ID。
      * arg 为 param_value_t 联合体，由 user_arg 转换而成。
      *
      * - param_write / param_write_raw / param_write_immediate 遇到
-     *   PARAM_FLAG_EXEC 参数时自动路由到 exec_cb，无需调用者判断类型。
+     *   PARAM_FLAG_EXEC 参数时自动路由到 exec，无需调用者判断类型。
      *
      * @param cmd_id  命令 ID (MAKE_PARAM_ID 风格，高 16 位 module_id)
      * @param user_arg 命令参数 (可为 NULL，框架内部转为 param_value_t)
-     * @return 回调返回值，PARAM_ERR_NOT_FOUND 表示未注册或模块无 exec_cb
+     * @return 回调返回值，PARAM_ERR_NOT_FOUND 表示未注册或模块无 exec
      */
     int param_exec(uint32_t cmd_id, void *user_arg);
 

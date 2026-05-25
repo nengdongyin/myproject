@@ -67,27 +67,32 @@ extern "C"
  * 使用示例:
  * @code
  * PARAM_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
- *                     ae_flush, ae_apply);
+ *                     &g_ae_instance, ae_init, ae_apply, NULL, ae_flush);
  * @endcode
+ *
+ * 参数顺序按生命周期排列: ctx → init → apply → exec → flush
  *
  * @param _mod_name   模块变量名 (生成 _mod_name##_module)
  * @param _mod_id     模块 ID (来自 module_ids.h)
  * @param _label      模块调试名称
- * @param _flush_fn   flush 回调函数
+ * @param _ctx        模块私有上下文 (init/exec/flush 回调的 ctx 参数)
+ * @param _init_fn    初始化回调 (可 NULL)
  * @param _apply_fn   参数写入时的校验/转换回调
+ * @param _exec_fn    exec 命令回调 (可 NULL)
+ * @param _flush_fn   flush 回调函数
  */
-#define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, _flush_fn, _apply_fn) \
+#define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, _ctx, _init_fn, _apply_fn, _exec_fn, _flush_fn) \
     static param_module_t _mod_name##_module = {                              \
         .node = {                                                             \
             .module_id = (_mod_id),                                           \
             .name = (_label),                                                 \
             .vtable = &app_module_vtable,                                     \
-            .exec_cb = NULL,                                                  \
         },                                                                    \
         .apply = (_apply_fn),                                                 \
+        .exec = (_exec_fn),                                                \
         .flush = (_flush_fn),                                                 \
-        .init = NULL,                                                         \
-        .flush_ctx = NULL,                                                    \
+        .init = (_init_fn),                                                   \
+        .ctx = (_ctx),                                                    \
     }
 
 /**
@@ -265,7 +270,7 @@ extern "C"
  *
  * 注册一个 PARAM_FLAG_EXEC 标记的伪参数条目。不可通过 param_write 写入，
  * 仅由 param_exec 触发。框架保证 param_write_raw 遇到 EXEC 参数时自动
- * 路由到模块的 exec_cb 回调，arg 为 param_value_t 联合体 (.ptr 指向原始 data)。
+ * 路由到模块的 exec 回调，arg 为 param_value_t 联合体 (.ptr 指向原始 data)。
  * dump 输出为 "EXEC" (不显示值)，flags 列显示 "E"。
  *
  * @param _name 命令变量名

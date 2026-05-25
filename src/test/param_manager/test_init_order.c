@@ -24,14 +24,14 @@ PARAM_IP_FLOAT(ip_p2, TID_IP_FLOAT, PARAM_FLAG_PERSIST, 1.0f,  1.0f,  1.0f);
 
 PARAM_TABLE(ip_params, &ip_p1.base, &ip_p2.base);
 
-IP_DRIVER_DEFINE(order_ip, TEST_MODULE_IP, "OrderIP", NULL, NULL, mock_ip_write_ok, NULL);
+IP_DRIVER_DEFINE(order_ip, TEST_MODULE_IP, "OrderIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
 
 DEF_TEST_UINT(app_p1, TID_APPLET_UINT, PARAM_FLAG_PERSIST, 50, 0, 100);
 DEF_TEST_INT(app_p2, TID_APPLET_INT, PARAM_FLAG_PERSIST, 0, -50, 50);
 
 PARAM_TABLE(applet_params, &app_p1.base, &app_p2.base);
 
-PARAM_MODULE_DEFINE(order_applet, TEST_MODULE_APPLET, "OrderApplet", NULL, mock_apply_ok);
+PARAM_MODULE_DEFINE(order_applet, TEST_MODULE_APPLET, "OrderApplet", NULL, NULL, mock_apply_ok, NULL, NULL);
 
 /* ================================================================
  *  注册顺序测试
@@ -42,7 +42,7 @@ void test_order_ip_before_applet(void)
     g_ip_init_seq = -1;
     g_applet_init_seq = -1;
 
-    order_ip_instance.init_cb = mock_init_seq_ip;
+    order_ip_instance.init = mock_init_seq_ip;
     order_applet_module.init = mock_init_seq_applet;
 
     ip_driver_register(&order_ip_instance, ip_params, PARAM_COUNT(ip_params));
@@ -59,7 +59,7 @@ void test_order_reverse_register(void)
     g_ip_init_seq = -1;
     g_applet_init_seq = -1;
 
-    order_ip_instance.init_cb = mock_init_seq_ip;
+    order_ip_instance.init = mock_init_seq_ip;
     order_applet_module.init = mock_init_seq_applet;
 
     param_module_register(&order_applet_module, applet_params, PARAM_COUNT(applet_params));
@@ -144,7 +144,7 @@ void test_load_then_init_phase_order(void)
     g_load_phase_ip = -1;
     g_load_phase_applet = -1;
 
-    order_ip_instance.init_cb = mock_init_phase_ip;
+    order_ip_instance.init = mock_init_phase_ip;
     order_applet_module.init = mock_init_phase_applet;
 
     ip_driver_register(&order_ip_instance, ip_params, PARAM_COUNT(ip_params));

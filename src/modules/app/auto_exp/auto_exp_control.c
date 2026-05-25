@@ -30,21 +30,21 @@ static int ae_flush(void *ctx)
     return PARAM_OK;
 }
 
-static int ae_init_cb(void *ctx)
+static int ae_init(void *ctx)
 {
-    (void)ctx;
+    ae_instance_t *ae = (ae_instance_t *)ctx;
 
-    ae_instance_init(&g_ae_instance);
+    ae_instance_init(ae);
 
     param_value_t v;
     param_read(PID_AE_TARGET_LUMA, &v);
-    ae_instance_set_target_luma(&g_ae_instance, (uint8_t)v.u32);
+    ae_instance_set_target_luma(ae, (uint8_t)v.u32);
 
     param_read(PID_AE_SPEED, &v);
-    ae_instance_set_speed(&g_ae_instance, v.f32);
+    ae_instance_set_speed(ae, v.f32);
 
     param_read(PID_AE_ENABLE, &v);
-    ae_instance_set_enable(&g_ae_instance, v.b);
+    ae_instance_set_enable(ae, v.b);
 
     return PARAM_OK;
 }
@@ -75,11 +75,10 @@ PARAM_TABLE(ae_params,
 );
 
 PARAM_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
-                    ae_flush, ae_apply);
+                    &g_ae_instance, ae_init, ae_apply, NULL, ae_flush);
 
 void auto_exp_module_init(void)
 {
-    auto_exp_module.init = ae_init_cb;
     param_module_register(&auto_exp_module,
                           ae_params,
                           PARAM_COUNT(ae_params));

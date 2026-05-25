@@ -456,7 +456,7 @@ int param_write_immediate(uint32_t param_id, param_value_t value)
     return ret;
 }
 
-/** @brief 原始字节流写入 (EXEC 参数自动路由到 exec_cb) */
+/** @brief 原始字节流写入 (EXEC 参数自动路由到 exec) */
 int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
 {
     if (!g_pm.initialized)
@@ -720,7 +720,7 @@ uint16_t param_get_size(uint32_t param_id)
 /**
  * @brief 执行模块命令
  *
- * 仅当 cmd_id 已作为 PARAM_FLAG_EXEC 参数注册且模块存在 exec_cb 时执行。
+ * 仅当 cmd_id 已作为 PARAM_FLAG_EXEC 参数注册且模块存在 exec 时执行。
  * 未注册的命令返回 PARAM_ERR_NOT_FOUND。
  * user_arg 传入后封装为 param_value_t 联合体再传给回调。
  */
@@ -735,14 +735,13 @@ int param_exec(uint32_t cmd_id, void *user_arg)
         return PARAM_ERR_NOT_FOUND;
     }
     param_module_node_t *m = param_module_find(PARAM_MODULE_ID(cmd_id));
-    if (!m) {
+    if (!m || !m->vtable || !m->vtable->exec) {
         UNLOCK();
         return PARAM_ERR_NOT_FOUND;
     }
-    param_exec_fn cb = m->exec_cb;
     UNLOCK();
     param_value_t arg = {.ptr = user_arg};
-    return cb ? cb(cmd_id, arg) : PARAM_ERR_NOT_FOUND;
+    return m->vtable->exec(m, cmd_id, arg);
 }
 
 /**

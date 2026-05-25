@@ -127,7 +127,7 @@ static int sensor_write(void *drv, uint32_t param_id, param_value_t value)
     return PARAM_OK;
 }
 
-static int sensor_init_cb(void *drv)
+static int sensor_init(void *drv)
 {
     sensor_device_t *dev = (sensor_device_t *)drv;
 
@@ -151,12 +151,12 @@ static int sensor_init_cb(void *drv)
 
     return PARAM_OK;
 }
-static int sensor_exec(uint32_t param_id, param_value_t arg)
+static int sensor_exec(void *driver, uint32_t param_id, param_value_t arg)
 {
     (void)arg;
     switch (param_id) {
     case PID_IP_SENSOR_SHUTDOWN:
-        sensor_device_hw_init(&g_sensor_dev);
+        sensor_device_hw_init((sensor_device_t *)driver);
         return PARAM_OK;
     default:
         return PARAM_ERR_NOT_FOUND;
@@ -164,9 +164,9 @@ static int sensor_exec(uint32_t param_id, param_value_t arg)
 }
 
 
-PARAM_IP_UINT (ip_sensor_exposure,   PID_IP_SENSOR_EXPOSURE,   PARAM_FLAG_PERSIST, 10000,  10000, 10000);
-PARAM_IP_FLOAT(ip_sensor_gain,       PID_IP_SENSOR_GAIN,       PARAM_FLAG_PERSIST, 1.0f,   1.0f,  1.0f);
-PARAM_IP_UINT (ip_sensor_fps,        PID_IP_SENSOR_FPS,        PARAM_FLAG_PERSIST, 30,     30,    30);
+PARAM_IP_UINT (ip_sensor_exposure,   PID_IP_SENSOR_EXPOSURE,   PARAM_FLAG_PERSIST, 10000,  0, 1000000);
+PARAM_IP_FLOAT(ip_sensor_gain,       PID_IP_SENSOR_GAIN,       PARAM_FLAG_PERSIST, 1.0f,   1.0f, 48.0f);
+PARAM_IP_UINT (ip_sensor_fps,        PID_IP_SENSOR_FPS,        PARAM_FLAG_PERSIST, 30,     10,    500);
 PARAM_IP_INT  (ip_sensor_resolution, PID_IP_SENSOR_RESOLUTION, PARAM_FLAG_PERSIST, 1,      1,     1);
 PARAM_IP_EXEC (ip_sensor_shutdown,   PID_IP_SENSOR_SHUTDOWN);
 PARAM_IP_UINT (ip_sensor_roi_x,      PID_IP_SENSOR_ROI_X,      PARAM_FLAG_PERSIST, 1920,   1920,  1920);
@@ -185,12 +185,11 @@ PARAM_TABLE(sensor_params,
 );
 
 IP_DRIVER_DEFINE(sensor, IP_SENSOR, "OV4689_Sensor_IP",
-                 &g_sensor_dev, sensor_read, sensor_write, NULL);
+                 &g_sensor_dev, sensor_init, sensor_read,
+                 sensor_write, sensor_exec, NULL);
 
 void sensor_module_init(void)
 {
-    sensor_instance.init_cb  = sensor_init_cb;
-    sensor_instance.node.exec_cb = sensor_exec;
     ip_driver_register(&sensor_instance,
                        sensor_params,
                        PARAM_COUNT(sensor_params));

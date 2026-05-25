@@ -15,7 +15,7 @@ extern "C"
      * 将 cache_update / read / save / load / reset 五种纯数据操作从
      * App/IP 各自的 vtable 实现中抽出，消除代码重复。
      *
-     * App 和 IP 的控制策略层 (pre_write+apply vs. write_cb+dirty_map)
+     * App 和 IP 的控制策略层 (pre_write+apply vs. write+dirty_map)
      * 保持不变，仅数据通路共用。
      */
 

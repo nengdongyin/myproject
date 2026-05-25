@@ -15,8 +15,9 @@ static int sys_apply_cb(uint32_t param_id, param_value_t value)
     return PARAM_OK;
 }
 
-static int sys_exec_cb(uint32_t param_id, param_value_t arg)
+static int sys_exec_cb(void *ctx, uint32_t param_id, param_value_t arg)
 {
+    (void)ctx;
     if (param_id == MAKE_PARAM_ID(MODULE_SYS, 0x01))
     {
         uint8_t idx = *(uint8_t *)arg.ptr;
@@ -45,9 +46,5 @@ static int sys_mod_init(void *ctx)
     return PARAM_OK;
 }
 
-PARAM_MODULE_DEFINE(sys_mod, MODULE_SYS, "System", NULL, sys_apply_cb);
-
-PARAM_MODULE_INIT_BEGIN(sys_mod, sys_params);
-sys_mod_module.node.exec_cb = sys_exec_cb;
-sys_mod_module.init = sys_mod_init;
-PARAM_MODULE_INIT_END(sys_mod)
+PARAM_MODULE_DEFINE(sys_mod, MODULE_SYS, "System", NULL, sys_mod_init, sys_apply_cb, sys_exec_cb, NULL);
+PARAM_MODULE_INIT(sys_mod, sys_params);
