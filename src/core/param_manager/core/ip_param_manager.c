@@ -50,6 +50,24 @@ static ip_instance_t *ip_find(uint16_t ip_id)
 
 static int ip_param_read(param_entry_t *e, param_value_t *value)
 {
+    ip_instance_t *inst = ip_find((uint16_t)PARAM_MODULE_ID(e->param_id));
+    
+    // 1. 优先从硬件读取
+    if (inst && inst->read) {
+        int ret = inst->read(inst->driver, e->param_id, value);
+        if (ret == PARAM_OK) {
+            // 读取成功，更新缓存
+            LOCK();
+            param_type_t t = entry_type(e);
+            if (t < PARAM_TYPE_COUNT) {
+                g_param_data_ops[t].cache_update(e, *value);
+            }
+            UNLOCK();
+            return PARAM_OK;
+        }
+    }
+    
+    // 2. 硬件读取失败，从缓存读取
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
     return g_param_data_ops[t].read(e, value);
