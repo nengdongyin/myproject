@@ -1193,9 +1193,20 @@ int param_set_range(uint32_t param_id,
         re->max = *max_val;
     if (min_val || max_val)
         re->has_range = 1;
+
+    /* 保存旧值 → 裁剪 → 捕获新值 (持锁): 若范围缩小导致缓存越界,
+       则走 param_write 完整路径 (apply + dirty + notify),
+       确保硬件最终也被更新。新值在锁内捕获，避免 UNLOCK 后重读。 */
+    param_value_t old_val = *entry_cache(e);
     param_clamp_entry(e);
+    param_value_t new_val = *entry_cache(e);
+    bool clamped = memcmp(&old_val, &new_val, sizeof(param_value_t)) != 0;
 
     UNLOCK();
+
+    if (clamped)
+        return param_write(param_id, new_val);
+
     return PARAM_OK;
 }
 
