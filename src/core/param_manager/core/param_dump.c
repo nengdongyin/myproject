@@ -91,10 +91,38 @@ static const char *flags_to_str(uint16_t flags, char *buf, uint16_t buf_size)
 typedef void (*param_entry_fmt_fn)(param_entry_t *e, const char *name,
                                      char *line, uint16_t size);
 
-/* ---- 各类型的格式化器 ---- */
+/**
+ * @brief 公共列格式化 — 所有类型格式化器共用
+ *
+ * 封装 ID/名称/dirty/flags 列填充与最终拼接。
+ * 调用者只需提供值字符串和范围字符串。
+ */
+static void dump_line(param_entry_t *e, const char *name,
+                      const char *val_str, const char *range_str,
+                      char *line, uint16_t size)
+{
+    uint16_t flags = entry_flags(e);
+    uint8_t dirty = entry_dirty(e);
+    char c_id[COL_ID_W + 1], c_nm[COL_NAME_W + 1],
+         c_vl[COL_VALUE_W + 1], c_rg[COL_RANGE_W + 1],
+         c_dt[COL_DIRTY_W + 1], c_fl[COL_FLAGS_W + 1], fb[8];
+
+    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
+    col_fill(c_nm, COL_NAME_W, "%s", name);
+    col_fill(c_vl, COL_VALUE_W, "%s", val_str);
+    if (range_str)
+        col_fill(c_rg, COL_RANGE_W, "%s", range_str);
+    else
+        col_empty(c_rg, COL_RANGE_W);
+    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
+    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+}
+
+/* ---- 各类型的格式化器 — 仅构造 val_str / range_str ---- */
 
 /**
- * @brief 格式化 UINT 类型参数为一行文本
+ * @brief 格式化 UINT 类型参数
  *
  * 格式: [XXXX] NAME UINT=val(0xXXXX) [min,max] d=X f=0xXX
  */
@@ -103,28 +131,12 @@ static void fmt_uint(param_entry_t *e, const char *name,
 {
     param_range_entry_t *re = (param_range_entry_t *)e;
     param_value_t v = *entry_cache(e);
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
+    char val[40], rng[40] = "";
 
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "UINT=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
+    snprintf(val, sizeof(val), "UINT=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
     if (re->has_range)
-        col_fill(c_rg, COL_RANGE_W, "[%lu,%lu]", (unsigned long)re->min.u32, (unsigned long)re->max.u32);
-    else
-        col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+        snprintf(rng, sizeof(rng), "[%lu,%lu]", (unsigned long)re->min.u32, (unsigned long)re->max.u32);
+    dump_line(e, name, val, rng[0] ? rng : NULL, line, size);
 }
 
 /** @brief 格式化 INT 类型: INT=val [min,max] d=X f=0xXX */
@@ -133,28 +145,12 @@ static void fmt_int(param_entry_t *e, const char *name,
 {
     param_range_entry_t *re = (param_range_entry_t *)e;
     param_value_t v = *entry_cache(e);
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
+    char val[40], rng[40] = "";
 
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "INT=%ld", (long)v.i32);
+    snprintf(val, sizeof(val), "INT=%ld", (long)v.i32);
     if (re->has_range)
-        col_fill(c_rg, COL_RANGE_W, "[%ld,%ld]", (long)re->min.i32, (long)re->max.i32);
-    else
-        col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+        snprintf(rng, sizeof(rng), "[%ld,%ld]", (long)re->min.i32, (long)re->max.i32);
+    dump_line(e, name, val, rng[0] ? rng : NULL, line, size);
 }
 
 /** @brief 格式化 FLOAT 类型: FLOAT=val [min,max] d=X f=0xXX */
@@ -163,28 +159,12 @@ static void fmt_float(param_entry_t *e, const char *name,
 {
     param_range_entry_t *re = (param_range_entry_t *)e;
     param_value_t v = *entry_cache(e);
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
+    char val[40], rng[40] = "";
 
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "FLOAT=%.3f", (double)v.f32);
+    snprintf(val, sizeof(val), "FLOAT=%.3f", (double)v.f32);
     if (re->has_range)
-        col_fill(c_rg, COL_RANGE_W, "[%.3f,%.3f]", (double)re->min.f32, (double)re->max.f32);
-    else
-        col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+        snprintf(rng, sizeof(rng), "[%.3f,%.3f]", (double)re->min.f32, (double)re->max.f32);
+    dump_line(e, name, val, rng[0] ? rng : NULL, line, size);
 }
 
 /** @brief 格式化 BOOL 类型: BOOL=true/false d=X f=0xXX */
@@ -192,50 +172,16 @@ static void fmt_bool(param_entry_t *e, const char *name,
                      char *line, uint16_t size)
 {
     param_value_t v = *entry_cache(e);
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
-
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "BOOL=%s", v.b ? "true" : "false");
-    col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+    char val[16];
+    snprintf(val, sizeof(val), "BOOL=%s", v.b ? "true" : "false");
+    dump_line(e, name, val, NULL, line, size);
 }
 
 /** @brief 格式化 EXEC 类型: EXEC d=X f=0xXX */
 static void fmt_exec(param_entry_t *e, const char *name,
                      char *line, uint16_t size)
 {
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
-
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "EXEC");
-    col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+    dump_line(e, name, "EXEC", NULL, line, size);
 }
 
 /** @brief 格式化 ENUM 类型: ENUM=val n=count d=X f=0xXX */
@@ -244,25 +190,9 @@ static void fmt_enum(param_entry_t *e, const char *name,
 {
     param_enum_entry_t *ee = (param_enum_entry_t *)e;
     param_value_t v = *entry_cache(e);
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
-
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "ENUM=%ld n=%u", (long)v.i32, ee->enum_count);
-    col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+    char val[40];
+    snprintf(val, sizeof(val), "ENUM=%ld n=%u", (long)v.i32, ee->enum_count);
+    dump_line(e, name, val, NULL, line, size);
 }
 
 /**
@@ -275,36 +205,18 @@ static void fmt_blob(param_entry_t *e, const char *name,
                      char *line, uint16_t size)
 {
     param_blob_entry_t *be = (param_blob_entry_t *)e;
-    param_value_t v = *entry_cache(e);
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
-    const uint8_t *data = (const uint8_t *)v.ptr;
-
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
+    const uint8_t *data = (const uint8_t *)entry_cache(e)->ptr;
+    char val[72];
 
     uint16_t show = be->blob_size < 9u ? be->blob_size : 9u;
-    char bl_buf[40];
-    int pos = snprintf(bl_buf, sizeof(bl_buf), "sz=%u[", be->blob_size);
-    for (uint16_t i = 0; i < show && pos < (int)sizeof(bl_buf) - 5; i++)
-        pos += snprintf(bl_buf + pos, sizeof(bl_buf) - pos,
+    int pos = snprintf(val, sizeof(val), "BLOB=sz=%u[", be->blob_size);
+    for (uint16_t i = 0; i < show && pos < (int)sizeof(val) - 5; i++)
+        pos += snprintf(val + pos, sizeof(val) - pos,
                         "%s%02X", i > 0 ? " " : "", data[i]);
     if (be->blob_size > 9u)
-        pos += snprintf(bl_buf + pos, sizeof(bl_buf) - pos, "...");
-    snprintf(bl_buf + pos, sizeof(bl_buf) - pos, "]");
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "BLOB=%s", bl_buf);
-    col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+        pos += snprintf(val + pos, sizeof(val) - pos, "...");
+    snprintf(val + pos, sizeof(val) - pos, "]");
+    dump_line(e, name, val, NULL, line, size);
 }
 
 /**
@@ -318,35 +230,17 @@ static void fmt_string(param_entry_t *e, const char *name,
 {
     param_string_entry_t *se = (param_string_entry_t *)e;
     const char *data = (const char *)se->cache.ptr;
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
+    char val[COL_VALUE_W + 1];
 
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    char str_buf[20];
     if (!data || !*data) {
-        snprintf(str_buf, sizeof(str_buf), "\"\"");
+        snprintf(val, sizeof(val), "STRING=\"\"");
     } else {
         uint16_t show = se->max_len < 16u ? se->max_len : 16u;
         uint16_t dlen = (uint16_t)strnlen(data, show);
-        snprintf(str_buf, sizeof(str_buf), "\"%.*s%s\"",
+        snprintf(val, sizeof(val), "STRING=\"%.*s%s\"",
                  dlen, data, (dlen < (uint16_t)strlen(data)) ? "..." : "");
     }
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
-    col_fill(c_vl, COL_VALUE_W, "STRING=%s", str_buf);
-    col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+    dump_line(e, name, val, NULL, line, size);
 }
 
 /**
@@ -385,46 +279,29 @@ static void fmt_ip(param_entry_t *e, const char *name,
     }
 
     param_value_t v = *entry_cache(e);
-    uint16_t flags = entry_flags(e);
-    uint8_t dirty = entry_dirty(e);
-
-    char c_id[COL_ID_W + 1];
-    char c_nm[COL_NAME_W + 1];
-    char c_vl[COL_VALUE_W + 1];
-    char c_rg[COL_RANGE_W + 1];
-    char c_dt[COL_DIRTY_W + 1];
-    char c_fl[COL_FLAGS_W + 1];
-
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
-    col_fill(c_nm, COL_NAME_W, "%s", name);
+    char val[COL_VALUE_W + 1];
 
     switch (t) {
     case PARAM_TYPE_UINT:
-        col_fill(c_vl, COL_VALUE_W, "UINT=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
+        snprintf(val, sizeof(val), "UINT=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
         break;
     case PARAM_TYPE_INT:
-        col_fill(c_vl, COL_VALUE_W, "INT=%ld", (long)v.i32);
+        snprintf(val, sizeof(val), "INT=%ld", (long)v.i32);
         break;
     case PARAM_TYPE_FLOAT:
-        col_fill(c_vl, COL_VALUE_W, "FLOAT=%.3f", (double)v.f32);
+        snprintf(val, sizeof(val), "FLOAT=%.3f", (double)v.f32);
         break;
     case PARAM_TYPE_BOOL:
-        col_fill(c_vl, COL_VALUE_W, "BOOL=%s", v.b ? "true" : "false");
+        snprintf(val, sizeof(val), "BOOL=%s", v.b ? "true" : "false");
         break;
     case PARAM_TYPE_EXEC:
-        col_fill(c_vl, COL_VALUE_W, "EXEC");
+        snprintf(val, sizeof(val), "EXEC");
         break;
     default:
-        col_fill(c_vl, COL_VALUE_W, "IP=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
+        snprintf(val, sizeof(val), "IP=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
         break;
     }
-
-    col_empty(c_rg, COL_RANGE_W);
-    col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    char fb[8];
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
-
-    snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
+    dump_line(e, name, val, NULL, line, size);
 }
 
 /**
