@@ -32,6 +32,44 @@ static void on_param_changed(uint32_t param_id, param_value_t new_value)
     s_notify_depth--;
 }
 
+/* ================================================================
+ *  参数版本迁移表示例 (固件升级时使用)
+ *
+ *  当前 PARAM_SCHEMA_VERSION = 1，尚无迁移需求。
+ *  升级到 V2.0 时，在此定义迁移表并调用 param_migrate_storage。
+ *
+ *  迁移条目支持三种模式:
+ *    1. 改名:  {old_id, NULL,            new_id, NULL}
+ *    2. 转换:  {old_id, convert_func,    0,      NULL} (回调填 new_id+new_data)
+ *    3. 拆分:  回调内多次 param_write_raw 到多个新 ID
+ *
+ *  ===== 示例: V1.0 → V2.0 =====
+ *
+ *  // 改名 — BOOT_INDEX → BOOT_BANK
+ *  #define OLD_BOOT_INDEX  MAKE_PARAM_ID(MODULE_SYS, 0x00)
+ *  #define NEW_BOOT_BANK   MAKE_PARAM_ID(MODULE_SYS, 0x10)
+ *
+ *  // 类型转换 — AE_SPEED: UINT(0→255) → FLOAT(0.0→1.0)
+ *  static int convert_ae_speed(const uint8_t *data, uint16_t len,
+ *                              uint32_t *new_id,
+ *                              uint8_t *new_data, uint16_t *new_len,
+ *                              void *ctx) {
+ *      (void)len; (void)ctx;
+ *      float f = (float)(*(uint32_t *)data) / 255.0f;
+ *      *new_id = MAKE_PARAM_ID(MODULE_AUTO_EXP, 0x01);
+ *      memcpy(new_data, &f, sizeof(f));
+ *      *new_len = sizeof(f);
+ *      return PARAM_OK;
+ *  }
+ *
+ *  PARAM_MIGRATE_TABLE(v2_migrations,
+ *      {OLD_BOOT_INDEX, NULL,            NEW_BOOT_BANK, NULL},
+ *      {OLD_AE_SPEED,   convert_ae_speed, 0,              NULL},
+ *  );
+ *  param_migrate_storage(storage, v2_migrations,
+ *                        sizeof(v2_migrations) / sizeof(v2_migrations[0]));
+ * ================================================================ */
+
 void param_manager_init(void)
 {
     const param_storage_drv_t *storage = param_storage_flashdb_create();
@@ -40,6 +78,8 @@ void param_manager_init(void)
     lwevt_init();
     param_init(storage, on_param_changed);
 
+    /* 存储版本迁移 — 在模块注册和 load_all 之前执行 */
+    param_migrate_storage(storage, NULL, 0);
 
 #ifdef PARAM_MODULE_AUTO_REGISTER
     param_modules_register_all();
@@ -47,7 +87,6 @@ void param_manager_init(void)
     sensor_module_init();
     auto_exp_module_init();
 #endif
-
 
     int ret = param_load_all();
     if (ret != PARAM_OK)

@@ -20,11 +20,8 @@ static int stub_save(void *ctx, uint32_t id, const uint8_t *d, uint16_t l)
     (void)l;
     return -1;
 }
-static int stub_erase_all(void *ctx)
-{
-    (void)ctx;
-    return 0;
-}
+static int stub_erase_all(void *ctx) { (void)ctx; return 0; }
+static int stub_delete(void *ctx, uint32_t id) { (void)ctx; (void)id; return 0; }
 static int stub_deinit(void *ctx)
 {
     (void)ctx;
@@ -35,6 +32,7 @@ static param_storage_drv_t g_stub_drv = {
     .ctx = NULL,
     .load = stub_load,
     .save = stub_save,
+    .delete = stub_delete,
     .erase_all = stub_erase_all,
     .deinit = stub_deinit,
 };
@@ -179,6 +177,18 @@ static int flashdb_save(void *ctx, uint32_t param_id,
     return (result == FDB_NO_ERR) ? 0 : -1;
 }
 
+static int flashdb_delete(void *ctx, uint32_t param_id)
+{
+    flashdb_ctx_t *c = (flashdb_ctx_t *)ctx;
+    if (!c || !c->kvdb_ready)
+        return -1;
+
+    char key[16];
+    snprintf(key, sizeof(key), "p%lu", (unsigned long)param_id);
+    fdb_err_t result = fdb_kv_del(&c->kvdb, key);
+    return (result == FDB_NO_ERR) ? 0 : -1;
+}
+
 static int flashdb_erase_all(void *ctx)
 {
     flashdb_ctx_t *c = (flashdb_ctx_t *)ctx;
@@ -273,6 +283,7 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
             c->drv.ctx = c;
             c->drv.load = flashdb_load;
             c->drv.save = flashdb_save;
+            c->drv.delete = flashdb_delete;
             c->drv.erase_all = flashdb_erase_all;
             c->drv.deinit = flashdb_deinit;
             c->drv.get_active_partition = flashdb_get_active_partition;

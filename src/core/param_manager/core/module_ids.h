@@ -22,6 +22,9 @@ extern "C"
  * @{
  */
 
+#define MODULE_META 0x00u         /**< 框架元数据模块 (版本号等) */
+#define PID_SCHEMA_VER MAKE_PARAM_ID(MODULE_META, 0x00) /**< 存储格式版本号 */
+
 /** @name 业务逻辑模块 (App) */
 /** @{ */
 #define MODULE_AUTO_EXP 0x01u /**< 自动曝光控制模块 */

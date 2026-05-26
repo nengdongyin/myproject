@@ -936,6 +936,75 @@ int param_reload_storage(const param_storage_drv_t *new_storage)
     return param_load_all();
 }
 
+/* ================================================================
+ *  参数版本迁移
+ * ================================================================ */
+
+int param_migrate_storage(const param_storage_drv_t *storage,
+                          const param_migrate_entry_t *table,
+                          uint16_t count)
+{
+    if (!storage || !storage->load || !storage->save)
+        return PARAM_ERR_NOT_FOUND;
+
+    uint8_t buf[256];
+    uint8_t schema_ver;
+    int ret;
+
+    /* ---- 阶段 1: 版本检查 ---- */
+    ret = storage->load(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1);
+    if (ret <= 0) {
+        /* 首次启动: 无版本键 → 写入当前版本, 跳过迁移 */
+        schema_ver = PARAM_SCHEMA_VERSION;
+        ret = storage->save(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1);
+        return (ret < 0) ? PARAM_ERR_FLASH_FAIL : PARAM_OK;
+    }
+
+    if (schema_ver != PARAM_SCHEMA_VERSION) {
+        /* 存储格式破坏性变更 → 全量擦除, 写版本号, 跳过迁移 */
+        if (storage->erase_all)
+            storage->erase_all(storage->ctx);
+        schema_ver = PARAM_SCHEMA_VERSION;
+        ret = storage->save(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1);
+        return (ret < 0) ? PARAM_ERR_FLASH_FAIL : PARAM_OK;
+    }
+
+    /* ---- 阶段 2: 版本匹配 → 执行迁移表 ---- */
+    if (!table || count == 0)
+        return PARAM_OK;
+
+    for (uint16_t i = 0; i < count; i++) {
+        const param_migrate_entry_t *e = &table[i];
+        ret = storage->load(storage->ctx, e->old_id, buf, sizeof(buf));
+        if (ret <= 0)
+            continue;  /* 不存在或已迁移 */
+
+        uint16_t old_len = (uint16_t)ret;
+        bool saved = false;
+
+        if (e->convert) {
+            uint32_t new_id;
+            uint16_t new_len = 0;
+            ret = e->convert(buf, old_len, &new_id, buf, &new_len, e->ctx);
+            if (ret < 0 && ret != -1)
+                return ret;  /* 致命错误, 中断 */
+            if (ret == PARAM_OK && new_len > 0) {
+                ret = storage->save(storage->ctx, new_id, buf, new_len);
+                saved = (ret >= 0);
+            }
+        } else {
+            ret = storage->save(storage->ctx, e->new_id, buf, old_len);
+            saved = (ret >= 0);
+        }
+
+        /* 仅在新值保存成功后才删除旧键，避免 Flash 写入失败导致数据丢失 */
+        if (saved && storage->delete)
+            storage->delete(storage->ctx, e->old_id);
+    }
+
+    return PARAM_OK;
+}
+
 /**
  * @brief 从持久化存储加载所有参数
  *

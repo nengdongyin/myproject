@@ -367,10 +367,12 @@ extern "C"
     typedef struct param_storage_drv
     {
         void *ctx; /**< 实例上下文 (传递给所有回调) */
-        /** 加载指定参数的数据 */
+        /** 加载指定参数的数据。返回实际读取字节数，≤0 表示不存在。 */
         int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len);
-        /** 保存指定参数的数据 */
+        /** 保存指定参数的数据。len==0 且 data==NULL 表示删除该键。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
+        /** 删除单个参数的持久化数据 (NULL = 后端不支持) */
+        int (*delete)(void *ctx, uint32_t param_id);
         /** 擦除全部持久化数据 */
         int (*erase_all)(void *ctx);
         /** 去初始化存储后端 */
@@ -685,6 +687,68 @@ extern "C"
     void param_validate_all(void);
 
     /** @} */ /* public_api */
+
+/**
+ * @defgroup migration 参数版本迁移
+ * @{
+ */
+
+/** 当前存储格式版本号。破坏性变更时递增 (极少发生)。 */
+#define PARAM_SCHEMA_VERSION 1
+
+/**
+ * @brief 迁移转换回调
+ *
+ * 框架已从 FlashDB 读旧数据到 old_data[old_len]。
+ * 回调负责填充 new_id / new_data / new_len。
+ *
+ * @param old_data  旧值原始字节
+ * @param old_len   旧值字节数
+ * @param new_id    [out] 新参数 ID
+ * @param new_data  [out] 转换后数据 (框架提供 256 字节缓冲区)
+ * @param new_len   [out] 转换后数据长度
+ * @param ctx       迁移条目上下文
+ * @return PARAM_OK 成功; -1 跳过本条; 其他 <0 中断迁移
+ */
+typedef int (*param_migrate_fn)(const uint8_t *old_data, uint16_t old_len,
+                                uint32_t *new_id,
+                                uint8_t *new_data, uint16_t *new_len,
+                                void *ctx);
+
+/** 迁移条目 */
+typedef struct {
+    uint32_t           old_id;   /**< 旧参数 ID */
+    param_migrate_fn   convert;  /**< NULL = 简单 rename 到 new_id */
+    uint32_t           new_id;   /**< convert==NULL 时作为目标 ID */
+    void              *ctx;      /**< 回调上下文 */
+} param_migrate_entry_t;
+
+/** 定义迁移表 (ROM) */
+#define PARAM_MIGRATE_TABLE(_name, ...) \
+    static const param_migrate_entry_t _name[] = {__VA_ARGS__}
+
+/**
+ * @brief 执行存储层参数迁移
+ *
+ * 在 param_init 之后、param_load_all 之前调用。
+ * 所有操作直接走 storage 驱动，不依赖内存哈希表。
+ *
+ * 内部流程:
+ *   1. 读 PID_SCHEMA_VER → 不存在 → 首次启动，写版本号
+ *                        → 不匹配 → 全量擦除，写版本号
+ *                        → 匹配   → 执行迁移表
+ *   2. 遍历迁移表: load(old) → convert/save(new) → delete(old)
+ *
+ * @param storage  持久化后端
+ * @param table    迁移表 (ROM)
+ * @param count    表长度
+ * @return PARAM_OK 成功
+ */
+int param_migrate_storage(const param_storage_drv_t *storage,
+                          const param_migrate_entry_t *table,
+                          uint16_t count);
+
+/** @} */ /* migration */
 
 /**
  * @brief 定义参数表 (静态数组)
