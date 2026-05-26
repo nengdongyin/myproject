@@ -981,7 +981,17 @@ int param_load_all(void)
     return first_err;
 }
 
-/** @brief 从持久化存储加载单个参数 */
+/**
+ * @brief 从持久化存储加载单个参数
+ *
+ * 加载后调用 vtable->write 使业务逻辑 (apply 回调) 对恢复的值
+ * 重新校验，确保多分区切换后参数满足当前约束。
+ *
+ * @note 此路径直接调用 vtable->write 而非 param_write，
+ *       因此不触发 notify 回调。加载/分区切换属于批量恢复操作，
+ *       逐参数 notify 会产生噪音，由调用者决定是否在批量加载后
+ *       统一通知。
+ */
 int param_load_one(uint32_t param_id)
 {
     if (!g_pm.initialized)
@@ -989,15 +999,11 @@ int param_load_one(uint32_t param_id)
     if (!g_pm.storage || !g_pm.storage->load)
         return PARAM_ERR_NOT_FOUND;
 
-    param_entry_t *e;
-    int ret;
-
-    
-    e = find_entry(param_id);
-    if (!e) {
-        
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
         return PARAM_ERR_INVALID_ID;
-    }
+
+    int ret;
     LOCK();
     ret = e->vtable->load(e);
     UNLOCK();
@@ -1006,6 +1012,7 @@ int param_load_one(uint32_t param_id)
         if (m && m->vtable && m->vtable->mark_dirty)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
     }
+    /* apply 重新校验恢复值 (多分区兼容); 有意不走 param_write 以避免 notify */
     if (ret == PARAM_OK)
         ret = e->vtable->write(e, *entry_cache(e));
 
@@ -1054,7 +1061,20 @@ int param_reset_all(void)
     return PARAM_OK;
 }
 
-/** @brief 重置指定参数为默认值，并标记 dirty 以便刷入硬件 */
+/**
+ * @brief 重置指定参数为默认值，并标记 dirty 以便刷入硬件
+ *
+ * 流程: reset 恢复默认值 → mark_dirty 标记模块 → write 触发 apply 校验。
+ *
+ * 末尾的 vtable->write 有两个作用:
+ *   1. 使 App 模块的 apply 回调对默认值重新校验 (防止默认值与
+ *      当前业务约束冲突)
+ *   2. 标记 entry 级 dirty (reset 已清除 dirty, write 重新置位)
+ *
+ * @note 与 param_load_one 相同, 直接调用 vtable->write 而非
+ *       param_write, 不触发 notify。重置通常是批量操作的一部分，
+ *       由调用者统一处理通知。
+ */
 int param_reset_one(uint32_t param_id)
 {
     if (!g_pm.initialized)
@@ -1077,6 +1097,7 @@ int param_reset_one(uint32_t param_id)
     }
     UNLOCK();
 
+    /* apply 重新校验默认值 + 恢复 entry 级 dirty; 有意不走 param_write 以避免 notify */
     if (ret == PARAM_OK)
         ret = e->vtable->write(e, *entry_cache(e));
 
