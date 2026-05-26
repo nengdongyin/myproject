@@ -242,15 +242,20 @@ extern "C"
     };
 
 /**
- * @brief 公共头部宏 — 所有 App/IP 参数的布局一致 (内部实现细节)
+ * @brief 公共头部宏 — 所有派生参数结构体的统一前缀 (框架内部)
  *
  * 展开为 param_entry_t base (8B) + type (1B) + flags (2B) + dirty (1B)
  *         + param_value_t cache (8B) + param_value_t default_val (8B)
  *         = 28B 基础布局 (不含对齐填充)。
  * 启用 PARAM_DEBUG_NAME 后额外增加 const char *name 字段。
- * 这意味着所有派生参数结构体都可安全互转。
  *
- * @internal 应用层代码不应直接使用此宏，请使用 PARAM_UINT / PARAM_INT 等定义宏。
+ * 此宏是 6 个派生结构体 (param_range_entry_t / param_enum_entry_t /
+ * param_bool_entry_t / param_exec_entry_t / param_blob_entry_t /
+ * param_string_entry_t) 及 param_entry_head_t 的**唯一布局来源**。
+ * 修改此宏即可同步更新所有派生结构体，避免手动维护 7 处重复字段。
+ *
+ * @warning 应用层代码严禁直接使用此宏。请使用 PARAM_UINT /
+ *          PARAM_INT / PARAM_IP_UINT 等类型化定义宏。
  */
 #define PARAM_ENTRY_HEAD()     \
     param_entry_t base;        \
@@ -271,8 +276,6 @@ extern "C"
 
     /**
      * @brief 数值范围型参数 (UINT / INT / FLOAT)
-     *
-     * 嵌入 PARAM_ENTRY_HEAD 的前 20B，后续追加范围信息。
      */
     typedef struct
     {

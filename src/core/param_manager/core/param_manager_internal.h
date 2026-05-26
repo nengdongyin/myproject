@@ -103,6 +103,9 @@ extern "C"
 
     /**
      * @brief 公共头部具名结构体 — 提供编译期偏移量计算
+     *
+     * 通过 param_manager.h 中的 PARAM_ENTRY_HEAD() 宏生成，
+     * 与该宏定义的 6 个公共派生结构体布局同源。
      */
     typedef struct
     {

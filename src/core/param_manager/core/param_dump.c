@@ -67,16 +67,20 @@ static void col_empty(char *dst, uint16_t width)
  * @param flags 属性标志位
  * @return 静态缓冲区指针 (如 "PR"、"E"、"-")
  */
-static const char *flags_to_str(uint16_t flags)
+static const char *flags_to_str(uint16_t flags, char *buf, uint16_t buf_size)
 {
     static const char map[] = { 'P', 'R', 'H', 'D', 'E' };
-    static char buf[6];
     int pos = 0;
     if (!flags) {
-        buf[0] = '-'; buf[1] = '\0';
+        if (buf_size >= 2) {
+            buf[0] = '-'; buf[1] = '\0';
+        } else if (buf_size == 1) {
+            buf[0] = '\0';
+        }
+        /* buf_size == 0: nothing writable, return buf as-is */
         return buf;
     }
-    for (int i = 0; i < 5 && pos < 5; i++)
+    for (int i = 0; i < 5 && pos < (int)buf_size - 1; i++)
         if (flags & (1u << i))
             buf[pos++] = map[i];
     buf[pos] = '\0';
@@ -117,7 +121,8 @@ static void fmt_uint(param_entry_t *e, const char *name,
     else
         col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -146,7 +151,8 @@ static void fmt_int(param_entry_t *e, const char *name,
     else
         col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -175,7 +181,8 @@ static void fmt_float(param_entry_t *e, const char *name,
     else
         col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -200,7 +207,8 @@ static void fmt_bool(param_entry_t *e, const char *name,
     col_fill(c_vl, COL_VALUE_W, "BOOL=%s", v.b ? "true" : "false");
     col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -224,7 +232,8 @@ static void fmt_exec(param_entry_t *e, const char *name,
     col_fill(c_vl, COL_VALUE_W, "EXEC");
     col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -250,7 +259,8 @@ static void fmt_enum(param_entry_t *e, const char *name,
     col_fill(c_vl, COL_VALUE_W, "ENUM=%ld n=%u", (long)v.i32, ee->enum_count);
     col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -291,7 +301,8 @@ static void fmt_blob(param_entry_t *e, const char *name,
     col_fill(c_vl, COL_VALUE_W, "BLOB=%s", bl_buf);
     col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -332,7 +343,8 @@ static void fmt_string(param_entry_t *e, const char *name,
     col_fill(c_vl, COL_VALUE_W, "STRING=%s", str_buf);
     col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
@@ -409,7 +421,8 @@ static void fmt_ip(param_entry_t *e, const char *name,
 
     col_empty(c_rg, COL_RANGE_W);
     col_fill(c_dt, COL_DIRTY_W, "d=%u", dirty);
-    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags));
+    char fb[8];
+    col_fill(c_fl, COL_FLAGS_W, "f=%s", flags_to_str(flags, fb, sizeof(fb)));
 
     snprintf(line, size, "%s%s%s%s%s%s\n", c_id, c_nm, c_vl, c_rg, c_dt, c_fl);
 }
