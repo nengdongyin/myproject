@@ -124,6 +124,18 @@ extern "C"
         return e && e->vtable == &ip_vtable;
     }
 
+    /** @brief 获取参数类型 */
+    static inline param_type_t entry_type(const param_entry_t *e)
+    {
+        return ((const param_entry_head_t *)e)->type;
+    }
+
+    /** @brief 获取参数属性标志 */
+    static inline uint16_t entry_flags(const param_entry_t *e)
+    {
+        return ((const param_entry_head_t *)e)->flags;
+    }
+
     /**
      * @brief 判断参数是否为合法的 EXEC 命令参数
      *
@@ -135,18 +147,6 @@ extern "C"
     static inline bool param_entry_is_exec(const param_entry_t *e)
     {
         return e && (entry_flags(e) & PARAM_FLAG_EXEC) && entry_type(e) == PARAM_TYPE_EXEC;
-    }
-
-    /** @brief 获取参数类型 */
-    static inline param_type_t entry_type(const param_entry_t *e)
-    {
-        return ((const param_entry_head_t *)e)->type;
-    }
-
-    /** @brief 获取参数属性标志 */
-    static inline uint16_t entry_flags(const param_entry_t *e)
-    {
-        return ((const param_entry_head_t *)e)->flags;
     }
 
     /** @brief 获取参数 dirty 标志 */
