@@ -260,7 +260,12 @@ param_entry_t *param_entry_find(uint32_t param_id)
  *
  * 驱动由工厂函数预初始化后传入，此函数仅存储指针。
  *
+ * @note 假定系统启动阶段单线程调用，因此不加锁。
+ *       反初始化 param_deinit 会加锁以安全清理多线程环境中
+ *       可能仍被持有的资源。两函数锁语义不对称是有意设计。
+ *
  * @param storage 持久化后端驱动 (可为 NULL)
+ * @param notify  参数变化通知回调 (可为 NULL)
  * @return PARAM_OK 成功，PARAM_ERR_BUSY 重复初始化
  */
 int param_init(const param_storage_drv_t *storage, param_notify_fn notify)
@@ -281,6 +286,10 @@ int param_init(const param_storage_drv_t *storage, param_notify_fn notify)
  *
  * 逆序调用 storage->deinit() 和所有模块的 vtable->deinit()，
  * 最后 memset 清零全局状态。
+ *
+ * @note 加锁以安全清理多线程环境中可能仍被持有的资源。
+ *       初始化 param_init 假定单线程调用不加锁，
+ *       两函数锁语义不对称是有意设计。
  */
 void param_deinit(void)
 {
@@ -675,7 +684,9 @@ int param_read_string(uint32_t id, char *buf, uint16_t buf_size)
 /**
  * @brief STRING 类型写入，委托到 param_write
  *
- * value.ptr 传递字符串指针，底层 cache_update_string 自动截断并补 '\0'。
+ * 先校验目标参数类型为 PARAM_TYPE_STRING (防止向非字符串参数
+ * 写入指针值导致数据语义错误)，再构造 param_value_t 委托写入。
+ * 底层 cache_update_string 自动截断并补 '\0'。
  */
 int param_write_string(uint32_t id, const char *str)
 {
@@ -683,6 +694,12 @@ int param_write_string(uint32_t id, const char *str)
         return PARAM_ERR_NOT_FOUND;
     if (!str)
         return PARAM_ERR_INVALID_ID;
+
+    param_entry_t *e = param_entry_find(id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+    if (entry_type(e) != PARAM_TYPE_STRING)
+        return PARAM_ERR_TYPE_MISMATCH;
 
     param_value_t value = { .ptr = (void *)str };
     return param_write(id, value);
@@ -843,7 +860,11 @@ int param_check_flush_integrity(void)
  * 遍历哈希表，对每个 entry 调用 entry->vtable->save()。
  * 仅当 entry 的 flags 含 PARAM_FLAG_PERSIST 时才实际写入 (由子类实现判断)。
  *
- * @return PARAM_OK 成功，或第一个失败的错误码
+ * 错误处理策略与 param_load_all 对称:
+ *   - 遇错收集首个错误码，继续保存后续参数 (不提前退出)
+ *   - 避免"第 N 个失败导致剩余参数全部丢失"的不一致状态
+ *
+ * @return PARAM_OK 全部成功，或第一个失败的错误码
  */
 int param_save_all(void)
 {
@@ -851,6 +872,7 @@ int param_save_all(void)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->save)
         return PARAM_ERR_NOT_FOUND;
+    int first_err = PARAM_OK;
 
     LOCK();
     for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
@@ -858,13 +880,11 @@ int param_save_all(void)
         if (!e)
             continue;
         int ret = e->vtable->save(e);
-        if (ret != 0) {
-            UNLOCK();
-            return ret;
-        }
+        if (ret != 0 && first_err == PARAM_OK)
+            first_err = (ret < 0) ? ret : PARAM_ERR_FLASH_FAIL;
     }
     UNLOCK();
-    return PARAM_OK;
+    return first_err;
 }
 
 /** @brief 保存单个参数到持久化存储 */
