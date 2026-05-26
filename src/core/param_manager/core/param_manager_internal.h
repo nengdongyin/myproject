@@ -121,6 +121,19 @@ extern "C"
         return e && e->vtable == &ip_vtable;
     }
 
+    /**
+     * @brief 判断参数是否为合法的 EXEC 命令参数
+     *
+     * 同时满足 PARAM_FLAG_EXEC 标志和 PARAM_TYPE_EXEC 类型才返回 true。
+     * 若 FLAG_EXEC 置位但类型不是 EXEC (配置错误)，返回 false。
+     *
+     * 所有 FLAG_EXEC 相关判断统一使用此函数，消除分散的 flag+type 双重检查。
+     */
+    static inline bool param_entry_is_exec(const param_entry_t *e)
+    {
+        return e && (entry_flags(e) & PARAM_FLAG_EXEC) && entry_type(e) == PARAM_TYPE_EXEC;
+    }
+
     /** @brief 获取参数类型 */
     static inline param_type_t entry_type(const param_entry_t *e)
     {

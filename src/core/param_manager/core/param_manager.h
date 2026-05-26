@@ -33,7 +33,15 @@ extern "C"
      * @brief 参数值联合体
      *
      * 覆盖所有支持的参数类型。实际使用的成员由 param_type_t 决定。
-     * 对于 BLOB 类型，ptr 指向外部静态缓冲区。
+     *
+     * .ptr 成员承担多种语义 (按使用场景区分):
+     *   - BLOB  cache / default_val: 指向外部静态字节缓冲区
+     *   - STRING cache / default_val: 指向外部静态 char 缓冲区
+     *   - 写入传递: param_write_string / param_write_raw 通过 .ptr
+     *     向 cache_update_string / cache_update_blob 传递源数据指针
+     *   - EXEC 参数: param_exec / write_raw 通过 .ptr 传递 user_arg
+     *
+     * 值类型 (UINT/INT/FLOAT/BOOL/ENUM) 不使用 .ptr。
      */
     typedef union
     {
@@ -234,10 +242,12 @@ extern "C"
     };
 
 /**
- * @brief 公共头部宏 — 所有 App/IP 参数的前 20B 布局一致 (内部实现细节)
+ * @brief 公共头部宏 — 所有 App/IP 参数的布局一致 (内部实现细节)
  *
- * 展开为 param_entry_t base + type + flags + dirty +
- *         param_value_t cache + param_value_t default_val [+ name]。
+ * 展开为 param_entry_t base (8B) + type (1B) + flags (2B) + dirty (1B)
+ *         + param_value_t cache (8B) + param_value_t default_val (8B)
+ *         = 28B 基础布局 (不含对齐填充)。
+ * 启用 PARAM_DEBUG_NAME 后额外增加 const char *name 字段。
  * 这意味着所有派生参数结构体都可安全互转。
  *
  * @internal 应用层代码不应直接使用此宏，请使用 PARAM_UINT / PARAM_INT 等定义宏。

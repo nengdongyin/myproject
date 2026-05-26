@@ -49,7 +49,8 @@ static int app_write(param_entry_t *e, param_value_t value)
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
-    if (entry_flags(e) & PARAM_FLAG_EXEC) return PARAM_ERR_READONLY;
+    if (entry_flags(e) & PARAM_FLAG_EXEC)
+        return param_entry_is_exec(e) ? PARAM_ERR_READONLY : PARAM_ERR_TYPE_MISMATCH;
 
     if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
 
@@ -73,7 +74,8 @@ static int app_write_cache(param_entry_t *e, param_value_t value)
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
-    if (entry_flags(e) & PARAM_FLAG_EXEC) return PARAM_ERR_READONLY;
+    if (entry_flags(e) & PARAM_FLAG_EXEC)
+        return param_entry_is_exec(e) ? PARAM_ERR_READONLY : PARAM_ERR_TYPE_MISMATCH;
 
     if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
 
@@ -96,6 +98,7 @@ static int app_write_immediate(param_entry_t *e, param_value_t value)
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
     if (entry_flags(e) & PARAM_FLAG_EXEC) {
+        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
         if (m->exec) {
             int ret = m->exec(m->ctx, e->param_id, value);
             if (ret == PARAM_OK) {
@@ -133,6 +136,7 @@ static int app_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len)
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
     if (entry_flags(e) & PARAM_FLAG_EXEC) {
+        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
         if (m->exec) {
             param_value_t arg = { .ptr = (void *)data };
             int ret = m->exec(m->ctx, e->param_id, arg);

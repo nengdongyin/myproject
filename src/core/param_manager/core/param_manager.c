@@ -763,7 +763,7 @@ int param_exec(uint32_t cmd_id, void *user_arg)
         return PARAM_ERR_NOT_FOUND;
     LOCK();
     param_entry_t *e = param_entry_find(cmd_id);
-    if (!e || !(entry_flags(e) & PARAM_FLAG_EXEC)) {
+    if (!param_entry_is_exec(e)) {
         UNLOCK();
         return PARAM_ERR_NOT_FOUND;
     }
