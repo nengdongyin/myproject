@@ -108,8 +108,12 @@ extern "C"
      * 回调内禁止调用 param_write / param_write_cache / param_write_immediate /
      * param_write_string，是否防重入由回调实现者自行决定。
      *
+     * @attention 多线程并发写入同一参数时，notify 可能收到中间值
+     *   (另一个线程在 notify 发出后立即覆盖了参数值)。
+     *   new_value 应视为 best-effort 快照，不应假设其与缓存当前值一致。
+     *
      * @param param_id  发生变化的参数 ID
-     * @param new_value 写入后的新值
+     * @param new_value 写入后的新值 (best-effort 快照)
      */
     typedef void (*param_notify_fn)(uint32_t param_id, param_value_t new_value);
 
@@ -194,9 +198,12 @@ extern "C"
          *   - App 参数: 跳过 apply 回调，仅更新缓存 + 标记 dirty
          *   - IP 参数:  与 write 行为相同 (IP 无 apply 回调) */
         int (*write_cache)(param_entry_t *e, param_value_t value);
-        /** 立即写入参数:
-         *   - IP 参数: 通过 write 直通硬件，更新缓存，不产生 dirty 标记
-         *   - App 参数: 执行 apply 校验 + 更新缓存 + 清除 dirty，不写硬件 (硬件写入由 param_flush 触发) */
+        /** 立即写入参数 — 行为取决于模块类型 (有意分裂):
+         *   - IP 参数: 通过 driver->write 直通硬件，更新缓存，不产生 dirty。
+         *              这是真正的"立即" — 硬件寄存器在函数返回时已更新。
+         *   - App 参数: 执行 apply 校验 + 更新缓存 + 清除 dirty，
+         *              不写硬件。App 模块没有硬件，"立即"仅到缓存层。
+         *              硬件生效仍需 param_flush() 触发 IP 模块批量刷入。 */
         int (*write_immediate)(param_entry_t *e, param_value_t value);
         /** 原始字节流写入 */
         int (*write_raw)(param_entry_t *e, const uint8_t *data, uint16_t len);

@@ -15,6 +15,31 @@ extern "C"
      * 这些函数不被应用层代码直接调用，仅由 app_param_manager.c /
      * ip_param_manager.c / param_data_ops.c / param_dump.c 等
      * 内部模块使用，不应出现在 param_manager.h 的公共 API 中。
+     *
+     * ================================================================
+     *  锁策略 (Lock Discipline)
+     * ================================================================
+     *
+     * 全局互斥锁通过 LOCK() / UNLOCK() 宏操作，底层由 param_manager_port
+     * 提供 (RTOS 互斥锁 / 裸机关中断 / 无操作)。
+     *
+     * 原则:
+     *   1. 所有对 g_pm 全局状态的读写 (哈希表、模块链表、统计计数)
+     *      必须在 LOCK/UNLOCK 对内完成。
+     *   2. 参数级 vtable 函数 (app_write / ip_param_write 等) 内部自行
+     *      加锁保护缓存更新和 dirty 标记 —— 调用者进入 vtable 前不持锁。
+     *   3. 模块级 dirty 标记 (mark_dirty / clear_dirty) 由公共 API 层
+     *      (param_write 系列) 在 vtable 返回后单独加锁调用。
+     *      这意味着 vtable->write 返回 与 mark_dirty 之间存在窗口:
+     *      多线程并发写入同一参数时，notify 可能收到中间值。
+     *      notify 回调的实现者应将收到的值视为 best-effort 快照。
+     *   4. apply / exec / notify 回调在锁外执行，以避免死锁
+     *      (回调中可能递归调用 param_write)。回调实现者需自行处理
+     *      防重入。
+     *   5. 初始化 (param_init) 和反初始化 (param_deinit) 假定单线程
+     *      调用；init 不加锁，deinit 加锁以安全清理。
+     *   6. 模块注册 (param_module_register_node) 全程持锁以保证
+     *      哈希表 + 链表插入的原子性。
      */
 
     /** @brief 获取当前持久化后端驱动 */

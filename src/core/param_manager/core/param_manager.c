@@ -478,8 +478,14 @@ int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
         }
         if (g_pm.notify_cb) {
             param_value_t change;
-            if (param_read(param_id, &change) == PARAM_OK)
-                g_pm.notify_cb(param_id, change);
+            /* 从 raw data 直接构造 notify 值，避免 param_read
+               对 IP 参数触发硬件重读而返回非写入值 */
+            memset(&change, 0, sizeof(change));
+            if (len <= sizeof(param_value_t))
+                memcpy(&change, data, len);
+            else
+                change.ptr = (void *)data;
+            g_pm.notify_cb(param_id, change);
         }
     }
     return ret;
@@ -692,10 +698,14 @@ int param_write_string(uint32_t id, const char *str)
  */
 uint16_t param_get_size(uint32_t param_id)
 {
+    LOCK();
     param_entry_t *e = param_entry_find(param_id);
-    if (!e)
+    if (!e) {
+        UNLOCK();
         return 0;
+    }
 
+    uint16_t result;
     switch (entry_type(e)) {
     case PARAM_TYPE_UINT:
     case PARAM_TYPE_INT:
@@ -703,14 +713,20 @@ uint16_t param_get_size(uint32_t param_id)
     case PARAM_TYPE_BOOL:
     case PARAM_TYPE_ENUM:
     case PARAM_TYPE_EXEC:
-        return sizeof(param_value_t);
+        result = sizeof(param_value_t);
+        break;
     case PARAM_TYPE_BLOB:
-        return ((param_blob_entry_t *)e)->blob_size;
+        result = ((param_blob_entry_t *)e)->blob_size;
+        break;
     case PARAM_TYPE_STRING:
-        return ((param_string_entry_t *)e)->max_len + 1;
+        result = ((param_string_entry_t *)e)->max_len + 1;
+        break;
     default:
-        return 0;
+        result = 0;
+        break;
     }
+    UNLOCK();
+    return result;
 }
 
 /* ================================================================

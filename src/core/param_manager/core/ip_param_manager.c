@@ -248,6 +248,8 @@ static int ip_param_reset(param_entry_t *e)
 const param_vtable_t ip_vtable = {
     .read             = ip_param_read,
     .write            = ip_param_write,
+    /* IP 参数无 apply 回调，write 和 write_cache 均仅更新缓存+标记 dirty;
+       实际硬件写入由 param_flush → ip_module_flush 批量触发，因此二者等价。 */
     .write_cache      = ip_param_write,
     .write_immediate  = ip_write_immediate,
     .write_raw        = ip_param_write_raw,
