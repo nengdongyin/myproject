@@ -46,5 +46,5 @@ static int sys_mod_init(void *ctx)
     return PARAM_OK;
 }
 
-PARAM_MODULE_DEFINE(sys_mod, MODULE_SYS, "System", NULL, sys_mod_init, sys_apply_cb, sys_exec_cb, NULL);
+PARAM_MODULE_DEFINE(sys_mod, MODULE_SYS, "System", NULL, sys_mod_init, NULL, sys_apply_cb, sys_exec_cb, NULL);
 PARAM_MODULE_INIT(sys_mod, sys_params);

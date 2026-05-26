@@ -5,7 +5,7 @@ DEF_TEST_UINT(mb_u32, TID_APPLET_UINT,  PARAM_FLAG_PERSIST, 100, 0, 200);
 DEF_TEST_UINT(mb_u32b, TID_APPLET_INT,  PARAM_FLAG_PERSIST, 50,  0, 100);
 
 PARAM_TABLE(mb_params, &mb_u32.base, &mb_u32b.base);
-PARAM_MODULE_DEFINE(mb_mod, TEST_MODULE_APPLET, "MB", NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(mb_mod, TEST_MODULE_APPLET, "MB", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 
 static void register_all(void)
 {

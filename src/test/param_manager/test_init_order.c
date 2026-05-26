@@ -31,7 +31,7 @@ DEF_TEST_INT(app_p2, TID_APPLET_INT, PARAM_FLAG_PERSIST, 0, -50, 50);
 
 PARAM_TABLE(applet_params, &app_p1.base, &app_p2.base);
 
-PARAM_MODULE_DEFINE(order_applet, TEST_MODULE_APPLET, "OrderApplet", NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(order_applet, TEST_MODULE_APPLET, "OrderApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 
 /* ================================================================
  *  注册顺序测试

@@ -67,32 +67,39 @@ extern "C"
  * 使用示例:
  * @code
  * PARAM_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
- *                     &g_ae_instance, ae_init, ae_apply, NULL, ae_flush);
+ *                     &g_ae_instance, ae_init, NULL, ae_write, NULL, ae_flush);
  * @endcode
  *
- * 参数顺序按生命周期排列: ctx → init → apply → exec → flush
+ * App 与 IP 回调语义对称，按生命周期排列:
+ *   init  (可 NULL) — 模块初始化
+ *   read  (可 NULL) — 自定义读取 (实时计算/硬件查询); NULL=直接返缓存
+ *   write           — 校验/转换写入值; 返回 PARAM_OK 放行
+ *   exec  (可 NULL) — 命令执行
+ *   flush           — 刷入硬件
  *
  * @param _mod_name   模块变量名 (生成 _mod_name##_module)
  * @param _mod_id     模块 ID (来自 module_ids.h)
  * @param _label      模块调试名称
- * @param _ctx        模块私有上下文 (init/exec/flush 回调的 ctx 参数)
+ * @param _ctx        模块私有上下文
  * @param _init_fn    初始化回调 (可 NULL)
- * @param _apply_fn   参数写入时的校验/转换回调
+ * @param _read_fn    read 回调 (可 NULL = 直接返缓存)
+ * @param _write_fn   write 回调 (校验/转换)
  * @param _exec_fn    exec 命令回调 (可 NULL)
  * @param _flush_fn   flush 回调函数
  */
-#define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, _ctx, _init_fn, _apply_fn, _exec_fn, _flush_fn) \
+#define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, _ctx, _init_fn, _read_fn, _write_fn, _exec_fn, _flush_fn) \
     static param_module_t _mod_name##_module = {                              \
         .node = {                                                             \
             .module_id = (_mod_id),                                           \
             .name = (_label),                                                 \
             .vtable = &app_module_vtable,                                     \
         },                                                                    \
-        .apply = (_apply_fn),                                                 \
-        .exec = (_exec_fn),                                                \
+        .init  = (_init_fn),                                                  \
+        .read  = (_read_fn),                                                  \
+        .write = (_write_fn),                                                 \
+        .exec  = (_exec_fn),                                                  \
         .flush = (_flush_fn),                                                 \
-        .init = (_init_fn),                                                   \
-        .ctx = (_ctx),                                                    \
+        .ctx   = (_ctx),                                                      \
     }
 
 /**

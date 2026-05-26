@@ -14,7 +14,7 @@ PARAM_IP_BOOL  (ipb,  TID_IP_BOOL,  PARAM_FLAG_PERSIST, false);
 PARAM_TABLE(applet_params, &bu32.base, &bi32.base, &bf32.base, &benm.base);
 PARAM_TABLE(ip_params, &ipu.base, &ipf.base, &ipb.base);
 
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "BoundApplet", NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "BoundApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "BoundIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
 
 static void register_all(void)
@@ -155,7 +155,7 @@ void test_register_zero_count(void) {
 void test_register_duplicate_param_across_modules(void) {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
 
-    PARAM_MODULE_DEFINE(test2, TEST_MODULE_APPLET2, "Applet2", NULL, NULL, NULL, NULL, NULL);
+    PARAM_MODULE_DEFINE(test2, TEST_MODULE_APPLET2, "Applet2", NULL, NULL, NULL, NULL, NULL, NULL);
     PARAM_TABLE(dup_params, &bu32.base);
     TEST_ASSERT_PARAM_ERR(
         param_module_register(&test2_module, dup_params, PARAM_COUNT(dup_params)),

@@ -36,6 +36,23 @@ static param_module_t *app_find(uint16_t m_id)
 
 static int app_read(param_entry_t *e, param_value_t *value)
 {
+    param_module_t *m = app_find((uint16_t)PARAM_MODULE_ID(e->param_id));
+
+    /* 阶段 1: 尝试通过 read 回调获取实时值 (与 IP ip_param_read 对称) */
+    if (m && m->read) {
+        int ret = m->read(m->ctx, e->param_id, value);
+        if (ret == PARAM_OK) {
+            param_type_t t = entry_type(e);
+            if (t < PARAM_TYPE_COUNT) {
+                LOCK();
+                g_param_data_ops[t].cache_update(e, *value);
+                UNLOCK();
+            }
+            return PARAM_OK;
+        }
+    }
+
+    /* 阶段 2: 无回调 / 回调失败 / 回调不处理该 ID → 回退缓存 */
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
     return g_param_data_ops[t].read(e, value);
@@ -56,8 +73,8 @@ static int app_write(param_entry_t *e, param_value_t value)
 
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
-    if (m->apply) {
-        int ret = m->apply(e->param_id, value);
+    if (m->write) {
+        int ret = m->write(e->param_id, value);
         if (ret != PARAM_OK) return ret;
     }
 
@@ -115,9 +132,9 @@ static int app_write_immediate(param_entry_t *e, param_value_t value)
 
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
-    if (!m->apply) return PARAM_ERR_NOT_FOUND;
+    if (!m->write) return PARAM_ERR_NOT_FOUND;
 
-    int ret = m->apply(e->param_id, value);
+    int ret = m->write(e->param_id, value);
     if (ret == PARAM_OK) {
         LOCK();
         g_param_data_ops[t].cache_update(e, value);

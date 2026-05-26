@@ -14,7 +14,7 @@ PARAM_BLOB     (rblb, TID_APPLET_BLOB, PARAM_FLAG_PERSIST, g_blob_buf2, TEST_BLO
 PARAM_TABLE(applet_params, &ru32.base, &rboo.base, &rrdo.base, &rblb.base);
 PARAM_TABLE(ip_params, &ripu.base, &ripf.base);
 
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ResetApplet", NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ResetApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ResetIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
 
 static void register_all(void)

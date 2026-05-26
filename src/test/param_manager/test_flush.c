@@ -13,8 +13,8 @@ PARAM_TABLE(applet_params,  &fu32.base, &fboo.base);
 PARAM_TABLE(applet2_params, &fu2.base);
 PARAM_TABLE(ip_params, &fipu.base, &fipf.base, &fipb.base);
 
-PARAM_MODULE_DEFINE(test_applet,  TEST_MODULE_APPLET,  "FlushApplet",  NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
-PARAM_MODULE_DEFINE(test_applet2, TEST_MODULE_APPLET2, "FlushApplet2", NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
+PARAM_MODULE_DEFINE(test_applet,  TEST_MODULE_APPLET,  "FlushApplet",  NULL, NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
+PARAM_MODULE_DEFINE(test_applet2, TEST_MODULE_APPLET2, "FlushApplet2", NULL, NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
 IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "FlushIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
 
 static void register_all(void)

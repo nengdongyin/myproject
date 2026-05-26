@@ -11,7 +11,7 @@ PARAM_IP_FLOAT (oipf, TID_IP_FLOAT, PARAM_FLAG_PERSIST, 2.0f,  2.0f,  2.0f);
 PARAM_TABLE(applet_params, &ou32.base, &oi32.base, &oboo.base);
 PARAM_TABLE(ip_params, &oipu.base, &oipf.base);
 
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "OtherApplet", NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "OtherApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "OtherIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
 
 static void register_all(void)
@@ -230,7 +230,7 @@ void test_blob_write_read(void) {
 
     static param_entry_t *entries[] = { &test_blob.base };
     PARAM_MODULE_DEFINE(test_blob_mod, (uint16_t)PARAM_MODULE_ID(TID_APPLET_BLOB),
-                        "BlobMod", NULL, NULL, mock_apply_ok, NULL, NULL);
+                        "BlobMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
     param_module_register(&test_blob_mod_module, entries, 1);
 
     param_value_t v = { .ptr = data };
@@ -260,7 +260,7 @@ static param_string_entry_t g_test_str = {
 };
 
 static param_entry_t *g_str_entries[] = { &g_test_str.base };
-PARAM_MODULE_DEFINE(test_str_mod, STR_TEST_MODULE, "StrMod", NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_str_mod, STR_TEST_MODULE, "StrMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 
 void test_string_write_read(void) {
     param_module_register(&test_str_mod_module, g_str_entries, 1);
@@ -287,7 +287,7 @@ void test_string_truncation(void) {
     memset(buf, 0, sizeof(buf));
 
     static param_entry_t *trunc_entries[] = { &trunc_str.base };
-    PARAM_MODULE_DEFINE(trunc_mod, STR_TEST_MODULE, "TruncMod", NULL, NULL, mock_apply_ok, NULL, NULL);
+    PARAM_MODULE_DEFINE(trunc_mod, STR_TEST_MODULE, "TruncMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
     param_module_register(&trunc_mod_module, trunc_entries, 1);
 
     param_value_t v = { .ptr = (void *)"HelloWorld" };

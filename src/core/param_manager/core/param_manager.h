@@ -126,12 +126,28 @@ extern "C"
     typedef void (*param_notify_fn)(uint32_t param_id, param_value_t new_value);
 
     /**
-     * @brief App 参数写入时调用的校验/转换回调
+     * @brief App 参数读取回调
+     *
+     * 若提供且返回 PARAM_OK，框架回写缓存后返回。
+     * NULL 或返回错误 → 回退到读取缓存值 (与 IP ip_param_read 对称)。
+     *
+     * @param ctx      模块私有上下文
+     * @param param_id 参数 ID
+     * @param value    [out] 读到的值
+     * @return PARAM_OK 成功 (触发缓存回写)，其他值回退缓存
+     */
+    typedef int (*param_read_fn)(void *ctx, uint32_t param_id, param_value_t *value);
+
+    /**
+     * @brief App 参数写入回调 (与 IP write 回调语义对称)
      * @param param_id 参数 ID
      * @param value    待写入的新值
-     * @return PARAM_OK 表示接受，其他值表示拒绝（原样返回给调用者）
+     * @return PARAM_OK 表示接受，其他值表示拒绝
      */
-    typedef int (*param_apply_fn)(uint32_t param_id, param_value_t value);
+    typedef int (*param_write_fn)(uint32_t param_id, param_value_t value);
+
+    /** @brief 向后兼容别名 */
+    typedef param_write_fn param_apply_fn;
 
     /**
      * @brief App 模块 flush 回调 — 将缓存的参数批量写入硬件
@@ -391,16 +407,18 @@ extern "C"
     /**
      * @brief App 模块 (模块基类派生)
      *
-     * 在 param_module_node 基础上增加 apply/flush/init/exec 回调。
+     * 回调与 IP 模块的 driver 回调语义对称:
+     *   read  (NULL=直接返缓存) / write / flush / init / exec
      */
     struct param_module
     {
         param_module_node_t node; /**< 基类节点 */
-        param_apply_fn apply;     /**< 参数写入时的校验/转换回调 */
+        param_read_fn read;       /**< 参数读取回调 (NULL = 直接返缓存) */
+        param_write_fn write;     /**< 参数写入回调 (校验/转换) */
         param_flush_fn flush;     /**< 刷入硬件的回调 */
         param_init_fn init;       /**< 模块初始化回调 */
         param_exec_fn exec;       /**< 模块命令执行回调 */
-        void *ctx;                /**< 模块私有上下文 (init/exec/flush 回调传入) */
+        void *ctx;                /**< 模块私有上下文 */
     };
 
     /**

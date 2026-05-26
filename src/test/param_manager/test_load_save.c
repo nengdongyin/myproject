@@ -14,7 +14,7 @@ PARAM_BLOB     (lblb,  TID_APPLET_BLOB, PARAM_FLAG_PERSIST, g_blob_data, TEST_BL
 
 PARAM_TABLE(applet_params, &lu32.base, &lf32.base, &lboo.base, &lnop.base, &lblb.base);
 PARAM_TABLE(ip_params, &lipu.base, &lipf.base);
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "LSApplet", NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "LSApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "LSIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
 
 static void register_all(void)
