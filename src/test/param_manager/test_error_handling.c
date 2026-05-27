@@ -138,7 +138,7 @@ void test_flush_integrity_unordered_module(void) {
  *  apply_cb 错误传播
  * ================================================================ */
 void test_apply_cb_returns_error(void) {
-    test_applet_module.apply = mock_apply_fail;
+    test_applet_module.write = mock_apply_fail;
     register_all();
 
     param_value_t v = { .u32 = 42 };
@@ -147,7 +147,7 @@ void test_apply_cb_returns_error(void) {
 
     param_read(TID_APPLET_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(100, v.u32);
-    test_applet_module.apply = mock_apply_ok;
+    test_applet_module.write = mock_apply_ok;
 }
 
 /* ================================================================

@@ -172,14 +172,14 @@ void test_write_triggers_apply_cb(void) {
 }
 
 void test_write_apply_rejects(void) {
-    test_applet_module.apply = mock_apply_fail;
+    test_applet_module.write = mock_apply_fail;
     register_params();
     param_value_t v = { .u32 = 42 };
     TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_INVALID_ID);
     param_read(TID_APPLET_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(100, v.u32);
     TEST_ASSERT_DIRTY(&tu32.base, 0);
-    test_applet_module.apply = mock_apply_ok;
+    test_applet_module.write = mock_apply_ok;
 }
 
 void test_write_readonly(void) {

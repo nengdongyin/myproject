@@ -551,7 +551,7 @@ int param_read(uint32_t param_id, param_value_t *value)
  * @details
  * 根据参数类型分三种路径读取:
  *   - 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC): 从 entry_cache 直接拷贝
- *     sizeof(param_value_t) = 8 字节
+ *     sizeof(param_value_t) 字节 (平台相关: 32-bit 4B, 64-bit 8B)
  *   - BLOB: 从 entry_cache()->ptr 指向的外部缓冲区读取 blob_size 字节
  *   - STRING: 从 entry_cache()->ptr 指向的外部缓冲区读取 max_len+1 字节
  *
@@ -753,7 +753,7 @@ int param_write_string(uint32_t id, const char *str)
 /**
  * @brief 获取参数数据大小 (字节数)
  *
- * 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) → sizeof(param_value_t) = 8
+ * 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) → sizeof(param_value_t) (平台相关: 32-bit 4B, 64-bit 8B)
  * BLOB → blob_size
  * STRING → max_len + 1 (含结尾 '\0')
  * 未注册 → 0

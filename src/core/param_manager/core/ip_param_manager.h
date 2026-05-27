@@ -22,7 +22,7 @@ extern "C"
  * 唯一区别是 vtable 指向 &ip_vtable。行为由 vtable 决定，不由结构体决定。
  *
  * 关键约束:
- *   - 参数条目前 20B 与 param_entry_head_t 布局一致，可使用统一访问器
+ *   - 参数条目前 sizeof(param_entry_head_t) 字节与 param_entry_head_t 布局一致，可使用统一访问器
  *   - 最多支持 64 个参数 (IP_DIRTY_MAP_BITS = 64)
  *   - dirty 追踪使用 64-bit 位图 (ip_instance_t::dirty_map)
  */

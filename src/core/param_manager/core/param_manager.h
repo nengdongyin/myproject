@@ -247,7 +247,7 @@ extern "C"
     extern const param_vtable_t ip_vtable;
 
     /**
-     * @brief 参数基类 (8 字节)
+     * @brief 参数基类 (平台相关: 32-bit 上 8 字节, 64-bit 上 16 字节)
      *
      * 所有参数条目均以此结构体开头，通过 vtable 指针实现多态分派。
      */
@@ -260,9 +260,9 @@ extern "C"
 /**
  * @brief 公共头部宏 — 所有派生参数结构体的统一前缀 (框架内部)
  *
- * 展开为 param_entry_t base (8B) + type (1B) + flags (2B) + dirty (1B)
- *         + param_value_t cache (8B) + param_value_t default_val (8B)
- *         = 28B 基础布局 (不含对齐填充)。
+ * 展开为 param_entry_t base + type (1B) + flags (2B) + dirty (1B)
+ *         + param_value_t cache + param_value_t default_val
+ *         (平台相关: 32-bit 约 20B, 64-bit 约 36B, 不含对齐填充)。
  * 启用 PARAM_DEBUG_NAME 后额外增加 const char *name 字段。
  *
  * 此宏是 6 个派生结构体 (param_range_entry_t / param_enum_entry_t /
@@ -574,7 +574,7 @@ extern "C"
     /**
      * @brief 获取参数数据大小 (字节数)
      *
-     * - UINT/INT/FLOAT/BOOL/ENUM/EXEC → sizeof(param_value_t) = 8
+     * - UINT/INT/FLOAT/BOOL/ENUM/EXEC → sizeof(param_value_t) (平台相关: 32-bit 4B, 64-bit 8B)
      * - BLOB → blob_size
      * - STRING → max_len + 1 (含结尾 '\0')
      * - 未注册 → 0

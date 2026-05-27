@@ -13,13 +13,13 @@ extern "C"
      * @file app_param_manager.h
      * @brief App (业务逻辑) 参数子系统的类型定义、宏与注册接口
      *
-     * App 参数按类型分为 5 种派生结构体:
-     *   - param_range_entry_t  (28B) — UINT / INT / FLOAT (带范围校验)
+     * App 参数按类型分为 5 种派生结构体 (大小为 32-bit 平台典型值):
+     *   - param_range_entry_t  (32B) — UINT / INT / FLOAT (带范围校验)
      *   - param_enum_entry_t   (28B) — ENUM (带枚举值校验)
      *   - param_bool_entry_t   (20B) — BOOL (无校验)
      *   - param_blob_entry_t   (24B) — BLOB (字节块，二进制数据)
      *
-     * 所有类型的前 20B 公共头部 (PARAM_ENTRY_HEAD) 完全一致，
+     * 所有类型的前 sizeof(param_entry_head_t) 字节公共头部 (PARAM_ENTRY_HEAD) 完全一致，
      * 对外统一通过 param_entry_t * 基类指针和 param_write / param_read 操作。
      *
      * 针对每一参数类型的操作函数 (pre_write / cache_update / read / save / load / reset)
