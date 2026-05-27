@@ -46,7 +46,7 @@ extern "C"
  * @param _name 模块名 (用于段符号名唯一性)
  * @param _init 模块 register 函数
  */
-#ifdef PARAM_MODULE_AUTO_REGISTER
+#if PARAM_MODULE_AUTO_REGISTER
 
 /** 将模块 init 函数放入 .rodata.param_modules 段 */
 #define PARAM_MODULE_REGISTER(_name, _init)                                                                          \

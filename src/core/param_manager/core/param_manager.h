@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "param_manager_config.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -21,7 +22,6 @@ extern "C"
      *   - App 模块与 IP 模块共用单条链表，通过 vtable 区分行为
      */
 
-#define PARAM_DEBUG_NAME
 /** @brief 构造 32 位参数 ID (高 16 位 module_id, 低 16 位 local_id) */
 #define MAKE_PARAM_ID(mod, loc) (uint32_t)((((mod) & 0xFFFFu) << 16) | ((loc) & 0xFFFFu))
 /** @brief 从 32 位 ID 提取模块 ID (高 16 位) */
@@ -282,7 +282,7 @@ extern "C"
     param_value_t default_val; \
     IF_PARAM_DEBUG_NAME(const char *name)
 
-#ifdef PARAM_DEBUG_NAME
+#if PARAM_DEBUG_NAME
 #define IF_PARAM_DEBUG_NAME(x) x
 #define PARAM_DEBUG_NAME_INIT(nm) .name = #nm,
 #else
@@ -384,10 +384,6 @@ extern "C"
         /** 按索引创建指定分区的存储驱动 (NULL=不支持) */
         const struct param_storage_drv *(*create_partition)(void *ctx, uint8_t index);
     } param_storage_drv_t;
-
-#ifndef PARAM_HASH_SIZE
-#define PARAM_HASH_SIZE 256
-#endif
 
     /**
      * @brief 模块基类 (链表节点)

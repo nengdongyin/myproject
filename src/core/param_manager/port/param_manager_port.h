@@ -30,7 +30,7 @@ void system_lock(void);
 void system_unlock(void);
 void system_mutex_init(void); /**< FreeRTOS 模式下初始化互斥锁 */
 
-#if defined(PARAM_MANAGER_NO_OS)
+#if PARAM_MANAGER_NO_OS
 #define LOCK()   do { } while (0)
 #define UNLOCK() do { } while (0)
 #else

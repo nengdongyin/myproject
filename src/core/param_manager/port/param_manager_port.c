@@ -11,7 +11,7 @@
  *    2. 链接此文件
  *    3. 确保 FreeRTOS 在 param_manager 之前初始化
  * ================================================================ */
-#if defined(PARAM_MANAGER_PORT_FREERTOS)
+#if PARAM_MANAGER_PORT_FREERTOS
 
 #include "FreeRTOS.h"
 #include "semphr.h"
@@ -54,7 +54,7 @@ void system_free(void *ptr)
  *
  *  编译条件: 定义了 PARAM_MANAGER_NO_OS
  * ================================================================ */
-#elif defined(PARAM_MANAGER_NO_OS)
+#elif PARAM_MANAGER_NO_OS
 
 static uint32_t g_critical_nest = 0;
 
@@ -76,7 +76,6 @@ void system_unlock(void)
 }
 
 /* ---- 静态内存池 (替代动态分配) ---- */
-#define PARAM_PORT_POOL_SIZE 4096
 
 static uint8_t  g_pool[PARAM_PORT_POOL_SIZE];
 static uint32_t g_pool_used;

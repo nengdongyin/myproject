@@ -76,9 +76,6 @@ extern "C"
      */
     typedef int (*ip_exec_fn)(void *driver, uint32_t param_id, param_value_t arg);
 
-/** IP dirty_map 位数上限 */
-#define IP_DIRTY_MAP_BITS 64
-
     /**
      * @brief IP 实例 (嵌入 param_module_node 作为统一链表节点)
      *

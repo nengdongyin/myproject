@@ -203,7 +203,7 @@ extern "C"
         return &((const param_entry_head_t *)e)->default_val;
     }
 
-#ifdef PARAM_DEBUG_NAME
+#if PARAM_DEBUG_NAME
     /** @brief 获取参数调试名称 */
     static inline const char *param_entry_name(const param_entry_t *e)
     {

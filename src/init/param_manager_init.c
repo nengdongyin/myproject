@@ -81,7 +81,7 @@ void param_manager_init(void)
     /* 存储版本迁移 — 在模块注册和 load_all 之前执行 */
     param_migrate_storage(storage, NULL, 0);
 
-#ifdef PARAM_MODULE_AUTO_REGISTER
+#if PARAM_MODULE_AUTO_REGISTER
     param_modules_register_all();
 #else
     sensor_module_init();

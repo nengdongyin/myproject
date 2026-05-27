@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifndef USE_FLASHDB
+#if !USE_FLASHDB
 
 static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l)
 {
@@ -46,10 +46,6 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
 #else
 
 #include "flashdb.h"
-
-#define FDB_KVDB_NAME "param_db"
-#define FDB_SECTOR_SIZE 4096
-#define MAX_INSTANCES 6
 
 typedef struct
 {

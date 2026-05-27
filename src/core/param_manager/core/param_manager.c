@@ -1311,7 +1311,7 @@ void param_module_foreach(param_module_iter_fn cb, void *ctx)
     UNLOCK();
 }
 
-#ifdef PARAM_MODULE_AUTO_REGISTER
+#if PARAM_MODULE_AUTO_REGISTER
 
 /**
  * @brief 编译器段自动注册 —
