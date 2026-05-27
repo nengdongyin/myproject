@@ -275,8 +275,8 @@ extern "C"
  */
 #define PARAM_ENTRY_HEAD()     \
     param_entry_t base;        \
-    uint8_t type;              \
     uint16_t flags;            \
+    uint8_t type;              \
     uint8_t dirty;             \
     param_value_t cache;       \
     param_value_t default_val; \

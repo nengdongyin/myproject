@@ -216,8 +216,8 @@ extern "C"
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     _Static_assert(offsetof(param_entry_head_t, base) == 0,
                    "param_entry_head_t.base must be first");
-    _Static_assert(offsetof(param_entry_head_t, type) == sizeof(param_entry_t),
-                   "param_entry_head_t.type offset mismatch");
+    _Static_assert(offsetof(param_entry_head_t, flags) == sizeof(param_entry_t),
+                   "param_entry_head_t.flags offset mismatch");
 #endif
 
 #ifdef __cplusplus
