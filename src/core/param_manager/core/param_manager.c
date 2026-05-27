@@ -325,6 +325,28 @@ void param_deinit(void)
  *    5. 更新统计信息
  * ================================================================ */
 
+/**
+ * @brief 通用模块注册入口 — 将模块节点及参数表注册到框架
+ *
+ * @details
+ * 注册流程分 5 步，全程持锁以保证哈希表 + 链表插入的原子性:
+ *
+ *   1. **去重检查**: 检查 module_id 是否已注册 → 返回 PARAM_ERR_ALREADY_REG
+ *   2. **参数冲突检查**: 遍历所有参数条目，检查 param_id 是否已存在于哈希表
+ *      → 返回 PARAM_ERR_ALREADY_REG
+ *   3. **哈希插入**: 逐条将参数条目插入哈希表（开放寻址 + 线性探测）
+ *      → 表满返回 PARAM_ERR_NO_MEMORY
+ *   4. **有序链表插入**: 按 MODULE_INIT_ORDER 顺序将模块节点插入全局链表
+ *   5. **统计更新**: 更新 module_count / param_count / persist_count
+ *
+ * App 和 IP 模块均通过此接口注册，消除双轨注册。
+ * 注册前调用者必须先设置 node->vtable 和 node->module_id。
+ *
+ * @param node    模块基类节点指针（vtable + module_id 已设）
+ * @param entries 参数条目指针数组
+ * @param count   参数数量
+ * @return PARAM_OK 成功，或错误码
+ */
 int param_module_register_node(param_module_node_t *node,
                                param_entry_t **entries,
                                uint16_t count)
@@ -336,11 +358,13 @@ int param_module_register_node(param_module_node_t *node,
 
     LOCK();
 
+    /* 步骤 1: 检查模块是否已注册 */
     if (param_module_find(node->module_id)) {
         UNLOCK();
         return PARAM_ERR_ALREADY_REG;
     }
 
+    /* 步骤 2: 检查所有参数 ID 是否冲突 */
     for (uint16_t i = 0; i < count; i++) {
         if (!entries[i])
             continue;
@@ -353,6 +377,7 @@ int param_module_register_node(param_module_node_t *node,
     node->table = entries;
     node->param_count = count;
 
+    /* 步骤 3: 参数插入哈希表 */
     for (uint16_t i = 0; i < count; i++) {
         if (!entries[i])
             continue;
@@ -362,8 +387,10 @@ int param_module_register_node(param_module_node_t *node,
         }
     }
 
+    /* 步骤 4: 模块节点按 ORDER 插入有序链表 */
     param_module_node_insert(node);
 
+    /* 步骤 5: 更新统计信息 */
     param_stats_module_inc();
     param_stats_params_add(count);
 
@@ -521,9 +548,27 @@ int param_read(uint32_t param_id, param_value_t *value)
 /**
  * @brief 原始字节流读取参数
  *
- * len 作为 [in/out] 参数: 输入为缓冲区容量, 输出为实际拷贝字节数。
- * data 可为 NULL, 此时仅更新 *len 为参数数据总大小, 不拷贝。
- * 缓冲区容量不足时静默截断, 不返回错误。
+ * @details
+ * 根据参数类型分三种路径读取:
+ *   - 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC): 从 entry_cache 直接拷贝
+ *     sizeof(param_value_t) = 8 字节
+ *   - BLOB: 从 entry_cache()->ptr 指向的外部缓冲区读取 blob_size 字节
+ *   - STRING: 从 entry_cache()->ptr 指向的外部缓冲区读取 max_len+1 字节
+ *
+ * data==NULL 的查询模式用于先探测数据总大小再分配缓冲区。
+ * 典型用法:
+ * @code
+ *   uint16_t len = 0;
+ *   param_read_raw(id, NULL, &len);       // 查询大小
+ *   uint8_t *buf = malloc(len);
+ *   param_read_raw(id, buf, &len);        // 实际读取
+ * @endcode
+ *
+ * @param param_id 参数 ID
+ * @param data     用户缓冲区 (可为 NULL，此时仅查询长度)
+ * @param len      [in/out] 输入为缓冲区容量, 输出为实际拷贝字节数
+ * @return PARAM_OK 成功, PARAM_ERR_INVALID_ID 参数不存在,
+ *         PARAM_ERR_TYPE_MISMATCH 未知类型, PARAM_ERR_NOT_FOUND 源指针为空
  */
 int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
 {
@@ -940,6 +985,40 @@ int param_reload_storage(const param_storage_drv_t *new_storage)
  *  参数版本迁移
  * ================================================================ */
 
+/**
+ * @brief 执行参数版本迁移（固件升级时自动转换旧参数格式）
+ *
+ * @details
+ * 迁移流程分为三个阶段:
+ *
+ *   **阶段 1 — 版本检查:**
+ *   从存储中读取 PID_SCHEMA_VER（1 字节版本号）:
+ *     - 不存在 (ret≤0): 首次启动 → 写入当前版本号，跳过迁移
+ *     - 不匹配: 存储格式破坏性变更 → 全量 erase_all + 重写版本号
+ *     - 匹配: 进入阶段 2
+ *
+ *   **阶段 2 — 迁移执行:**
+ *   遍历迁移表 (param_migrate_entry_t[]), 对每条旧 ID:
+ *     1. 尝试加载旧数据 (不存在或已迁移 → 跳过)
+ *     2. 根据 convert 回调决定迁移模式:
+ *        - convert==NULL: 简单改名 — 以旧数据 + new_id 保存
+ *        - convert!=NULL: 回调转换 — 回调填充 new_id + new_data + new_len
+ *     3. 新值保存成功后删除旧键（保证原子性: 先写后删）
+ *
+ *   **阶段 3 — 错误处理:**
+ *     - convert 返回 < -1: 致命错误，立即中断迁移
+ *     - convert 返回 -1: 跳过本条（保留旧数据）
+ *     - 单条保存失败: 不删除旧键，继续处理后续条目
+ *
+ * 设计意图: "先写新后删旧"保证 Flash 写入失败时不会丢失旧数据。
+ * 即使迁移中断（如断电），下次启动可安全重试。
+ *
+ * @param storage 持久化后端驱动（必须支持 load/save）
+ * @param table   迁移条目表（可为 NULL + count==0 跳过迁移）
+ * @param count   迁移条目数
+ * @return PARAM_OK 成功, PARAM_ERR_FLASH_FAIL Flash 操作失败,
+ *         其他 <0 表示迁移回调返回的致命错误
+ */
 int param_migrate_storage(const param_storage_drv_t *storage,
                           const param_migrate_entry_t *table,
                           uint16_t count)
@@ -975,29 +1054,34 @@ int param_migrate_storage(const param_storage_drv_t *storage,
 
     for (uint16_t i = 0; i < count; i++) {
         const param_migrate_entry_t *e = &table[i];
+
+        /* 尝试加载旧数据 */
         ret = storage->load(storage->ctx, e->old_id, buf, sizeof(buf));
         if (ret <= 0)
-            continue;  /* 不存在或已迁移 */
+            continue;  /**< 不存在或已迁移 → 跳过 */
 
         uint16_t old_len = (uint16_t)ret;
         bool saved = false;
 
         if (e->convert) {
+            /* 转换模式: 回调负责填充 new_id + new_data + new_len */
             uint32_t new_id;
             uint16_t new_len = 0;
             ret = e->convert(buf, old_len, &new_id, buf, &new_len, e->ctx);
             if (ret < 0 && ret != -1)
-                return ret;  /* 致命错误, 中断 */
+                return ret;  /**< 致命错误 → 中断迁移 */
             if (ret == PARAM_OK && new_len > 0) {
                 ret = storage->save(storage->ctx, new_id, buf, new_len);
                 saved = (ret >= 0);
             }
         } else {
+            /* 简单改名: 数据不变，仅变更 ID */
             ret = storage->save(storage->ctx, e->new_id, buf, old_len);
             saved = (ret >= 0);
         }
 
-        /* 仅在新值保存成功后才删除旧键，避免 Flash 写入失败导致数据丢失 */
+        /* 先写后删: 仅在新值保存成功后才删除旧键，
+           避免 Flash 写入失败导致数据丢失 */
         if (saved && storage->delete)
             storage->delete(storage->ctx, e->old_id);
     }

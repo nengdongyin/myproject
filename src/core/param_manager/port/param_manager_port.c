@@ -1,3 +1,18 @@
+/**
+ * @file param_manager_port.c
+ * @brief 平台移植层实现 — 提供 FreeRTOS / 裸机 / 默认三种平台适配
+ *
+ * @details
+ * 本文件通过编译宏条件编译实现三种运行模式的平台适配:
+ *   - PARAM_MANAGER_PORT_FREERTOS: FreeRTOS 互斥锁 + pvPortMalloc
+ *   - PARAM_MANAGER_NO_OS:         关中断嵌套锁 + 静态内存池
+ *   - 默认:                        空锁 + 标准 malloc/free（PC 测试用）
+ *
+ * 所有实现均为弱耦合: 框架不依赖特定 RTOS API，仅通过
+ * system_lock / system_unlock / system_malloc / system_free 接口调用。
+ * 更换 RTOS 只需修改本文件的条件编译分支。
+ */
+
 #include "param_manager_port.h"
 #include "param_manager.h"
 

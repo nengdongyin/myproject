@@ -23,18 +23,19 @@
 #define COL_ID_W     7   /**< ID 列: [XXXX] */
 #define COL_NAME_W   22  /**< 名称列 */
 #define COL_VALUE_W  30  /**< 值列: TYPE=VALUE */
-#define COL_RANGE_W  14  /**< 范围列: [min,max] */
+#define COL_RANGE_W  24  /**< 范围列: [min,max] — 覆盖全 UINT32/INT32 */
 #define COL_DIRTY_W  4   /**< dirty 列: d=X */
 #define COL_FLAGS_W  7   /**< flags 列: f=0xXX */
 /** @} */
 
 /**
- * @brief 列格式化填充 — 不足宽度空格补全
+ * @brief 列格式化填充 — printf 风格格式化后空格补全到固定宽度
  *
- * 用于 printf 风格的格式化，结果右截断到 width 字符。
+ * 先调用 vsnprintf 格式化内容，若输出不足 width 字符则用空格填充剩余位置。
+ * 结果始终右截断到 width 字符，末尾补 '\0' 形成合法 C 字符串。
  *
- * @param dst   输出缓冲区
- * @param width 列宽度
+ * @param dst   输出缓冲区（长度至少 width+1）
+ * @param width 列宽度（字符数）
  * @param fmt   格式化字符串
  * @param ...   格式化参数
  */
@@ -50,7 +51,10 @@ static void col_fill(char *dst, uint16_t width, const char *fmt, ...)
 }
 
 /**
- * @brief 整列填充空格 (无数据)
+ * @brief 整列填充空格 — 用于无可显示内容的列
+ *
+ * @param dst   输出缓冲区（长度至少 width+1）
+ * @param width 列宽度
  */
 static void col_empty(char *dst, uint16_t width)
 {
@@ -59,13 +63,16 @@ static void col_empty(char *dst, uint16_t width)
 }
 
 /**
- * @brief 参数标志位转为可读字符串
+ * @brief 参数标志位转为可读字符串（单字符映射）
  *
- * 映射: P=PERSIST, R=READONLY, H=HIDDEN, D=DEPRECATED, E=EXEC。
- * 无标志时返回 "-"。输出缓冲区为静态数组，不可重入。
+ * 映射关系: bit0=PERSIST→'P', bit1=READONLY→'R', bit2=HIDDEN→'H',
+ *           bit3=DEPRECATED→'D', bit4=EXEC→'E'。
+ * 无任何标志时返回 "-"。输出写入调用者提供的缓冲区，可重入。
  *
- * @param flags 属性标志位
- * @return 静态缓冲区指针 (如 "PR"、"E"、"-")
+ * @param flags    属性标志位（param_flag_t 位或组合）
+ * @param buf      输出缓冲区（调用者分配）
+ * @param buf_size 缓冲区大小
+ * @return buf 指针（与输入相同），如 "PR"、"E"、"-"
  */
 static const char *flags_to_str(uint16_t flags, char *buf, uint16_t buf_size)
 {
@@ -92,10 +99,20 @@ typedef void (*param_entry_fmt_fn)(param_entry_t *e, const char *name,
                                      char *line, uint16_t size);
 
 /**
- * @brief 公共列格式化 — 所有类型格式化器共用
+ * @brief 公共列格式化 — 所有类型格式化器共用的列拼接函数
  *
- * 封装 ID/名称/dirty/flags 列填充与最终拼接。
- * 调用者只需提供值字符串和范围字符串。
+ * 封装 6 列（ID / 名称 / 值 / 范围 / dirty / flags）的填充与拼接。
+ * 调用者只需提供已格式化的值字符串 val_str 和范围字符串 range_str
+ * （可为 NULL 表示无范围信息），其余列从此函数内部从 entry 提取。
+ *
+ * 输出格式: `[XXXX] NAME TYPE=VALUE [min,max] d=X f=XX\n`
+ *
+ * @param e         参数条目指针
+ * @param name      参数调试名称
+ * @param val_str   已格式化的值字符串（如 "UINT=100(0x64)"）
+ * @param range_str 范围字符串（如 "[0,255]"，NULL 表示无范围）
+ * @param line      输出行缓冲区
+ * @param size      缓冲区大小
  */
 static void dump_line(param_entry_t *e, const char *name,
                       const char *val_str, const char *range_str,
@@ -258,17 +275,19 @@ static const param_entry_fmt_fn g_dump_formatters[PARAM_TYPE_COUNT] = {
 };
 
 /**
- * @brief IP 参数格式化 — 范围列固定为空 (IP 不使用范围校验)
+ * @brief IP 参数格式化 — 与 App 共享 struct 类型的格式化器
  *
- * 与 App 同类型共享值格式化逻辑。
- * 通过 PARAM_ENTRY_HEAD 统一访问器读取 cache/type/flags/dirty，
- * 按 param_type_t 分派到具体值格式，绝不对 param_range_entry_t 强制转型。
+ * IP 的 UINT/INT/FLOAT/ENUM/BOOL/EXEC 使用与 App 完全相同的结构体
+ * (param_range_entry_t / param_enum_entry_t / …)，范围、枚举值均可正确显示。
+ * 直接委托给 g_dump_formatters[] 中的 App 格式化器。
+ * BLOB/STRING 因无范围语义，保持专用格式化。
  */
 static void fmt_ip(param_entry_t *e, const char *name,
                    char *line, uint16_t size)
 {
     param_type_t t = entry_type(e);
 
+    /* BLOB / STRING — 无范围，专用格式化 */
     if (t == PARAM_TYPE_BLOB) {
         fmt_blob(e, name, line, size);
         return;
@@ -278,29 +297,16 @@ static void fmt_ip(param_entry_t *e, const char *name,
         return;
     }
 
-    param_value_t v = *entry_cache(e);
-    char val[COL_VALUE_W + 1];
-
-    switch (t) {
-    case PARAM_TYPE_UINT:
-        snprintf(val, sizeof(val), "UINT=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
-        break;
-    case PARAM_TYPE_INT:
-        snprintf(val, sizeof(val), "INT=%ld", (long)v.i32);
-        break;
-    case PARAM_TYPE_FLOAT:
-        snprintf(val, sizeof(val), "FLOAT=%.3f", (double)v.f32);
-        break;
-    case PARAM_TYPE_BOOL:
-        snprintf(val, sizeof(val), "BOOL=%s", v.b ? "true" : "false");
-        break;
-    case PARAM_TYPE_EXEC:
-        snprintf(val, sizeof(val), "EXEC");
-        break;
-    default:
-        snprintf(val, sizeof(val), "IP=%lu(0x%08X)", (unsigned long)v.u32, (unsigned)v.u32);
-        break;
+    /* UINT / INT / FLOAT / BOOL / ENUM / EXEC —
+       与 App 同结构体，直接复用 App 格式化器 (含范围显示) */
+    if (t < PARAM_TYPE_COUNT && g_dump_formatters[t]) {
+        g_dump_formatters[t](e, name, line, size);
+        return;
     }
+
+    /* 未知类型 fallback — 类型字段损坏时不应假设 u32 */
+    char val[COL_VALUE_W + 1];
+    snprintf(val, sizeof(val), "type=%d", (int)t);
     dump_line(e, name, val, NULL, line, size);
 }
 
