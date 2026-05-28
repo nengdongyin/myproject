@@ -48,7 +48,25 @@ const param_storage_drv_t *param_get_storage(void)
     return g_pm.storage;
 }
 
-/** @brief 运行时替换持久化后端驱动 */
+/**
+ * @brief 运行时替换持久化后端驱动 — 纯指针替换
+ *
+ * @details
+ * 仅替换 g_pm.storage 指针，不触发旧驱动的 deinit，不触发 save/load。
+ * 这意味着旧驱动在替换后仍然有效，调用者可以保存旧指针并在之后切回。
+ *
+ * 典型用法 (临时切分区):
+ * @code
+ *   const param_storage_drv_t *saved = param_get_storage();
+ *   param_set_storage(param_get_storage_partition(1));
+ *   param_load_all();           // 从分区 1 加载
+ *   // ... 操作 ...
+ *   param_set_storage(saved);   // 切回原分区
+ * @endcode
+ *
+ * @param storage 新的存储后端驱动 (可为 NULL 停用持久化)
+ * @note 若传入非 NULL 但缺少 load/save 回调的驱动，调用被静默忽略
+ */
 void param_set_storage(const param_storage_drv_t *storage)
 {
     if (!g_pm.initialized) {
@@ -968,7 +986,17 @@ int param_storage_set_active_partition(uint8_t index)
         return PARAM_ERR_NOT_FOUND;
     return g_pm.storage->set_active_partition(g_pm.storage->ctx, index);
 }
-/** @brief 按分区索引获取存储后端驱动实例 */
+/**
+ * @brief 按分区索引获取存储后端驱动实例
+ *
+ * @details
+ * 封装 `g_pm.storage->get_partition(ctx, index)` 虚函数调用。
+ * 这是一个轻量级的只读查询，不修改 g_pm.storage 指针，
+ * 不触发 save/load。调用者可随后用 param_set_storage() 切换。
+ *
+ * @param index 分区索引 (PARAM_PARTITION_FACTORY=factory, PARAM_PARTITION_USER_MIN~MAX=用户)
+ * @return 驱动指针，存储未初始化或不支持 get_partition 时返回 NULL
+ */
 const param_storage_drv_t *param_get_storage_partition(uint8_t index)
 {
     if (!g_pm.initialized || !g_pm.storage)

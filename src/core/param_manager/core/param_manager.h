@@ -376,9 +376,9 @@ extern "C"
         int (*erase_all)(void *ctx);
         /** 去初始化存储后端 */
         int (*deinit)(void *ctx);
-        /** 读取当前激活分区索引 (0~4, 0xFF=无效, NULL=单分区不支持) */
+        /** 读取当前激活分区索引 (PARAM_PARTITION_FACTORY~PARAM_PARTITION_USER_MAX, NULL=单分区不支持) */
         int (*get_active_partition)(void *ctx, uint8_t *index);
-        /** 写入激活分区索引 (下次启动生效, NULL=不支持分区切换) */
+        /** 写入激活分区索引 — 写入 FAL_BOOT_PART 裸分区，下次启动生效 (NULL=不支持) */
         int (*set_active_partition)(void *ctx, uint8_t index);
         /** 按索引获取指定分区的存储驱动 — 单例语义 (PARAM_PARTITION_FACTORY=factory, 其他参见 PARAM_PARTITION_USER_MIN~MAX) */
         const struct param_storage_drv *(*get_partition)(void *ctx, uint8_t index);
@@ -627,10 +627,10 @@ extern "C"
      * @brief 按分区索引获取存储后端驱动实例
      *
      * 通过当前存储驱动的 get_partition 虚函数获取指定分区的驱动。
-     * 单例语义: 同一分区索引多次调用返回同一实例。
+     * 单例语义 (工厂模式): 同一分区索引多次调用返回同一实例。
      *
-     * @param index 分区索引 (0~4, 具体映射由后端定义)
-     * @return 驱动指针，当前存储不支持分区时返回 NULL
+     * @param index 分区索引 (PARAM_PARTITION_FACTORY=factory, PARAM_PARTITION_USER_MIN~MAX=用户)
+     * @return 驱动指针，当前存储为 NULL 或不支持 get_partition 时返回 NULL
      */
     const param_storage_drv_t *param_get_storage_partition(uint8_t index);
 
@@ -646,9 +646,16 @@ extern "C"
     /** @brief 从持久化存储加载单个参数 */
     int param_load_one(uint32_t param_id);
 
-    /** @brief 删除单个参数的持久化数据 */
+    /**
+     * @brief 删除单个参数的持久化数据
+     * @param param_id 参数 ID
+     * @return PARAM_OK 成功，PARAM_ERR_FLASH_FAIL 删除失败，PARAM_ERR_NOT_FOUND 存储不可用
+     */
     int param_delete_one(uint32_t param_id);
-    /** @brief 擦除全部持久化数据 */
+    /**
+     * @brief 擦除全部持久化数据
+     * @return PARAM_OK 成功，PARAM_ERR_FLASH_FAIL 擦除失败，PARAM_ERR_NOT_FOUND 存储不可用
+     */
     int param_delete_all(void);
 
     /** @brief 重置所有参数为默认值 (default_val) */
