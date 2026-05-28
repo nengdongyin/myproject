@@ -112,6 +112,9 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
 
 #include "flashdb.h"
 
+/** @brief FlashDB 键名缓冲区大小 ("p" + param_id 十进制 + '\0') */
+#define FDB_KEY_MAX 16
+
 /**
  * @brief FlashDB 存储上下文 — 每个物理分区对应一个实例
  *
@@ -249,9 +252,8 @@ static int flashdb_set_active_partition(void *ctx, uint8_t index)
 /**
  * @brief 按索引获取分区驱动 — 单例语义 (运行时分区切换用)
  *
- * 索引映射: 0→param_factory, 1→param_user0, 2→param_user1,
- *           3→param_user2, 4→param_user3, 其他→param_factory。
- * 底层 param_storage_flashdb_get_driver 保证同一分区名返回同一实例。
+ * 通过 g_partition_names[] 查表获取分区名，再委托 param_storage_flashdb_get_driver。
+ * 单例: 同一分区名多次调用返回同一驱动实例。
  * 运行时切换允许目标分区为空 — 由调用者决定是否 param_load_all。
  *
  * @param ctx   存储上下文（本实现忽略）
@@ -286,7 +288,7 @@ static int flashdb_load(void *ctx, uint32_t param_id,
     if (!c || !c->kvdb_ready || !data || len == 0)
         return -1;
 
-    char key[16];
+    char key[FDB_KEY_MAX];
     snprintf(key, sizeof(key), "p%lu", (unsigned long)param_id);
 
     struct fdb_blob blob;
@@ -311,7 +313,7 @@ static int flashdb_save(void *ctx, uint32_t param_id,
     if (!c || !c->kvdb_ready || !data || len == 0)
         return -1;
 
-    char key[16];
+    char key[FDB_KEY_MAX];
     snprintf(key, sizeof(key), "p%lu", (unsigned long)param_id);
 
     struct fdb_blob blob;
@@ -333,7 +335,7 @@ static int flashdb_delete(void *ctx, uint32_t param_id)
     if (!c || !c->kvdb_ready)
         return -1;
 
-    char key[16];
+    char key[FDB_KEY_MAX];
     snprintf(key, sizeof(key), "p%lu", (unsigned long)param_id);
     fdb_err_t result = fdb_kv_del(&c->kvdb, key);
     return (result == FDB_NO_ERR) ? 0 : -1;

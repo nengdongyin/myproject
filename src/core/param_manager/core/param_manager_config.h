@@ -52,6 +52,11 @@ extern "C" {
 #define PARAM_MANAGER_NO_OS 0
 #endif
 
+/* OS 移植互斥检查: 三者最多选一 */
+#if (PARAM_MANAGER_PORT_FREERTOS + PARAM_MANAGER_NO_OS) > 1
+#error "Only one OS port (FREERTOS / NO_OS) may be set to 1"
+#endif
+
 /* ================================================================
  *  容量 / 上限
  * ================================================================ */
@@ -96,7 +101,7 @@ extern "C" {
 
 /** @brief 分区总数 (factory + N 个用户分区)。
  *  修改此值需同步: ① FAL 分区表 ② MAX_INSTANCES (≥COUNT)
- *  ③ flashdb_get_partition 的 names[]  ④ param_storage_flashdb_create 的 user_parts[] */
+ *  ③ g_partition_names[] 条目 ④ 启动流程 doc 中的分区数 */
 #ifndef PARAM_PARTITION_COUNT
 #define PARAM_PARTITION_COUNT 5
 #endif

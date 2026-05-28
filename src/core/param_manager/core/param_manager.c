@@ -515,7 +515,8 @@ int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
         if (g_pm.notify_cb) {
             param_value_t change;
             /* 从 raw data 直接构造 notify 值，避免 param_read
-               对 IP 参数触发硬件重读而返回非写入值 */
+               对 IP 参数触发硬件重读而返回非写入值。
+               memset 清零后只填充有效字节，剩余字段为 0 (best-effort)。 */
             memset(&change, 0, sizeof(change));
             if (len <= sizeof(param_value_t))
                 memcpy(&change, data, len);

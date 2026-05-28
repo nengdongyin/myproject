@@ -146,8 +146,7 @@ extern "C"
      */
     typedef int (*param_write_fn)(uint32_t param_id, param_value_t value);
 
-    /** @brief 向后兼容别名 */
-    typedef param_write_fn param_apply_fn;
+
 
     /**
      * @brief App 模块 flush 回调 — 将缓存的参数批量写入硬件
@@ -369,7 +368,7 @@ extern "C"
         void *ctx; /**< 实例上下文 (传递给所有回调) */
         /** 加载指定参数的数据。返回实际读取字节数，≤0 表示不存在。 */
         int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len);
-        /** 保存指定参数的数据。len==0 且 data==NULL 表示删除该键。 */
+        /** 保存指定参数的数据。删除操作请用 delete 回调，不要用 len==0 隐式删除。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
         /** 删除单个参数的持久化数据 (NULL = 后端不支持) */
         int (*delete)(void *ctx, uint32_t param_id);
