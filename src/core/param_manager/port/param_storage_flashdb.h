@@ -25,10 +25,19 @@ extern "C"
      * @brief 获取 FlashDB 持久化后端驱动（工厂模式，按分区名创建独立实例）
      *
      * 典型用法:
-     *   drv0 = param_storage_flashdb_get_driver("param_user0");
-     *   drv1 = param_storage_flashdb_get_driver("param_bank1");
-     *   param_init(drv0);
-     *   param_set_storage(drv1);
+     * @code
+     *   // 启动时
+     *   const param_storage_drv_t *drv = param_storage_flashdb_create();
+     *   param_init(drv, notify_cb);
+     *
+     *   // 运行时按分区名获取 (不经过 vtable)
+     *   const param_storage_drv_t *bak = param_storage_flashdb_get_driver("param_user0");
+     *
+     *   // 运行时按索引获取 (经过 vtable → 推荐)
+     *   const param_storage_drv_t *part = param_get_storage_partition(1);
+     *   param_set_storage(part);
+     *   param_load_all();
+     * @endcode
      *
      * @param part_name  FAL 分区名 (如 "param_user0")
      * @return 驱动句柄 (静态分配，同一分区名返回同一实例)

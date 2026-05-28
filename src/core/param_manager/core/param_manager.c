@@ -1175,7 +1175,8 @@ int param_delete_one(uint32_t param_id)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->delete)
         return PARAM_ERR_NOT_FOUND;
-    return g_pm.storage->delete(g_pm.storage->ctx, param_id);
+    int ret = g_pm.storage->delete(g_pm.storage->ctx, param_id);
+    return (ret == 0) ? PARAM_OK : PARAM_ERR_FLASH_FAIL;
 }
 
 /** @brief 擦除全部持久化数据 */
@@ -1185,7 +1186,8 @@ int param_delete_all(void)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->erase_all)
         return PARAM_ERR_NOT_FOUND;
-    return g_pm.storage->erase_all(g_pm.storage->ctx);
+    int ret = g_pm.storage->erase_all(g_pm.storage->ctx);
+    return (ret == 0) ? PARAM_OK : PARAM_ERR_FLASH_FAIL;
 }
 
 /* ================================================================

@@ -90,6 +90,26 @@ extern "C" {
 #define MAX_INSTANCES 6
 #endif
 
+/* ================================================================
+ *  参数分区
+ * ================================================================ */
+
+/** @brief 分区总数 (factory + N 个用户分区)。
+ *  修改此值需同步: ① FAL 分区表 ② MAX_INSTANCES (≥COUNT)
+ *  ③ flashdb_get_partition 的 names[]  ④ param_storage_flashdb_create 的 user_parts[] */
+#ifndef PARAM_PARTITION_COUNT
+#define PARAM_PARTITION_COUNT 5
+#endif
+
+/** @brief factory 分区索引 (出厂默认，固定为 0) */
+#define PARAM_PARTITION_FACTORY 0
+
+/** @brief 用户分区索引起始 */
+#define PARAM_PARTITION_USER_MIN 1
+
+/** @brief 用户分区索引上限 */
+#define PARAM_PARTITION_USER_MAX (PARAM_PARTITION_COUNT - 1)
+
 #ifdef __cplusplus
 }
 #endif

@@ -2,7 +2,9 @@
 #include "app_param_manager.h"
 #include "module_ids.h"
 
-PARAM_UINT(g_boot_index, MAKE_PARAM_ID(MODULE_SYS, 0x00), 0, 4, 0, 4);
+PARAM_UINT(g_boot_index, MAKE_PARAM_ID(MODULE_SYS, 0x00),
+           PARAM_PARTITION_FACTORY, PARAM_PARTITION_USER_MAX,
+           PARAM_PARTITION_FACTORY, PARAM_PARTITION_FACTORY);
 PARAM_EXEC(g_cmd_switch, MAKE_PARAM_ID(MODULE_SYS, 0x01));
 
 PARAM_TABLE(sys_params, &g_boot_index.base, &g_cmd_switch.base);
@@ -33,7 +35,7 @@ static int sys_exec_cb(void *ctx, uint32_t param_id, param_value_t arg)
 static int sys_mod_init(void *ctx)
 {
     (void)ctx;
-    uint8_t idx = 4;
+    uint8_t idx = PARAM_PARTITION_FACTORY;
     param_storage_get_active_partition(&idx);
     param_write_cache(MAKE_PARAM_ID(MODULE_SYS, 0x00), (param_value_t){.u32 = idx});
     return PARAM_OK;

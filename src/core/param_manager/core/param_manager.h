@@ -381,7 +381,7 @@ extern "C"
         int (*get_active_partition)(void *ctx, uint8_t *index);
         /** 写入激活分区索引 (下次启动生效, NULL=不支持分区切换) */
         int (*set_active_partition)(void *ctx, uint8_t index);
-        /** 按索引获取指定分区的存储驱动 — 单例语义: 不存在则创建, 存在则返回已有实例 (NULL=不支持) */
+        /** 按索引获取指定分区的存储驱动 — 单例语义 (PARAM_PARTITION_FACTORY=factory, 其他参见 PARAM_PARTITION_USER_MIN~MAX) */
         const struct param_storage_drv *(*get_partition)(void *ctx, uint8_t index);
     } param_storage_drv_t;
 
