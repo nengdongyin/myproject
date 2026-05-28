@@ -201,17 +201,18 @@ static int flashdb_set_active_partition(void *ctx, uint8_t index)
 }
 
 /**
- * @brief 按索引创建分区驱动（用于运行时分区切换）
+ * @brief 按索引获取分区驱动 — 单例语义 (运行时分区切换用)
  *
  * 索引映射: 0→param_user0, 1→param_user1, 2→param_user2,
  *           3→param_user3, 其他→param_factory。
- * 若目标分区为空则返回 NULL（调用者应回退）。
+ * 底层 param_storage_flashdb_get_driver 保证同一分区名返回同一实例。
+ * 运行时切换允许目标分区为空 — 由调用者决定是否 param_load_all。
  *
  * @param ctx   存储上下文（本实现忽略）
  * @param index 分区索引
- * @return 驱动指针，分区为空时返回 NULL
+ * @return 驱动指针，池耗尽时返回 NULL
  */
-static const param_storage_drv_t *flashdb_create_partition(void *ctx, uint8_t index)
+static const param_storage_drv_t *flashdb_get_partition(void *ctx, uint8_t index)
 {
     (void)ctx;
 
@@ -223,15 +224,7 @@ static const param_storage_drv_t *flashdb_create_partition(void *ctx, uint8_t in
         "param_factory",
     };
     const char *name = (index < 5) ? names[index] : "param_factory";
-    const param_storage_drv_t *drv = param_storage_flashdb_get_driver(name);
-    if (!drv)
-        return NULL;
-    if (kvdb_is_empty((flashdb_ctx_t *)drv->ctx))
-    {
-        drv->deinit(drv->ctx);
-        return NULL;
-    }
-    return drv;
+    return param_storage_flashdb_get_driver(name);
 }
 
 /**
@@ -422,7 +415,7 @@ const param_storage_drv_t *param_storage_flashdb_create(void)
  *   2. 创建新实例: 若无匹配，分配第一个空闲槽位 (used==false)。
  *      初始化 flashdb_ctx_t 结构体，填充所有 7 个存储驱动回调:
  *        load / save / delete / erase_all / deinit /
- *        get_active_partition / set_active_partition / create_partition
+ *        get_active_partition / set_active_partition / get_partition
  *      设置 used=true，惰性初始化 FAL，调用 flashdb_init_kvdb。
  *
  *   3. 池耗尽: 所有 MAX_INSTANCES 个槽位均已使用时返回 NULL。
@@ -474,7 +467,7 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
             c->drv.deinit = flashdb_deinit;
             c->drv.get_active_partition = flashdb_get_active_partition;
             c->drv.set_active_partition = flashdb_set_active_partition;
-            c->drv.create_partition = flashdb_create_partition;
+            c->drv.get_partition = flashdb_get_partition;
             c->used = true;
 
             /* 惰性 FAL 初始化（全局仅一次） */

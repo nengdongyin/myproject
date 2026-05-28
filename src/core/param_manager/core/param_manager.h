@@ -381,8 +381,8 @@ extern "C"
         int (*get_active_partition)(void *ctx, uint8_t *index);
         /** 写入激活分区索引 (下次启动生效, NULL=不支持分区切换) */
         int (*set_active_partition)(void *ctx, uint8_t index);
-        /** 按索引创建指定分区的存储驱动 (NULL=不支持) */
-        const struct param_storage_drv *(*create_partition)(void *ctx, uint8_t index);
+        /** 按索引获取指定分区的存储驱动 — 单例语义: 不存在则创建, 存在则返回已有实例 (NULL=不支持) */
+        const struct param_storage_drv *(*get_partition)(void *ctx, uint8_t index);
     } param_storage_drv_t;
 
     /**
@@ -623,8 +623,17 @@ extern "C"
     int param_storage_get_active_partition(uint8_t *index);
     /** @brief 设置存储后端的激活分区索引 (下次启动生效) */
     int param_storage_set_active_partition(uint8_t index);
-    /** @brief 运行时切换存储后端，释放旧存储，初始化新存储并加载所有参数 */
-    int param_reload_storage(const param_storage_drv_t *new_storage);
+
+    /**
+     * @brief 按分区索引获取存储后端驱动实例
+     *
+     * 通过当前存储驱动的 get_partition 虚函数获取指定分区的驱动。
+     * 单例语义: 同一分区索引多次调用返回同一实例。
+     *
+     * @param index 分区索引 (0~4, 具体映射由后端定义)
+     * @return 驱动指针，当前存储不支持分区时返回 NULL
+     */
+    const param_storage_drv_t *param_get_storage_partition(uint8_t index);
 
     /**
      * @brief 从持久化存储加载所有参数
@@ -637,6 +646,11 @@ extern "C"
     int param_load_all(void);
     /** @brief 从持久化存储加载单个参数 */
     int param_load_one(uint32_t param_id);
+
+    /** @brief 删除单个参数的持久化数据 */
+    int param_delete_one(uint32_t param_id);
+    /** @brief 擦除全部持久化数据 */
+    int param_delete_all(void);
 
     /** @brief 重置所有参数为默认值 (default_val) */
     int param_reset_all(void);

@@ -967,18 +967,14 @@ int param_storage_set_active_partition(uint8_t index)
         return PARAM_ERR_NOT_FOUND;
     return g_pm.storage->set_active_partition(g_pm.storage->ctx, index);
 }
-
-int param_reload_storage(const param_storage_drv_t *new_storage)
+/** @brief 按分区索引获取存储后端驱动实例 */
+const param_storage_drv_t *param_get_storage_partition(uint8_t index)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
-
-    if (g_pm.storage && g_pm.storage->deinit)
-        g_pm.storage->deinit(g_pm.storage->ctx);
-
-    g_pm.storage = new_storage;
-
-    return param_load_all();
+    if (!g_pm.initialized || !g_pm.storage)
+        return NULL;
+    if (!g_pm.storage->get_partition)
+        return NULL;
+    return g_pm.storage->get_partition(g_pm.storage->ctx, index);
 }
 
 /* ================================================================
@@ -1170,6 +1166,26 @@ int param_load_one(uint32_t param_id)
         ret = e->vtable->write(e, *entry_cache(e));
 
     return ret;
+}
+
+/** @brief 删除单个参数的持久化数据 */
+int param_delete_one(uint32_t param_id)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!g_pm.storage || !g_pm.storage->delete)
+        return PARAM_ERR_NOT_FOUND;
+    return g_pm.storage->delete(g_pm.storage->ctx, param_id);
+}
+
+/** @brief 擦除全部持久化数据 */
+int param_delete_all(void)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!g_pm.storage || !g_pm.storage->erase_all)
+        return PARAM_ERR_NOT_FOUND;
+    return g_pm.storage->erase_all(g_pm.storage->ctx);
 }
 
 /* ================================================================

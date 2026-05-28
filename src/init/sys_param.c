@@ -1,5 +1,4 @@
 #include "param_manager.h"
-#include "param_manager_internal.h"
 #include "app_param_manager.h"
 #include "module_ids.h"
 
@@ -21,12 +20,11 @@ static int sys_exec_cb(void *ctx, uint32_t param_id, param_value_t arg)
     if (param_id == MAKE_PARAM_ID(MODULE_SYS, 0x01))
     {
         uint8_t idx = *(uint8_t *)arg.ptr;
-        const param_storage_drv_t *drv = param_get_storage();
-        const param_storage_drv_t *new_drv = drv->create_partition(drv->ctx, idx);
+        const param_storage_drv_t *new_drv = param_get_storage_partition(idx);
         if (!new_drv)
-            return PARAM_OK;
-        param_save_all();
-        param_reload_storage(new_drv);
+            return PARAM_ERR_NOT_FOUND;
+        param_set_storage(new_drv);
+        param_load_all();
         return PARAM_OK;
     }
     return PARAM_ERR_NOT_FOUND;
@@ -37,12 +35,7 @@ static int sys_mod_init(void *ctx)
     (void)ctx;
     uint8_t idx = 4;
     param_storage_get_active_partition(&idx);
-    param_entry_t *e = param_entry_find(MAKE_PARAM_ID(MODULE_SYS, 0x00));
-    if (e)
-    {
-        param_value_t v = {.u32 = idx};
-        *entry_cache_ptr(e) = v;
-    }
+    param_write_cache(MAKE_PARAM_ID(MODULE_SYS, 0x00), (param_value_t){.u32 = idx});
     return PARAM_OK;
 }
 
