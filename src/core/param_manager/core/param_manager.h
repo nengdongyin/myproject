@@ -434,7 +434,14 @@ extern "C"
     /**
      * @defgroup public_api 应用层 API — 用户代码直接调用
      * @{
+     *
+     * 分组顺序: 生命周期 → 存储后端管理 → 写入 → 读取 → exec →
+     *           flush → 持久化CRUD → 重置 → 统计/遍历/工具
      */
+
+    /* ================================================================
+     *  生命周期
+     * ================================================================ */
 
     /**
      * @brief 初始化参数管理框架
@@ -452,16 +459,39 @@ extern "C"
      */
     void param_deinit(void);
 
+    /* ================================================================
+     *  存储后端管理
+     * ================================================================ */
+
     /**
-     * @brief 运行时替换持久化后端驱动
+     * @brief 运行时替换持久化后端驱动 — 纯指针替换
      *
-     * 仅替换内部指针，不触发 deinit/init。
-     * 替换后后续的 param_save_all() / param_load_all() 等持久化操作
-     * 全部走新驱动。
+     * 仅替换 g_pm.storage 指针，不触发旧驱动的 deinit，不触发 save/load。
+     * 旧驱动在替换后仍然有效，可保存指针并在之后切回。
      *
      * @param storage 新的存储后端驱动 (可为 NULL 停用持久化)
      */
     void param_set_storage(const param_storage_drv_t *storage);
+
+    /**
+     * @brief 按分区索引获取存储后端驱动实例
+     *
+     * 通过当前存储驱动的 get_partition 虚函数获取指定分区的驱动。
+     * 单例语义 (工厂模式): 同一分区索引多次调用返回同一实例。
+     *
+     * @param index 分区索引 (PARAM_PARTITION_FACTORY=factory, PARAM_PARTITION_USER_MIN~MAX=用户)
+     * @return 驱动指针，当前存储为 NULL 或不支持 get_partition 时返回 NULL
+     */
+    const param_storage_drv_t *param_get_storage_partition(uint8_t index);
+
+    /** @brief 获取当前存储后端的激活分区索引 */
+    int param_storage_get_active_partition(uint8_t *index);
+    /** @brief 设置存储后端的激活分区索引 (下次启动生效) */
+    int param_storage_set_active_partition(uint8_t index);
+
+    /* ================================================================
+     *  参数写入
+     * ================================================================ */
 
     /**
      * @brief 写入参数 (缓存模式，不立即刷硬件)
@@ -510,6 +540,18 @@ extern "C"
      */
     int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len);
 
+    /* ================================================================
+     *  参数读取
+     * ================================================================ */
+
+    /**
+     * @brief 读取参数当前缓存值
+     * @param param_id 参数 ID
+     * @param value    [out] 接收值
+     * @return PARAM_OK 成功，或错误码
+     */
+    int param_read(uint32_t param_id, param_value_t *value);
+
     /**
      * @brief 原始字节流读取参数
      *
@@ -522,14 +564,6 @@ extern "C"
      * @return PARAM_OK 成功, PARAM_ERR_INVALID_ID 参数不存在
      */
     int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len);
-
-    /**
-     * @brief 读取参数当前缓存值
-     * @param param_id 参数 ID
-     * @param value    [out] 接收值
-     * @return PARAM_OK 成功，或错误码
-     */
-    int param_read(uint32_t param_id, param_value_t *value);
 
     /**
      * @name 类型化读写快捷函数
@@ -570,15 +604,9 @@ extern "C"
 
     /** @} */
 
-    /**
-     * @brief 获取参数数据大小 (字节数)
-     *
-     * - UINT/INT/FLOAT/BOOL/ENUM/EXEC → sizeof(param_value_t) (平台相关: 32-bit 4B, 64-bit 8B)
-     * - BLOB → blob_size
-     * - STRING → max_len + 1 (含结尾 '\0')
-     * - 未注册 → 0
-     */
-    uint16_t param_get_size(uint32_t param_id);
+    /* ================================================================
+     *  exec 命令执行
+     * ================================================================ */
 
     /**
      * @brief 执行模块命令
@@ -595,6 +623,10 @@ extern "C"
      * @return 回调返回值，PARAM_ERR_NOT_FOUND 表示未注册或模块无 exec
      */
     int param_exec(uint32_t cmd_id, void *user_arg);
+
+    /* ================================================================
+     *  硬件刷新
+     * ================================================================ */
 
     /**
      * @brief 将所有模块的 dirty 参数刷入硬件
@@ -613,26 +645,14 @@ extern "C"
      */
     int param_check_flush_integrity(void);
 
+    /* ================================================================
+     *  持久化 CRUD
+     * ================================================================ */
+
     /** @brief 保存所有参数到持久化存储 (仅 PARAM_FLAG_PERSIST 标记的参数) */
     int param_save_all(void);
     /** @brief 保存单个参数到持久化存储 */
     int param_save_one(uint32_t param_id);
-
-    /** @brief 获取当前存储后端的激活分区索引 */
-    int param_storage_get_active_partition(uint8_t *index);
-    /** @brief 设置存储后端的激活分区索引 (下次启动生效) */
-    int param_storage_set_active_partition(uint8_t index);
-
-    /**
-     * @brief 按分区索引获取存储后端驱动实例
-     *
-     * 通过当前存储驱动的 get_partition 虚函数获取指定分区的驱动。
-     * 单例语义 (工厂模式): 同一分区索引多次调用返回同一实例。
-     *
-     * @param index 分区索引 (PARAM_PARTITION_FACTORY=factory, PARAM_PARTITION_USER_MIN~MAX=用户)
-     * @return 驱动指针，当前存储为 NULL 或不支持 get_partition 时返回 NULL
-     */
-    const param_storage_drv_t *param_get_storage_partition(uint8_t index);
 
     /**
      * @brief 从持久化存储加载所有参数
@@ -658,15 +678,33 @@ extern "C"
      */
     int param_delete_all(void);
 
+    /* ================================================================
+     *  重置
+     * ================================================================ */
+
     /** @brief 重置所有参数为默认值 (default_val) */
     int param_reset_all(void);
     /** @brief 重置指定参数为默认值 */
     int param_reset_one(uint32_t param_id);
 
+    /* ================================================================
+     *  统计 / 遍历 / 工具
+     * ================================================================ */
+
     /** @brief 获取全局统计信息快照 */
     void param_get_stats(param_stats_t *stats);
     /** @brief 清零统计计数器 */
     void param_clear_stats(void);
+
+    /**
+     * @brief 获取参数数据大小 (字节数)
+     *
+     * - UINT/INT/FLOAT/BOOL/ENUM/EXEC → sizeof(param_value_t) (平台相关: 32-bit 4B, 64-bit 8B)
+     * - BLOB → blob_size
+     * - STRING → max_len + 1 (含结尾 '\0')
+     * - 未注册 → 0
+     */
+    uint16_t param_get_size(uint32_t param_id);
 
     /**
      * @brief 参数遍历回调
