@@ -51,7 +51,7 @@ typedef enum {
 
 /* 相机控制 (ISC_CID_CAMERA_BASE + N) */
 #define ISC_CID_EXPOSURE           (ISC_CID_CAMERA_BASE + 1) /**< 曝光时间 ns (INTEGER)   */
-#define ISC_CID_ANALOG_GAIN        (ISC_CID_CAMERA_BASE + 2) /**< 模拟增益 × (FLOAT)      */
+#define ISC_CID_ANALOG_GAIN        (ISC_CID_CAMERA_BASE + 2) /**< 模拟增益 (INTEGER, 驱动原生)   */
 #define ISC_CID_DIGITAL_GAIN       (ISC_CID_CAMERA_BASE + 3) /**< 数字增益 × (FLOAT)      */
 #define ISC_CID_EXPOSURE_AUTO      (ISC_CID_CAMERA_BASE + 4) /**< 自动曝光模式 (ENUM)     */
 #define ISC_CID_GAIN_AUTO          (ISC_CID_CAMERA_BASE + 5) /**< 自动增益模式 (ENUM)     */

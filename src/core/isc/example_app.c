@@ -1,11 +1,12 @@
 /**
  * @file    example_app.c
- * @brief   ISC 应用层使用示例
+ * @brief   ISC 应用层使用示例 — Sony IMX296 全局快门传感器
  *
  * 演示完整生命周期: isc_init → isc_open → 配置格式/控制 → 流启停 → isc_close → isc_deinit.
- * 假设平台: FPGA 软核, I2C 总线控制 Sony IMX477, FPGA 通过 AXI-Lite 寄存器同步.
+ * 目标传感器: Sony IMX296 (1456×1088, 全局快门, Bayer BGGR, 10-bit)
+ * 假设平台: FPGA 软核, I2C 总线控制, FPGA 通过 AXI-Lite 寄存器同步.
  *
- * 编译: 需链接 isc_core.c 和 isc_sensor_sony.c.
+ * 编译: 需链接 isc_core.c 和 isc_sensor_imx296.c.
  */
 
 #include <stdio.h>
@@ -126,19 +127,15 @@ static isc_fpga_ops_t fpga_ops = {
  * 3. 传感器驱动注册表
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* 声明外部传感器驱动实例 (定义在 isc_sensor_xxx.c 中) */
-extern const isc_sensor_ops_t isc_sensor_sony;
-extern const isc_sensor_ops_t isc_sensor_gsense;
-extern const isc_sensor_ops_t isc_sensor_smartsens;
+/* 声明外部传感器驱动实例 (定义在 isc_sensor_imx296.c 中) */
+extern const isc_sensor_ops_t isc_sensor_imx296;
 
 static const isc_sensor_ops_t *sensors[] = {
-    &isc_sensor_sony,
-    &isc_sensor_gsense,
-    &isc_sensor_smartsens,
+    &isc_sensor_imx296,
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
- * 4. 主流程
+ * 4. 主流程 — IMX296 完整演示
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 void app_sensor_demo(void)
@@ -158,8 +155,8 @@ void app_sensor_demo(void)
         return;
     }
 
-    /* ── 4.2 打开传感器 (显式指定型号) ── */
-    rc = isc_open("sony_imx477", &dev);
+    /* ── 4.2 打开传感器 (IMX296 显式指定型号) ── */
+    rc = isc_open("sony_imx296", &dev);
     if (rc != ISC_OK) {
         printf("isc_open 失败: %d\n", rc);
         goto cleanup;
@@ -170,8 +167,11 @@ void app_sensor_demo(void)
     if (rc != ISC_OK) goto cleanup;
 
     printf("传感器: %s %s\n", cap.vendor, cap.model);
-    printf("支持功能: 0x%08X\n", cap.capabilities);
-    printf("支持格式数: %u\n", cap.num_formats);
+    printf("支持功能: 0x%08X", cap.capabilities);
+    if (cap.capabilities & ISC_CAP_TIMING_QUERY)     printf(" TIMING");
+    if (cap.capabilities & ISC_CAP_ROI)              printf(" ROI");
+    if (cap.capabilities & ISC_CAP_BINNING)          printf(" BINNING");
+    printf("\n支持格式数: %u\n", cap.num_formats);
 
     /* ── 4.4 枚举并打印所有支持格式 ── */
     printf("\n支持格式:\n");
@@ -190,15 +190,16 @@ void app_sensor_demo(void)
     }
 
     /* ── 4.5 试探格式 (TRY_FMT — 不扰动硬件) ── */
+    /* IMX296: 像素阵列 1456×1088, 仅 Bayer BGGR 10-bit, binning 仅全阵列可用 */
     memset(&fmt, 0, sizeof(fmt));
-    fmt.pixel_format   = ISC_PIX_FMT_SRGGB10;
-    fmt.width          = 960;
-    fmt.height         = 540;
-    fmt.crop_width     = 1920;
-    fmt.crop_height    = 1080;
-    fmt.crop_left      = (4056 - 1920) / 2;
-    fmt.crop_top       = (3040 - 1080) / 2;
-    fmt.reduction      = ISC_REDUCTION_BIN_2;
+    fmt.pixel_format   = ISC_PIX_FMT_SBGGR10;
+    fmt.width          = 1456;
+    fmt.height         = 1088;
+    fmt.crop_width     = 1456;
+    fmt.crop_height    = 1088;
+    fmt.crop_left      = 0;
+    fmt.crop_top       = 0;
+    fmt.reduction      = ISC_REDUCTION_NONE;       /* IMX296: ROI 时 binning 自动禁用 */
     fmt.frame_rate_num = 60;
     fmt.frame_rate_den = 1;
     fmt.bit_depth      = 10;
@@ -219,22 +220,32 @@ void app_sensor_demo(void)
     /* ── 4.7 配置控制项 ── */
     isc_ctrl_value_t val;
 
-    /* 曝光: 15ms = 15,000,000 ns */
+    /* 曝光: 15ms = 15,000,000 ns (IMX296 全局快门, SHS1 反向模型) */
     val.i64 = 15000000;
     rc = isc_set_ctrl(dev, ISC_CID_EXPOSURE, val);
-    if (rc != ISC_OK) goto cleanup;
+    if (rc != ISC_OK) { printf("设置曝光失败: %d\n", rc); goto cleanup; }
 
-    /* 模拟增益: 1.5× */
-    val.f = 1.5f;
+    /* 模拟增益: 码值 120 (≈ 1.5× @ 0.1dB/step, 公式 10^(code/200)) */
+    val.i64 = 120;
     rc = isc_set_ctrl(dev, ISC_CID_ANALOG_GAIN, val);
+    if (rc != ISC_OK) { printf("设置增益失败: %d\n", rc); goto cleanup; }
+
+    /* 帧率: 30 fps */
+    val.f = 30.0f;
+    rc = isc_set_ctrl(dev, ISC_CID_FRAME_RATE, val);
+    if (rc != ISC_OK) { printf("设置帧率失败: %d\n", rc); goto cleanup; }
+
+    /* 水平翻转 */
+    val.b = 1;
+    rc = isc_set_ctrl(dev, ISC_CID_HFLIP, val);
     if (rc != ISC_OK) goto cleanup;
 
-    /* 设置自动曝光模式——片内 AEC 引擎 */
-    val.i64 = ISC_EXPOSURE_AUTO_CONTINUOUS;
-    rc = isc_set_ctrl(dev, ISC_CID_EXPOSURE_AUTO, val);
-    if (rc != ISC_OK) goto cleanup;
+    /* 黑电平微调 */
+    val.i64 = 60;
+    rc = isc_set_ctrl(dev, ISC_CID_BLACK_LEVEL, val);
+    if (rc != ISC_OK) { printf("设置黑电平失败: %d\n", rc); goto cleanup; }
 
-    /* ── 4.8 查询并打印全部控制项 (使用 isc_query_next_ctrl) ── */
+    /* ── 4.8 查询并打印全部控制项 ── */
     printf("\n控制项:\n");
     isc_ctrl_desc_t cd;
     while ((rc = isc_query_next_ctrl(dev, &cd)) == ISC_OK) {
@@ -273,34 +284,46 @@ void app_sensor_demo(void)
         printf("  bit_depth:      %u\n", timing.bit_depth);
     }
 
-    /* ── 4.10 启动/停止数据流 ── */
+    /* ── 4.10 查询传感器温度 ── */
+    rc = isc_get_ctrl(dev, ISC_CID_TEMPERATURE, &val);
+    if (rc == ISC_OK) {
+        printf("\n传感器结温: %.1f °C\n", (double)val.f);
+    }
+
+    /* ── 4.11 启动/停止数据流 ── */
     rc = isc_stream_on(dev);
     if (rc != ISC_OK) goto cleanup;
 
-    printf("\n传感器正在输出 LVDS 数据...\n");
+    printf("\n传感器正在输出 MIPI 数据...\n");
 
-    /* 这里 FPGA 逻辑在进行高速 LVDS→ISP→输出处理, CPU 完全空闲 */
+    /* 这里 FPGA 逻辑在进行高速 MIPI→ISP→输出处理, CPU 完全空闲 */
+    /* 全局快门传感器: 流中仍可调节曝光和增益                          */
+
+    /* 流中动态调曝光: 10ms */
+    val.i64 = 10000000;
+    rc = isc_set_ctrl(dev, ISC_CID_EXPOSURE, val);
+    if (rc != ISC_OK) { printf("流中调曝光失败: %d\n", rc); }
+
+    /* 流中动态调增益: 码值 240 (≈ 2.0× @ 0.1dB/step) */
+    val.i64 = 240;
+    rc = isc_set_ctrl(dev, ISC_CID_ANALOG_GAIN, val);
+    if (rc != ISC_OK) { printf("流中调增益失败: %d\n", rc); }
 
     rc = isc_stream_off(dev);
     if (rc != ISC_OK) goto cleanup;
 
-    /* ── 4.11 批量控制示例 ──
-     * (实际工程中常用于"一次性应用曝光+增益+帧率", 减少 I2C 事务) ── */
+    /* ── 4.12 批量控制示例 ── */
     isc_ext_ctrls_t batch = { .count = 3 };
-    batch.items[0].cid    = ISC_CID_EXPOSURE;
+    batch.items[0].cid       = ISC_CID_EXPOSURE;
     batch.items[0].value.i64 = 10000000;
-    batch.items[1].cid    = ISC_CID_ANALOG_GAIN;
-    batch.items[1].value.f = 2.0f;
-    batch.items[2].cid    = ISC_CID_FRAME_RATE;
-    batch.items[2].value.f = 30.0f;
+    batch.items[1].cid       = ISC_CID_ANALOG_GAIN;
+    batch.items[1].value.i64 = 240;
+    batch.items[2].cid       = ISC_CID_FRAME_RATE;
+    batch.items[2].value.f   = 30.0f;
     rc = isc_set_ext_ctrls(dev, &batch);
     if (rc != ISC_OK) {
         printf("批量设置失败: error_idx=%u\n", batch.error_idx);
     }
-
-    /* ── 4.12 传感器专属操作 ── */
-    /* 例: Sony 的 DOL-HDR 配置 (厂商扩展) */
-    /* isc_sensor_ioctl(dev, SONY_IOCTL_DOL_HDR_CFG, &hdr_cfg); */
 
     /* ── 4.13 关闭 ── */
 cleanup:
