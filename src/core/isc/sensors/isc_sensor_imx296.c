@@ -1057,6 +1057,69 @@ static int imx296_query_timing(isc_dev_t *dev, isc_timing_t *timing)
     return err;
 }
 
+/**
+ * @brief 试探指定格式下的预期物理时序 (无副作用)
+ *
+ * 与 isc_try_fmt 配对——先 try_fmt 确认格式合法, 再 try_timing
+ * 获取预期时序, 验证 FPGA 流水线/输出带宽约束, 最后一次性 set_fmt 提交。
+ *
+ * 计算基于 HMAX=1100 (固定) 和 INCK=74.25 MHz (固定):
+ *   - line_period   = HMAX / INCK ≈ 14.8 µs
+ *   - frame_length  = INCK / (HMAX × fps) = VMAX
+ *   - exposure_max  = VMAX − readout_lines
+ *   - readout_lines = crop_height (窗口高度决定读出跨度)
+ */
+static int imx296_try_timing(isc_dev_t *dev, const isc_fmt_t *fmt,
+                             isc_timing_t *timing)
+{
+    uint32_t vmax;
+    uint32_t readout;
+
+    (void)dev;
+    memset(timing, 0, sizeof(*timing));
+
+    /* ── 固定参数 ── */
+    timing->pixel_clock_hz   = IMX296_INCK_FREQ_HZ;   /* 74.25 MHz           */
+    timing->line_length_pclk = IMX296_DEFAULT_HMAX;    /* 1100 INCK           */
+    timing->lane_count       = 4;
+    timing->bit_depth        = 10;
+
+    /* ── 读出跨度 = 裁剪窗口高度 ── */
+    readout = (fmt->crop_height > 0) ? fmt->crop_height
+                                     : IMX296_PIXEL_ARRAY_HEIGHT;
+    timing->readout_lines = readout;
+
+    /* ── 帧长度 = INCK / (HMAX × fps) ── */
+    if (fmt->frame_rate_num > 0 && fmt->frame_rate_den > 0) {
+        uint64_t vmax64 = (uint64_t)IMX296_INCK_FREQ_HZ
+                        * (uint64_t)fmt->frame_rate_den;
+        uint64_t div = (uint64_t)IMX296_DEFAULT_HMAX
+                     * (uint64_t)fmt->frame_rate_num;
+        vmax = (div > 0) ? (uint32_t)(vmax64 / div) : 0;
+    } else {
+        /* 默认 ~40 fps */
+        vmax = IMX296_PIXEL_ARRAY_HEIGHT + 30u;
+    }
+    /* VMAX 下限: 至少容纳读出 + 消隐                                        */
+    {
+        uint32_t min_vmax = readout + 30u;
+        if (vmax < min_vmax) vmax = min_vmax;
+        if (vmax > 0xFFFFFFu) vmax = 0xFFFFFFu;
+    }
+    timing->frame_length_lines = vmax;
+
+    /* ── 曝光: 假设最大可用 (VMAX − readout_lines, 保守估计) ── */
+    if (vmax > readout) {
+        timing->exposure_lines     = vmax - readout;
+        timing->exposure_max_lines = vmax - readout;
+    } else {
+        timing->exposure_lines     = 0;
+        timing->exposure_max_lines = 0;
+    }
+
+    return ISC_OK;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * 驱动注册
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -1094,7 +1157,7 @@ const isc_sensor_ops_t isc_sensor_imx296 = {
 
     /* ── 物理状态 ── */
     .query_timing     = imx296_query_timing,
-    .try_timing       = NULL,
+    .try_timing       = imx296_try_timing,
     .query_constraint = NULL,
     .sensor_ioctl     = NULL,
 };

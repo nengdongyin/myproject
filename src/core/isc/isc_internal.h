@@ -52,7 +52,7 @@ struct isc_dev_t {
     /* 回调 */
     isc_on_ctrl_change_t    on_ctrl_change; /**< 控制变更通知 (可选)                 */
     void                   *cb_user_data;   /**< 回调用户数据                        */
-    isc_on_error_t          on_error;       /**< 异常通知 (可选)                     */
+    isc_on_error_t          on_error;       /**< 预留: 异步异常通知 (需硬件中断+轮询线程配合) */
     void                   *err_user_data;  /**< 异常回调用户数据                     */
 };
 
