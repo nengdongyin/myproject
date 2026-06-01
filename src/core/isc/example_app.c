@@ -177,7 +177,7 @@ void app_sensor_demo(void)
     printf("\n支持格式:\n");
     for (uint8_t i = 0; ; i++) {
         rc = isc_enum_fmt(dev, i, &desc);
-        if (rc == ISC_ERR_NO_MORE) break;
+        if (rc == ISC_ENUM_END) break;
         if (rc != ISC_OK) { printf("枚举错误: %d\n", rc); break; }
         printf("  [%u] %s (bayer=%u, sensor=%u×%u, crop_step=%u×%u, "
                "out=%u×%u..%u×%u, max_fps=%u/%u)\n",
@@ -234,11 +234,10 @@ void app_sensor_demo(void)
     rc = isc_set_ctrl(dev, ISC_CID_EXPOSURE_AUTO, val);
     if (rc != ISC_OK) goto cleanup;
 
-    /* ── 4.8 查询并打印全部控制项 ── */
+    /* ── 4.8 查询并打印全部控制项 (使用 isc_query_next_ctrl) ── */
     printf("\n控制项:\n");
     isc_ctrl_desc_t cd;
-    cd.cid = ISC_CTRL_FLAG_NEXT_CTRL;
-    while ((rc = isc_query_ctrl(dev, &cd)) == ISC_OK) {
+    while ((rc = isc_query_next_ctrl(dev, &cd)) == ISC_OK) {
         isc_get_ctrl(dev, cd.cid, &val);
         printf("  [%08X] %-24s", cd.cid, cd.name);
         switch (cd.type) {
@@ -255,7 +254,6 @@ void app_sensor_demo(void)
                    cd.unit ? cd.unit : "");
             break;
         }
-        cd.cid |= ISC_CTRL_FLAG_NEXT_CTRL;
     }
 
     /* ── 4.9 查询物理时序 ── */

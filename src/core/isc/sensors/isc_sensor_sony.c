@@ -122,9 +122,10 @@ static int sony_query_timing(isc_dev_t *dev, isc_timing_t *timing)
 
 /* ──── 驱动注册 ──── */
 const isc_sensor_ops_t isc_sensor_sony = {
-    .model    = "sony_imx477",
-    .vendor   = "Sony",
-    .i2c_addr = 0x1A,
+    .model        = "sony_imx477",
+    .vendor       = "Sony",
+    .i2c_addr     = 0x1A,
+    .capabilities = 0,  /* TODO: 填充 ISC_CAP_* 位掩码 */
 
     .probe      = sony_probe,
     .init       = sony_init,
@@ -145,6 +146,7 @@ const isc_sensor_ops_t isc_sensor_sony = {
     .stream_off = sony_stream_off,
 
     .query_timing     = sony_query_timing,
+    .try_timing       = NULL,
     .query_constraint = NULL,
     .sensor_ioctl     = NULL,
 };

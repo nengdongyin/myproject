@@ -72,7 +72,7 @@ typedef struct isc_port {
 
 /* ──── FPGA 同步/控制接口 ──── */
 
-/* 前置声明 (类型定义在 isc.h 中) */
+/* 前置声明 (类型定义在 isc.h 中, 须与 isc_sensor_ops.h 的 struct tag 一致) */
 typedef struct isc_fmt isc_fmt_t;
 
 /**

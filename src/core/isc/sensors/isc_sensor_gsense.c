@@ -120,22 +120,25 @@ static int gsense_query_timing(isc_dev_t *dev, isc_timing_t *timing)
 }
 
 static int gsense_query_constraint(isc_dev_t *dev, uint32_t type,
-                                   uint32_t index, void *data)
+                                   uint32_t index, void *data,
+                                   uint32_t data_size)
 {
     /**
      * TODO: 若 type==GSENSE_CONSTRAINT_DANGER_ZONE:
+     *   校验 data_size >= sizeof(gsense_danger_zone_t).
      *   根据当前模式计算危险区域位置, 填充 gsense_danger_zone_t.
      *   支持多条 (不同行区域), index 递增.
      */
-    (void)dev; (void)type; (void)index; (void)data;
-    return ISC_ERR_NO_MORE;
+    (void)dev; (void)type; (void)index; (void)data; (void)data_size;
+    return ISC_ENUM_END;
 }
 
 /* ──── 驱动注册 ──── */
 const isc_sensor_ops_t isc_sensor_gsense = {
-    .model    = "gsense_2020",
-    .vendor   = "Gsense",
-    .i2c_addr = 0x30,
+    .model        = "gsense_2020",
+    .vendor       = "Gsense",
+    .i2c_addr     = 0x30,
+    .capabilities = 0,  /* TODO: 填充 ISC_CAP_* 位掩码 */
 
     .probe      = gsense_probe,
     .init       = gsense_init,
@@ -156,6 +159,7 @@ const isc_sensor_ops_t isc_sensor_gsense = {
     .stream_off = gsense_stream_off,
 
     .query_timing     = gsense_query_timing,
+    .try_timing       = NULL,
     .query_constraint = gsense_query_constraint,
     .sensor_ioctl     = NULL,
 };

@@ -12,10 +12,12 @@
 
 /* ──── 设备状态枚举 ──── */
 typedef enum {
-    ISC_STATE_INIT       = 0,   /**< 全局初始化完成, 无活动设备                    */
+    ISC_STATE_FREE       = 0,   /**< 设备槽空闲 (g_devs[] 初始/关闭后状态)         */
     ISC_STATE_OPEN       = 1,   /**< 传感器已识别、可配置                           */
     ISC_STATE_STREAMING  = 2,   /**< 传感器正在输出 LVDS 数据                       */
 } isc_state_t;
+
+#define ISC_STATE_INIT    ISC_STATE_FREE  /**< @deprecated 向后兼容; 用 ISC_STATE_FREE */
 
 /* ──── 控制项缓存 ──── */
 typedef struct isc_ctrl_cache {

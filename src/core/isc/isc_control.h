@@ -20,10 +20,11 @@
 #define ISC_CID_SENSOR_BASE      0x00A20000u  /**< 传感器控制: 黑电平/温度/lane/时钟…  */
 #define ISC_CID_PRIVATE_BASE     0x08000000u  /**< 厂商私有控制起点                    */
 
-/* ──── 控制类枚举 (用于 isc_ctrl_desc_t.ctrl_class) ──── */
-#define ISC_CTRL_CLASS_USER      0x00A00000u
-#define ISC_CTRL_CLASS_CAMERA    0x00A10000u
-#define ISC_CTRL_CLASS_SENSOR    0x00A20000u
+/* ──── 控制类提取 (从 CID 高 16-bit 提取) ──── */
+#define ISC_CID_CLASS(cid)       ((cid) & 0xFFFF0000u)  /**< 从 CID 提取控制类          */
+#define ISC_CTRL_CLASS_USER      0x00A00000u            /**< @deprecated 用 ISC_CID_CLASS(cid) */
+#define ISC_CTRL_CLASS_CAMERA    0x00A10000u            /**< @deprecated 用 ISC_CID_CLASS(cid) */
+#define ISC_CTRL_CLASS_SENSOR    0x00A20000u            /**< @deprecated 用 ISC_CID_CLASS(cid) */
 
 /* ──── 控制类型 ──── */
 typedef enum {
@@ -39,7 +40,8 @@ typedef enum {
 #define ISC_CTRL_FLAG_VOLATILE      (1u << 2)  /**< 值可自行变化, get 须真读寄存器      */
 #define ISC_CTRL_FLAG_INACTIVE      (1u << 3)  /**< 当前模式下不可用                   */
 #define ISC_CTRL_FLAG_STREAMABLE    (1u << 4)  /**< 流中可修改                         */
-#define ISC_CTRL_FLAG_NEXT_CTRL     (1u << 5)  /**< 枚举标记: query_ctrl 返回下一项     */
+/* ──── 查询修饰符 (非控制项属性, 仅用于 isc_query_ctrl 的 desc->cid) ──── */
+#define ISC_CTRL_FLAG_NEXT_CTRL     (1u << 5)  /**< @deprecated 枚举迭代标记; 优先使用 isc_query_next_ctrl() */
 
 /* ──── 标准控制 ID ──── */
 
@@ -76,5 +78,8 @@ typedef enum {
 #define ISC_GAIN_AUTO_MANUAL         0   /**< 手动增益                            */
 #define ISC_GAIN_AUTO_ONCE           1   /**< 单次自动增益                        */
 #define ISC_GAIN_AUTO_CONTINUOUS     2   /**< 连续自动增益                        */
+
+/* ──── 枚举结束哨兵 (替代 ISC_ERR_NO_MORE) ──── */
+#define ISC_ENUM_END               ISC_ERR_NO_MORE  /**< 枚举正常结束 (语义更清晰的别名)     */
 
 #endif /* ISC_CONTROL_H */

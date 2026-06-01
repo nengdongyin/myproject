@@ -5,8 +5,8 @@
  * 对标 Linux V4L2 控制框架 + subdev 模型，实现控制/数据分离。
  * CPU 仅负责 I2C/SPI/AXI 传感器配置，LVDS 像素数据完全由 FPGA 逻辑处理。
  *
- * 依赖方向 (#include 自顶向下):
- *   isc.h → isc_control.h / isc_port.h → isc_sensor_ops.h → isc_config.h
+ * 公共头文件依赖 (扁平 include):
+ *   isc.h 包含 isc_config.h, isc_port.h, isc_control.h, isc_sensor_ops.h
  */
 
 #ifndef ISC_H
@@ -175,7 +175,6 @@ typedef struct isc_ctrl_desc {
     isc_ctrl_value_t  step;                   /**< 步进                                  */
     isc_ctrl_value_t  def;                    /**< 默认值                                */
     uint32_t          flags;                  /**< ISC_CTRL_FLAG_*                      */
-    uint32_t          ctrl_class;             /**< 控制类                                */
 } isc_ctrl_desc_t;
 
 /** @brief 批量控制 */
@@ -236,12 +235,32 @@ int isc_close(isc_dev_t *dev);
 /* ── 能力与格式 ── */
 int isc_query_cap(isc_dev_t *dev, isc_cap_t *cap);
 int isc_enum_fmt(isc_dev_t *dev, uint8_t index, isc_fmt_desc_t *desc);
+/**
+ * @brief 获取当前生效格式 (纯查询, 不写 dev 内部状态)
+ *
+ * 与 isc_set_fmt 配对 — get 读取当前格式, set 提交新格式。
+ * current_fmt 缓存仅由 isc_set_fmt() / isc_open() 更新。
+ */
 int isc_get_fmt(isc_dev_t *dev, isc_fmt_t *fmt);
 int isc_set_fmt(isc_dev_t *dev, isc_fmt_t *fmt);
 int isc_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt);
 
 /* ── 控制框架 ── */
 int isc_query_ctrl(isc_dev_t *dev, isc_ctrl_desc_t *desc);
+
+/**
+ * @brief 枚举下一个有效控制项 (替代 ISC_CTRL_FLAG_NEXT_CTRL)
+ *
+ * 每次调用返回当前枚举位置之后的下一个控制项描述符,
+ * 并推进内部迭代器。枚举穷尽时返回 ISC_ENUM_END。
+ * 直接调用 isc_query_ctrl() 会重置枚举迭代器。
+ *
+ * @param[in]  dev  设备句柄
+ * @param[out] desc 下一控制项描述符
+ * @return ISC_OK / ISC_ENUM_END / ISC_ERR_*
+ */
+int isc_query_next_ctrl(isc_dev_t *dev, isc_ctrl_desc_t *desc);
+
 int isc_query_menu(isc_dev_t *dev, uint32_t cid, uint32_t index, char *name);
 int isc_get_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t *value);
 int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value);
@@ -254,10 +273,43 @@ int isc_stream_off(isc_dev_t *dev);
 
 /* ── 物理状态与约束 ── */
 int isc_query_timing(isc_dev_t *dev, isc_timing_t *timing);
+
+/**
+ * @brief 试探指定格式下的预期物理时序（无副作用）
+ *
+ * 与 isc_try_fmt 配对——先 try_fmt 确认格式合法，再 try_timing
+ * 获取预期时序，验证 FPGA 流水线/输出带宽约束，最后一次性 set_fmt 提交。
+ *
+ * @param[in]  dev     设备句柄
+ * @param[in]  fmt     试探格式（通常来自 isc_try_fmt 的返回值）
+ * @param[out] timing  预期物理时序（ISC 核心计算派生 ns 值）
+ * @return ISC_OK / ISC_ERR_*
+ */
+int isc_try_timing(isc_dev_t *dev, const isc_fmt_t *fmt, isc_timing_t *timing);
+
+/**
+ * @brief 查询传感器约束
+ *
+ * @param[in]  dev             设备句柄
+ * @param[in]  type            约束类型 ID
+ * @param[in]  index           同类型约束索引 (0-based)
+ * @param[out] constraint_data 约束数据缓冲区
+ * @param[in]  data_size       缓冲区字节数 (用于边界校验)
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_query_constraint(isc_dev_t *dev, isc_constraint_type_t type,
-                         uint32_t index, void *constraint_data);
+                         uint32_t index, void *constraint_data,
+                         uint32_t data_size);
 
 /* ── 传感器扩展 ── */
+/**
+ * @brief 传感器专属操作 (最后手段 — 仅用于无法纳入标准 CID 的私有功能)
+ *
+ * @param[in]     dev  设备句柄
+ * @param[in]     cmd  命令码 (FourCC 风格, 厂商定义)
+ * @param[in,out] arg  命令参数 (类型/大小由 cmd 决定, 无框架校验)
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_sensor_ioctl(isc_dev_t *dev, uint32_t cmd, void *arg);
 
 #endif /* ISC_H */

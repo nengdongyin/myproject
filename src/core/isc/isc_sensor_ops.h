@@ -12,13 +12,13 @@
 #include <stdint.h>
 #include "isc_port.h"
 
-/* 前置声明 (类型定义在 isc.h 中) */
-typedef struct isc_dev_t          isc_dev_t;
-typedef struct isc_fmt_t          isc_fmt_t;
-typedef struct isc_fmt_desc_t     isc_fmt_desc_t;
-typedef struct isc_timing_t       isc_timing_t;
-typedef struct isc_ctrl_desc_t    isc_ctrl_desc_t;
-typedef union  isc_ctrl_value     isc_ctrl_value_t;
+/* 前置声明 (完整类型定义在 isc.h 中, struct tag 须与 isc.h 一致) */
+typedef struct isc_dev_t       isc_dev_t;
+typedef struct isc_fmt         isc_fmt_t;
+typedef struct isc_fmt_desc    isc_fmt_desc_t;
+typedef struct isc_timing      isc_timing_t;
+typedef struct isc_ctrl_desc   isc_ctrl_desc_t;
+typedef union  isc_ctrl_value  isc_ctrl_value_t;
 
 /**
  * @brief 传感器驱动操作表
@@ -28,6 +28,7 @@ typedef struct isc_sensor_ops {
     const char *model;              /**< 型号名, 与 isc_open() 的 model 参数匹配  */
     const char *vendor;             /**< 厂商名                                  */
     uint16_t    i2c_addr;           /**< I2C 7-bit 地址 (SPI/AXI 驱动填 0)       */
+    uint32_t    capabilities;       /**< ISC_CAP_* 位掩码 (传感器主动声明)        */
 
     /* ── 生命周期 ── */
     /** @brief 读 CHIP_ID 寄存器确认传感器型号 (必须)
@@ -64,7 +65,10 @@ typedef struct isc_sensor_ops {
     int (*try_fmt)(isc_dev_t *dev, isc_fmt_t *fmt);
 
     /* ── 控制 ── */
-    /** @brief 查询控制项属性 (必须, 至少处理 ISC_CTRL_FLAG_NEXT_CTRL 迭代) */
+    /** @brief 查询控制项属性 (必须)
+     *  @note 不应在驱动层处理 ISC_CTRL_FLAG_NEXT_CTRL — 该位由框架层
+     *        isc_query_ctrl() 拦截处理。驱动仅处理标准 CID 或私有 CID。
+     */
     int (*query_ctrl)(isc_dev_t *dev, isc_ctrl_desc_t *desc);
 
     /** @brief 读取控制值 (必须) */
@@ -93,13 +97,21 @@ typedef struct isc_sensor_ops {
     /** @brief 查询传感器物理时序 (必须) */
     int (*query_timing)(isc_dev_t *dev, isc_timing_t *timing);
 
+    /** @brief 试探指定格式下的预期物理时序 (可选, NULL→核心回退模拟)
+     *  @param[in]  fmt    试探格式
+     *  @param[out] timing 预期物理时序
+     */
+    int (*try_timing)(isc_dev_t *dev, const isc_fmt_t *fmt, isc_timing_t *timing);
+
     /** @brief 查询传感器约束 (可选, NULL 表示无特殊约束)
-     *  @param[in]  type  约束类型 ID (厂商头文件定义)
-     *  @param[in]  index 同类型约束索引 (0-based)
-     *  @param[out] data  约束数据 (类型由 type 决定)
+     *  @param[in]  type      约束类型 ID (厂商头文件定义)
+     *  @param[in]  index     同类型约束索引 (0-based)
+     *  @param[out] data      约束数据 (类型由 type 决定)
+     *  @param[in]  data_size 缓冲区字节数 (由框架传入, 驱动可校验)
      */
     int (*query_constraint)(isc_dev_t *dev, uint32_t type,
-                            uint32_t index, void *data);
+                            uint32_t index, void *data,
+                            uint32_t data_size);
 
     /* ── 扩展 ── */
     /** @brief 传感器专属操作 (可选)
