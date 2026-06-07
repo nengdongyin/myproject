@@ -1,0 +1,49 @@
+# VSC Driver Registry — Single Source of Truth for all Driver_ID assignments
+# CI validates: no duplicate IDs, no duplicate names, no duplicate aliases
+
+drivers:
+  - id: 0x01
+    name: sensor_imx477
+    category: sensor
+    version: "1.0"
+    status: active
+    description: "Sony IMX477 图像传感器"
+
+  - id: 0x03
+    name: crop
+    category: ip
+    version: "1.0"
+    status: active
+    description: "裁剪 / ROI IP 核"
+
+
+
+  - id: 0x04
+    name: binning
+    category: ip
+    version: "1.0"
+    status: active
+    description: "Binning IP 核 (2x2 / 4x4)"
+
+  - id: 0x05
+    name: decoder
+    category: ip
+    version: "1.0"
+    status: active
+    description: "Bayer → RGB 解码器"
+
+  - id: 0x10
+    name: histogram
+    category: analyzer
+    version: "2.0"
+    status: active
+    aliases: ["histogram_v1"]
+    description: "直方图统计 IP (v2: 支持 256-bin, RGB)"
+
+  - id: 0x20
+    name: ae_engine_legacy
+    category: analyzer
+    version: "1.0"
+    status: deprecated
+    replaced_by: "ae_engine"
+    description: "旧版 AE 统计引擎（已废弃，ID 0x20 永不复用）"

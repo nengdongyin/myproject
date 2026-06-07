@@ -1,0 +1,36 @@
+driver: binning
+schema_version: 1
+caps: [BINNING]
+description: "Binning IP 核 (2x2 / 4x4)"
+
+properties:
+  - name: factor_x
+    index: 0x00
+    type: u32
+    flags: [runtime]
+    default: 2
+    min: 1
+    max: 4
+    description: "水平 binning 因子"
+
+  - name: factor_y
+    index: 0x01
+    type: u32
+    flags: [runtime]
+    default: 2
+    min: 1
+    max: 4
+    description: "垂直 binning 因子"
+
+  - name: enable
+    index: 0x02
+    type: bool
+    flags: [runtime, persist]
+    default: true
+    description: "Binning 使能"
+
+transform:
+  type: BINNING
+  params:
+    factor_x: 2
+    factor_y: 2

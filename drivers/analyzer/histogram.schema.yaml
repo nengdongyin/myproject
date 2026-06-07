@@ -1,0 +1,83 @@
+driver: histogram
+schema_version: 2
+caps: [STATISTICS]
+description: "直方图统计 IP (v2: 支持 256-bin, RGB 三通道)"
+
+properties:
+  - name: enable
+    index: 0x00
+    type: bool
+    flags: [runtime, persist]
+    default: false
+    description: "直方图统计使能"
+
+  - name: max_bins
+    index: 0x01
+    type: u32
+    flags: [readonly]
+    default: 256
+    min: 64
+    max: 256
+    description: "最大直方图 bin 数 (硬件能力)"
+
+  - name: active_bins
+    index: 0x02
+    type: u32
+    flags: [runtime]
+    default: 64
+    min: 64
+    max_ref: max_bins
+    description: "当前使用的 bin 数"
+
+  - name: channels
+    index: 0x03
+    type: u32
+    flags: [readonly]
+    default: 0
+    description: "支持的通道模式位掩码 (LUMINANCE=1, RGB=2)"
+
+  - name: active_channels
+    index: 0x04
+    type: enum
+    flags: [runtime]
+    default: 0
+    enum_values: ["LUMINANCE", "RGB"]
+    description: "当前通道模式"
+
+  - name: window.x
+    index: 0x05
+    type: u32
+    flags: [runtime]
+    default: 0
+    min: 0
+    max: 8192
+    description: "统计窗口起始 X"
+
+  - name: window.y
+    index: 0x06
+    type: u32
+    flags: [runtime]
+    default: 0
+    min: 0
+    max: 8192
+    description: "统计窗口起始 Y"
+
+  - name: window.width
+    index: 0x07
+    type: u32
+    flags: [runtime]
+    default: 1920
+    min: 64
+    max: 8192
+    description: "统计窗口宽度"
+
+  - name: window.height
+    index: 0x08
+    type: u32
+    flags: [runtime]
+    default: 1080
+    min: 4
+    max: 8192
+    description: "统计窗口高度"
+
+# ANALYZER — no transform (TAP observer only, doesn't modify pixel stream)

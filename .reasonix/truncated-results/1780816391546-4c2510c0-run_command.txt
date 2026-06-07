@@ -1,0 +1,427 @@
+$ gcc -std=c11 -Wall -Wextra -Werror -pedantic -Isrc/vsc -Isrc/test/core -Isrc/test/core/unity -Isrc/test/vsc src/vsc/vsc_resolver.c src/test/vsc/test_vsc_resolver.c src/test/core/unity/unity.c src/test/core/test_suite.c test_runner_vsc.c -o build/test_vsc3.exe 2>&1
+[exit 1]
+In file included from src/vsc/vsc_resolver.c:11:
+src/vsc/vsc_types.h:157:3: error: 'vsc_fmt_transform_desc_t' redeclared as different kind of symbol
+  157 | } vsc_fmt_transform_desc_t;
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~
+src/vsc/vsc_types.h:127:39: note: previous declaration of 'vsc_fmt_transform_desc_t' with type 'vsc_fmt_transform_desc_t' {aka 'struct vsc_fmt_transform_desc'}
+  127 | typedef struct vsc_fmt_transform_desc vsc_fmt_transform_desc_t;
+      |                                       ^~~~~~~~~~~~~~~~~~~~~~~~
+src/vsc/vsc_types.h:203:5: error: expected specifier-qualifier-list before 'vsc_fmt_transform_desc_t'
+  203 |     vsc_fmt_transform_desc_t  transform_desc;      /* for Phase 1 */
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~
+src/vsc/vsc_resolver.c:96:42: error: type defaults to 'int' in declaration of 'vsc_fmt_transform_desc_t' [-Wimplicit-int]
+   96 | static int feasibility_inverse_one(const vsc_fmt_transform_desc_t *desc,
+      |                                          ^~~~~~~~~~~~~~~~~~~~~~~~
+src/vsc/vsc_resolver.c:96:67: error: expected ';', ',' or ')' before '*' token
+   96 | static int feasibility_inverse_one(const vsc_fmt_transform_desc_t *desc,
+      |                                                                   ^
+src/vsc/vsc_resolver.c: In function 'vsc_resolver_feasibility_check':
+src/vsc/vsc_resolver.c:391:17: error: implicit declaration of function 'feasibility_inverse_one' [-Wimplicit-function-declaration]
+  391 |             if (feasibility_inverse_one(&e->transform_desc, &c) != 0)
+      |                 ^~~~~~~~~~~~~~~~~~~~~~~
+src/vsc/vsc_resolver.c:391:43: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  391 |             if (feasibility_inverse_one(&e->transform_desc, &c) != 0)
+      |                                           ^~
+src/vsc/vsc_resolver.c:420:43: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  420 |             if (feasibility_inverse_one(&e->transform_desc, &c) != 0) {
+      |                                           ^~
+src/vsc/vsc_resolver.c:423:22: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  423 |                 if (e->transform_desc.type == VSC_TRANSFORM_CROP) {
+      |                      ^~
+src/vsc/vsc_resolver.c:424:26: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  424 |                     if (e->transform_desc.params.crop.max_w > best_reachable.width)
+      |                          ^~
+src/vsc/vsc_resolver.c:425:50: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  425 |                         best_reachable.width  = e->transform_desc.params.crop.max_w;
+      |                                                  ^~
+src/vsc/vsc_resolver.c:426:26: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  426 |                     if (e->transform_desc.params.crop.max_h > best_reachable.height)
+      |                          ^~
+src/vsc/vsc_resolver.c:427:50: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  427 |                         best_reachable.height = e->transform_desc.params.crop.max_h;
+      |                                                  ^~
+src/vsc/vsc_resolver.c:464:39: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  464 |             uint32_t smax_w = sensor_e->transform_desc.params.crop.max_w;
+      |                                       ^~
+src/vsc/vsc_resolver.c:465:39: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  465 |             uint32_t smax_h = sensor_e->transform_desc.params.crop.max_h;
+      |                                       ^~
+src/vsc/vsc_resolver.c:466:39: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  466 |             uint32_t smin_w = sensor_e->transform_desc.params.crop.min_w;
+      |                                       ^~
+src/vsc/vsc_resolver.c:467:39: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  467 |             uint32_t smin_h = sensor_e->transform_desc.params.crop.min_h;
+      |                                       ^~
+src/vsc/vsc_resolver.c:479:25: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  479 |             if (sensor_e->transform_desc.type == VSC_TRANSFORM_PIXEL_FMT_CONV &&
+      |                         ^~
+src/vsc/vsc_resolver.c:481:46: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  481 |                 c.required_format != sensor_e->transform_desc.params.pixel_fmt_conv.fmt_in) {
+      |                                              ^~
+src/vsc/vsc_resolver.c:522:43: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  522 |             if (feasibility_inverse_one(&e->transform_desc, &c) != 0) {
+      |                                           ^~
+src/vsc/vsc_resolver.c:531:32: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  531 |             uint32_t smax_w = e->transform_desc.params.crop.max_w;
+      |                                ^~
+src/vsc/vsc_resolver.c:532:32: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  532 |             uint32_t smax_h = e->transform_desc.params.crop.max_h;
+      |                                ^~
+src/vsc/vsc_resolver.c:533:32: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  533 |             uint32_t smin_w = e->transform_desc.params.crop.min_w;
+      |                                ^~
+src/vsc/vsc_resolver.c:534:32: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  534 |             uint32_t smin_h = e->transform_desc.params.crop.min_h;
+      |                                ^~
+src/vsc/vsc_resolver.c: In function 'vsc_resolver_forward_propagate':
+src/vsc/vsc_resolver.c:564:18: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  564 |         memset(&e->prop_state, 0, sizeof(e->prop_state));
+      |                  ^~
+src/vsc/vsc_resolver.c:564:43: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  564 |         memset(&e->prop_state, 0, sizeof(e->prop_state));
+      |                                           ^~
+src/vsc/vsc_resolver.c:565:10: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  565 |         e->prop_state.active  = true;
+      |          ^~
+src/vsc/vsc_resolver.c:566:10: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  566 |         e->prop_state.sink_fmt.pixel_format   = VSC_FMT_INVALID;
+      |          ^~
+src/vsc/vsc_resolver.c:567:10: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  567 |         e->prop_state.source_fmt.pixel_format = VSC_FMT_INVALID;
+      |          ^~
+src/vsc/vsc_resolver.c:576:14: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  576 |         if (e->try_fmt_source) {
+      |              ^~
+src/vsc/vsc_resolver.c:578:14: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  578 |             e->try_fmt_source(e->drv_ctx, intent, &e->prop_state.source_fmt);
+      |              ^~
+src/vsc/vsc_resolver.c:578:32: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  578 |             e->try_fmt_source(e->drv_ctx, intent, &e->prop_state.source_fmt);
+      |                                ^~
+src/vsc/vsc_resolver.c:578:53: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  578 |             e->try_fmt_source(e->drv_ctx, intent, &e->prop_state.source_fmt);
+      |                                                     ^~
+src/vsc/vsc_resolver.c:580:14: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  580 |             e->prop_state.source_fmt = *intent;
+      |              ^~
+src/vsc/vsc_resolver.c:582:10: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  582 |         e->prop_state.visited = true;
+      |          ^~
+src/vsc/vsc_resolver.c:595:35: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  595 |         if (!vsc_fmt_is_valid(&src->prop_state.source_fmt))
+      |                                   ^~
+src/vsc/vsc_resolver.c:598:45: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  598 |         const vsc_mbus_fmt_t *out_fmt = &src->prop_state.source_fmt;
+      |                                             ^~
+src/vsc/vsc_resolver.c:607:24: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  607 |                 if (dst->try_fmt_sink) {
+      |                        ^~
+src/vsc/vsc_resolver.c:608:33: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  608 |                     int rc = dst->try_fmt_sink(dst->drv_ctx, out_fmt,
+      |                                 ^~
+src/vsc/vsc_resolver.c:608:51: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  608 |                     int rc = dst->try_fmt_sink(dst->drv_ctx, out_fmt,
+      |                                                   ^~
+src/vsc/vsc_resolver.c:609:52: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  609 |                                                &dst->prop_state.sink_fmt);
+      |                                                    ^~
+src/vsc/vsc_resolver.c:610:63: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  610 |                     if (rc != VSC_OK || !vsc_fmt_is_valid(&dst->prop_state.sink_fmt)) {
+      |                                                               ^~
+src/vsc/vsc_resolver.c:611:28: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  611 |                         dst->prop_state.active = false;
+      |                            ^~
+src/vsc/vsc_resolver.c:615:24: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  615 |                     dst->prop_state.sink_fmt = *out_fmt;
+      |                        ^~
+src/vsc/vsc_resolver.c:620:28: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  620 |                     if (dst->try_fmt_source) {
+      |                            ^~
+src/vsc/vsc_resolver.c:621:28: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  621 |                         dst->try_fmt_source(dst->drv_ctx,
+      |                            ^~
+src/vsc/vsc_resolver.c:621:48: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  621 |                         dst->try_fmt_source(dst->drv_ctx,
+      |                                                ^~
+src/vsc/vsc_resolver.c:622:49: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  622 |                                             &dst->prop_state.sink_fmt,
+      |                                                 ^~
+src/vsc/vsc_resolver.c:623:49: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  623 |                                             &dst->prop_state.source_fmt);
+      |                                                 ^~
+src/vsc/vsc_resolver.c:625:28: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  625 |                         dst->prop_state.source_fmt = dst->prop_state.sink_fmt;
+      |                            ^~
+src/vsc/vsc_resolver.c:625:57: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  625 |                         dst->prop_state.source_fmt = dst->prop_state.sink_fmt;
+      |                                                         ^~
+src/vsc/vsc_resolver.c:631:24: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  631 |                     dst->prop_state.visited = true;
+      |                        ^~
+src/vsc/vsc_resolver.c:638:24: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  638 |                 if (dst->try_fmt_sink) {
+      |                        ^~
+src/vsc/vsc_resolver.c:639:33: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  639 |                     int rc = dst->try_fmt_sink(dst->drv_ctx, out_fmt,
+      |                                 ^~
+src/vsc/vsc_resolver.c:639:51: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  639 |                     int rc = dst->try_fmt_sink(dst->drv_ctx, out_fmt,
+      |                                                   ^~
+src/vsc/vsc_resolver.c:640:52: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  640 |                                                &dst->prop_state.sink_fmt);
+      |                                                    ^~
+src/vsc/vsc_resolver.c:641:62: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  641 |                     if (rc == VSC_OK && vsc_fmt_is_valid(&dst->prop_state.sink_fmt)) {
+      |                                                              ^~
+src/vsc/vsc_resolver.c:642:28: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  642 |                         dst->prop_state.active = true;
+      |                            ^~
+src/vsc/vsc_resolver.c:644:28: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  644 |                         dst->prop_state.active = false;
+      |                            ^~
+src/vsc/vsc_resolver.c:657:15: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  657 |             !e->prop_state.visited) {
+      |               ^~
+src/vsc/vsc_resolver.c: In function 'infer_reason':
+src/vsc/vsc_resolver.c:686:14: error: 'vsc_entity_t' {aka 'const struct vsc_entity'} has no member named 'transform_desc'
+  686 |     switch (e->transform_desc.type) {
+      |              ^~
+src/vsc/vsc_resolver.c: In function 'vsc_resolver_converge':
+src/vsc/vsc_resolver.c:739:16: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  739 |         if (!ep->prop_state.active || !vsc_fmt_is_valid(&ep->prop_state.sink_fmt))
+      |                ^~
+src/vsc/vsc_resolver.c:739:60: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  739 |         if (!ep->prop_state.active || !vsc_fmt_is_valid(&ep->prop_state.sink_fmt))
+      |                                                            ^~
+src/vsc/vsc_resolver.c:745:31: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  745 |             ef->final_fmt = ep->prop_state.sink_fmt;
+      |                               ^~
+src/vsc/vsc_resolver.c:767:15: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  767 |         if (!e->prop_state.visited) continue;
+      |               ^~
+src/vsc/vsc_resolver.c:770:32: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  770 |         if (vsc_fmt_is_valid(&e->prop_state.source_fmt)) {
+      |                                ^~
+src/vsc/vsc_resolver.c:772:19: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  772 |                 &e->prop_state.sink_fmt, &e->prop_state.source_fmt);
+      |                   ^~
+src/vsc/vsc_resolver.c:772:44: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  772 |                 &e->prop_state.sink_fmt, &e->prop_state.source_fmt);
+      |                                            ^~
+src/vsc/vsc_resolver.c:775:31: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  775 |                             &e->prop_state.sink_fmt,
+      |                               ^~
+src/vsc/vsc_resolver.c:776:31: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  776 |                             &e->prop_state.source_fmt,
+      |                               ^~
+src/vsc/vsc_resolver.c:786:17: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  786 |         if (!tap->prop_state.active) {
+      |                 ^~
+src/vsc/vsc_resolver.c:789:33: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  789 |                             &tap->prop_state.sink_fmt,
+      |                                 ^~
+src/vsc/vsc_resolver.c:790:33: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'prop_state'
+  790 |                             &tap->prop_state.sink_fmt,
+      |                                 ^~
+src/vsc/vsc_resolver.c: In function 'vsc_pipeline_commit_fmt':
+src/vsc/vsc_resolver.c:832:15: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'commit_fmt'
+  832 |         if (!e->commit_fmt) continue;
+      |               ^~
+src/vsc/vsc_resolver.c:834:19: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'commit_fmt'
+  834 |         int rc = e->commit_fmt(e->drv_ctx, final_fmt);
+      |                   ^~
+src/vsc/vsc_resolver.c:834:33: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  834 |         int rc = e->commit_fmt(e->drv_ctx, final_fmt);
+      |                                 ^~
+src/vsc/vsc_resolver.c: In function 'infer_reason':
+src/vsc/vsc_resolver.c:696:1: error: control reaches end of non-void function [-Werror=return-type]
+  696 | }
+      | ^
+src/vsc/vsc_resolver.c: At top level:
+src/vsc/vsc_resolver.c:79:12: error: 'iv_apply_fmt_conv' defined but not used [-Werror=unused-function]
+   79 | static int iv_apply_fmt_conv(vsc_feasibility_constraint_t *c,
+      |            ^~~~~~~~~~~~~~~~~
+src/vsc/vsc_resolver.c:52:12: error: 'iv_apply_crop' defined but not used [-Werror=unused-function]
+   52 | static int iv_apply_crop(vsc_feasibility_constraint_t *c,
+      |            ^~~~~~~~~~~~~
+src/vsc/vsc_resolver.c:29:13: error: 'iv_apply_binning' defined but not used [-Werror=unused-function]
+   29 | static void iv_apply_binning(vsc_feasibility_constraint_t *c,
+      |             ^~~~~~~~~~~~~~~~
+src/vsc/vsc_resolver.c:21:13: error: 'iv_apply_pass_through' defined but not used [-Werror=unused-function]
+   21 | static void iv_apply_pass_through(vsc_feasibility_constraint_t *c)
+      |             ^~~~~~~~~~~~~~~~~~~~~
+cc1.exe: all warnings being treated as errors
+In file included from src/test/vsc/test_vsc_resolver.c:13:
+src/vsc/vsc_types.h:157:3: error: 'vsc_fmt_transform_desc_t' redeclared as different kind of symbol
+  157 | } vsc_fmt_transform_desc_t;
+      |   ^~~~~~~~~~~~~~~~~~~~~~~~
+src/vsc/vsc_types.h:127:39: note: previous declaration of 'vsc_fmt_transform_desc_t' with type 'vsc_fmt_transform_desc_t' {aka 'struct vsc_fmt_transform_desc'}
+  127 | typedef struct vsc_fmt_transform_desc vsc_fmt_transform_desc_t;
+      |                                       ^~~~~~~~~~~~~~~~~~~~~~~~
+src/vsc/vsc_types.h:203:5: error: expected specifier-qualifier-list before 'vsc_fmt_transform_desc_t'
+  203 |     vsc_fmt_transform_desc_t  transform_desc;      /* for Phase 1 */
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~
+src/test/vsc/test_vsc_resolver.c: In function 'build_linear_pass_chain':
+src/test/vsc/test_vsc_resolver.c:218:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  218 |     g_pipe.entities[0].transform_desc.type = VSC_TRANSFORM_CROP;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:219:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  219 |     g_pipe.entities[0].transform_desc.params.crop.max_w = 4056;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:220:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  220 |     g_pipe.entities[0].transform_desc.params.crop.max_h = 3040;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:221:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  221 |     g_pipe.entities[0].transform_desc.params.crop.min_w = 1;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:222:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  222 |     g_pipe.entities[0].transform_desc.params.crop.min_h = 1;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:223:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  223 |     g_pipe.entities[0].try_fmt_source = mock_sensor_source;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:224:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  224 |     g_pipe.entities[0].drv_ctx        = &g_mock_ctx_raw_only;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:229:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  229 |     g_pipe.entities[1].transform_desc.type = VSC_TRANSFORM_PASS_THROUGH;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:230:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  230 |     g_pipe.entities[1].try_fmt_sink   = mock_sink_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:231:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  231 |     g_pipe.entities[1].try_fmt_source = mock_source_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:232:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  232 |     g_pipe.entities[1].drv_ctx        = &g_mock_ctx_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:237:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  237 |     g_pipe.entities[2].transform_desc.type = VSC_TRANSFORM_PASS_THROUGH;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:238:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  238 |     g_pipe.entities[2].try_fmt_sink = mock_sink_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:239:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  239 |     g_pipe.entities[2].drv_ctx      = &g_mock_ctx_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c: In function 'build_full_chain':
+src/test/vsc/test_vsc_resolver.c:261:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  261 |     g_pipe.entities[0].transform_desc.type = VSC_TRANSFORM_CROP;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:262:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  262 |     g_pipe.entities[0].transform_desc.params.crop.max_w = 4056;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:263:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  263 |     g_pipe.entities[0].transform_desc.params.crop.max_h = 3040;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:264:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  264 |     g_pipe.entities[0].transform_desc.params.crop.min_w = 1;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:265:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  265 |     g_pipe.entities[0].transform_desc.params.crop.min_h = 1;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:266:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  266 |     g_pipe.entities[0].try_fmt_source = mock_sensor_source;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:267:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  267 |     g_pipe.entities[0].drv_ctx        = &g_mock_ctx_raw_only;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:272:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  272 |     g_pipe.entities[1].transform_desc.type = VSC_TRANSFORM_BINNING;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:273:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  273 |     g_pipe.entities[1].transform_desc.params.binning.factor_x = 2;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:274:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  274 |     g_pipe.entities[1].transform_desc.params.binning.factor_y = 2;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:275:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  275 |     g_pipe.entities[1].try_fmt_sink   = mock_sink_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:276:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  276 |     g_pipe.entities[1].try_fmt_source = mock_source_binning;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:277:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  277 |     g_pipe.entities[1].drv_ctx        = &g_mock_ctx_bin2x2;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:282:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  282 |     g_pipe.entities[2].transform_desc.type = VSC_TRANSFORM_PIXEL_FMT_CONV;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:283:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  283 |     g_pipe.entities[2].transform_desc.params.pixel_fmt_conv.fmt_in  = VSC_FMT_RAW10;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:284:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  284 |     g_pipe.entities[2].transform_desc.params.pixel_fmt_conv.fmt_out = VSC_FMT_RGB888;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:285:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  285 |     g_pipe.entities[2].try_fmt_sink   = mock_sink_format_filter;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:286:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  286 |     g_pipe.entities[2].try_fmt_source = mock_source_decoder;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:287:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  287 |     g_pipe.entities[2].drv_ctx        = &g_mock_ctx_decoder;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:292:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  292 |     g_pipe.entities[3].transform_desc.type = VSC_TRANSFORM_CROP;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:293:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  293 |     g_pipe.entities[3].transform_desc.params.crop.min_w = 64;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:294:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  294 |     g_pipe.entities[3].transform_desc.params.crop.min_h = 4;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:295:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  295 |     g_pipe.entities[3].transform_desc.params.crop.max_w = 1920;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:296:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  296 |     g_pipe.entities[3].transform_desc.params.crop.max_h = 1080;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:297:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  297 |     g_pipe.entities[3].try_fmt_sink   = mock_sink_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:298:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  298 |     g_pipe.entities[3].try_fmt_source = mock_source_crop;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:299:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  299 |     g_pipe.entities[3].drv_ctx        = &g_mock_ctx_crop_1920;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:304:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  304 |     g_pipe.entities[4].transform_desc.type = VSC_TRANSFORM_PASS_THROUGH;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:305:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  305 |     g_pipe.entities[4].try_fmt_sink = mock_sink_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:306:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  306 |     g_pipe.entities[4].drv_ctx      = &g_mock_ctx_pass;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c: In function 'build_multi_branch_with_tap':
+src/test/vsc/test_vsc_resolver.c:330:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  330 |     g_pipe.entities[0].transform_desc.type = VSC_TRANSFORM_CROP;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:331:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  331 |     g_pipe.entities[0].transform_desc.params.crop.max_w = 4056;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:332:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  332 |     g_pipe.entities[0].transform_desc.params.crop.max_h = 3040;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:333:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  333 |     g_pipe.entities[0].transform_desc.params.crop.min_w = 1;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:334:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  334 |     g_pipe.entities[0].transform_desc.params.crop.min_h = 1;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:335:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_source'
+  335 |     g_pipe.entities[0].try_fmt_source = mock_sensor_source;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:336:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'drv_ctx'
+  336 |     g_pipe.entities[0].drv_ctx        = &g_mock_ctx_raw_only;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:341:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'transform_desc'
+  341 |     g_pipe.entities[1].transform_desc.type = VSC_TRANSFORM_PASS_THROUGH;
+      |                       ^
+src/test/vsc/test_vsc_resolver.c:342:23: error: 'vsc_entity_t' {aka 'struct vsc_entity'} has no member named 'try_fmt_sink'
+  342 |     g_pipe.entities[1].try_fmt_sink
+
+[… truncated 9889 chars …]

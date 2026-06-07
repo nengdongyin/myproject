@@ -1,0 +1,76 @@
+driver: sensor_imx477
+schema_version: 1
+caps: [SENSOR, EXPOSURE_CTRL]
+description: "Sony IMX477 图像传感器"
+
+properties:
+  - name: max_width
+    index: 0x00
+    type: u32
+    flags: [readonly]
+    default: 4056
+    min: 1
+    max: 4056
+    description: "传感器最大输出宽度"
+
+  - name: max_height
+    index: 0x01
+    type: u32
+    flags: [readonly]
+    default: 3040
+    min: 1
+    max: 3040
+    description: "传感器最大输出高度"
+
+  - name: exposure_us
+    index: 0x02
+    type: u32
+    flags: [runtime]
+    default: 10000
+    min: 10
+    max: 500000
+    description: "曝光时间 (微秒)"
+
+  - name: gain_analog
+    index: 0x03
+    type: f32
+    flags: [runtime]
+    default: 1.0
+    min: 1.0
+    max: 16.0
+    description: "模拟增益"
+
+  - name: gain_digital
+    index: 0x04
+    type: f32
+    flags: [runtime]
+    default: 1.0
+    min: 1.0
+    max: 4.0
+    description: "数字增益"
+
+  - name: frame_rate
+    index: 0x05
+    type: u32
+    flags: [runtime, transaction]
+    default: 30
+    min: 1
+    max: 120
+    description: "帧率 (fps)"
+
+  - name: supported_formats
+    index: 0x06
+    type: u32
+    flags: [readonly]
+    default: 0
+    description: "支持的像素格式位掩码"
+
+transform:
+  type: CROP
+  params:
+    min_w: 1
+    min_h: 1
+    max_w_ref: max_width
+    max_h_ref: max_height
+    align_w: 1
+    align_h: 1

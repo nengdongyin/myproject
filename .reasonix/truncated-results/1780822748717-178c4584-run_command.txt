@@ -1,0 +1,384 @@
+$ gcc -std=c11 -Wall -Wextra -Werror -pedantic -Isrc/vsc -Igen/vsc -Isrc/test/core -Isrc/test/core/unity -Isrc/test/vsc src/vsc/vsc_resolver.c src/vsc/vsc_feature.c gen/vsc/vsc_driver_registry.c src/test/vsc/test_vsc_resolver.c src/test/core/unity/unity.c src/test/core/test_suite.c test_runner_vsc.c -o build/test_vsc_p2_full.exe 2>&1
+[exit 1]
+gen/vsc/vsc_driver_registry.c:15:14: error: unknown type name 'vsc_prop_meta_t'
+   15 | extern const vsc_prop_meta_t _sensor_imx477_schema[];
+      |              ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:18:14: error: unknown type name 'vsc_prop_meta_t'
+   18 | extern const vsc_prop_meta_t _crop_schema[];
+      |              ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:21:14: error: unknown type name 'vsc_prop_meta_t'
+   21 | extern const vsc_prop_meta_t _binning_schema[];
+      |              ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:24:14: error: unknown type name 'vsc_prop_meta_t'
+   24 | extern const vsc_prop_meta_t _decoder_schema[];
+      |              ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:27:14: error: unknown type name 'vsc_prop_meta_t'
+   27 | extern const vsc_prop_meta_t _histogram_schema[];
+      |              ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:31:7: error: unknown type name 'vsc_driver_t'
+   31 | const vsc_driver_t _vsc_drivers[] = {
+      |       ^~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:32:5: error: braces around scalar initializer [-Werror]
+   32 |     {
+      |     ^
+gen/vsc/vsc_driver_registry.c:32:5: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:33:9: error: field name not in record or union initializer
+   33 |         .name               = "sensor_imx477",
+      |         ^
+gen/vsc/vsc_driver_registry.c:33:9: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:33:31: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+   33 |         .name               = "sensor_imx477",
+      |                               ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:33:31: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:33:31: error: initializer element is not computable at load time
+gen/vsc/vsc_driver_registry.c:33:31: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:34:9: error: field name not in record or union initializer
+   34 |         .driver_id          = VSC_DRIVER_ID_SENSOR_IMX477,
+      |         ^
+gen/vsc/vsc_driver_registry.c:34:9: note: (near initialization for '_vsc_drivers[0]')
+In file included from gen/vsc/vsc_driver_registry.c:11:
+gen/vsc/vsc_prop_ids.h:14:38: error: excess elements in scalar initializer [-Werror]
+   14 | #define VSC_DRIVER_ID_SENSOR_IMX477  0x01
+      |                                      ^~~~
+gen/vsc/vsc_driver_registry.c:34:31: note: in expansion of macro 'VSC_DRIVER_ID_SENSOR_IMX477'
+   34 |         .driver_id          = VSC_DRIVER_ID_SENSOR_IMX477,
+      |                               ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_prop_ids.h:14:38: note: (near initialization for '_vsc_drivers[0]')
+   14 | #define VSC_DRIVER_ID_SENSOR_IMX477  0x01
+      |                                      ^~~~
+gen/vsc/vsc_driver_registry.c:34:31: note: in expansion of macro 'VSC_DRIVER_ID_SENSOR_IMX477'
+   34 |         .driver_id          = VSC_DRIVER_ID_SENSOR_IMX477,
+      |                               ^~~~~~~~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:35:9: error: field name not in record or union initializer
+   35 |         .schema             = _sensor_imx477_schema,
+      |         ^
+gen/vsc/vsc_driver_registry.c:35:9: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:35:31: error: excess elements in scalar initializer [-Werror]
+   35 |         .schema             = _sensor_imx477_schema,
+      |                               ^~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:35:31: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:36:9: error: field name not in record or union initializer
+   36 |         .prop_count         = _sensor_imx477_prop_count,
+      |         ^
+gen/vsc/vsc_driver_registry.c:36:9: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:36:31: error: excess elements in scalar initializer [-Werror]
+   36 |         .prop_count         = _sensor_imx477_prop_count,
+      |                               ^~~~~~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:36:31: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:37:9: error: field name not in record or union initializer
+   37 |         .transform_template = &_sensor_imx477_transform,
+      |         ^
+gen/vsc/vsc_driver_registry.c:37:9: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:37:31: error: excess elements in scalar initializer [-Werror]
+   37 |         .transform_template = &_sensor_imx477_transform,
+      |                               ^
+gen/vsc/vsc_driver_registry.c:37:31: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:38:9: error: field name not in record or union initializer
+   38 |         .ops                = { 0 },
+      |         ^
+gen/vsc/vsc_driver_registry.c:38:9: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:38:9: error: braces around scalar initializer [-Werror]
+gen/vsc/vsc_driver_registry.c:38:9: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:38:31: error: excess elements in scalar initializer [-Werror]
+   38 |         .ops                = { 0 },
+      |                               ^
+gen/vsc/vsc_driver_registry.c:38:31: note: (near initialization for '_vsc_drivers[0]')
+gen/vsc/vsc_driver_registry.c:40:5: error: braces around scalar initializer [-Werror]
+   40 |     {
+      |     ^
+gen/vsc/vsc_driver_registry.c:40:5: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:41:9: error: field name not in record or union initializer
+   41 |         .name               = "crop",
+      |         ^
+gen/vsc/vsc_driver_registry.c:41:9: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:41:31: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+   41 |         .name               = "crop",
+      |                               ^~~~~~
+gen/vsc/vsc_driver_registry.c:41:31: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:41:31: error: initializer element is not computable at load time
+gen/vsc/vsc_driver_registry.c:41:31: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:42:9: error: field name not in record or union initializer
+   42 |         .driver_id          = VSC_DRIVER_ID_CROP,
+      |         ^
+gen/vsc/vsc_driver_registry.c:42:9: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_prop_ids.h:15:29: error: excess elements in scalar initializer [-Werror]
+   15 | #define VSC_DRIVER_ID_CROP  0x03
+      |                             ^~~~
+gen/vsc/vsc_driver_registry.c:42:31: note: in expansion of macro 'VSC_DRIVER_ID_CROP'
+   42 |         .driver_id          = VSC_DRIVER_ID_CROP,
+      |                               ^~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_prop_ids.h:15:29: note: (near initialization for '_vsc_drivers[1]')
+   15 | #define VSC_DRIVER_ID_CROP  0x03
+      |                             ^~~~
+gen/vsc/vsc_driver_registry.c:42:31: note: in expansion of macro 'VSC_DRIVER_ID_CROP'
+   42 |         .driver_id          = VSC_DRIVER_ID_CROP,
+      |                               ^~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:43:9: error: field name not in record or union initializer
+   43 |         .schema             = _crop_schema,
+      |         ^
+gen/vsc/vsc_driver_registry.c:43:9: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:43:31: error: excess elements in scalar initializer [-Werror]
+   43 |         .schema             = _crop_schema,
+      |                               ^~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:43:31: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:44:9: error: field name not in record or union initializer
+   44 |         .prop_count         = _crop_prop_count,
+      |         ^
+gen/vsc/vsc_driver_registry.c:44:9: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:44:31: error: excess elements in scalar initializer [-Werror]
+   44 |         .prop_count         = _crop_prop_count,
+      |                               ^~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:44:31: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:45:9: error: field name not in record or union initializer
+   45 |         .transform_template = &_crop_transform,
+      |         ^
+gen/vsc/vsc_driver_registry.c:45:9: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:45:31: error: excess elements in scalar initializer [-Werror]
+   45 |         .transform_template = &_crop_transform,
+      |                               ^
+gen/vsc/vsc_driver_registry.c:45:31: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:46:9: error: field name not in record or union initializer
+   46 |         .ops                = { 0 },
+      |         ^
+gen/vsc/vsc_driver_registry.c:46:9: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:46:9: error: braces around scalar initializer [-Werror]
+gen/vsc/vsc_driver_registry.c:46:9: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:46:31: error: excess elements in scalar initializer [-Werror]
+   46 |         .ops                = { 0 },
+      |                               ^
+gen/vsc/vsc_driver_registry.c:46:31: note: (near initialization for '_vsc_drivers[1]')
+gen/vsc/vsc_driver_registry.c:48:5: error: braces around scalar initializer [-Werror]
+   48 |     {
+      |     ^
+gen/vsc/vsc_driver_registry.c:48:5: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:49:9: error: field name not in record or union initializer
+   49 |         .name               = "binning",
+      |         ^
+gen/vsc/vsc_driver_registry.c:49:9: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:49:31: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+   49 |         .name               = "binning",
+      |                               ^~~~~~~~~
+gen/vsc/vsc_driver_registry.c:49:31: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:49:31: error: initializer element is not computable at load time
+gen/vsc/vsc_driver_registry.c:49:31: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:50:9: error: field name not in record or union initializer
+   50 |         .driver_id          = VSC_DRIVER_ID_BINNING,
+      |         ^
+gen/vsc/vsc_driver_registry.c:50:9: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_prop_ids.h:16:32: error: excess elements in scalar initializer [-Werror]
+   16 | #define VSC_DRIVER_ID_BINNING  0x04
+      |                                ^~~~
+gen/vsc/vsc_driver_registry.c:50:31: note: in expansion of macro 'VSC_DRIVER_ID_BINNING'
+   50 |         .driver_id          = VSC_DRIVER_ID_BINNING,
+      |                               ^~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_prop_ids.h:16:32: note: (near initialization for '_vsc_drivers[2]')
+   16 | #define VSC_DRIVER_ID_BINNING  0x04
+      |                                ^~~~
+gen/vsc/vsc_driver_registry.c:50:31: note: in expansion of macro 'VSC_DRIVER_ID_BINNING'
+   50 |         .driver_id          = VSC_DRIVER_ID_BINNING,
+      |                               ^~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:51:9: error: field name not in record or union initializer
+   51 |         .schema             = _binning_schema,
+      |         ^
+gen/vsc/vsc_driver_registry.c:51:9: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:51:31: error: excess elements in scalar initializer [-Werror]
+   51 |         .schema             = _binning_schema,
+      |                               ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:51:31: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:52:9: error: field name not in record or union initializer
+   52 |         .prop_count         = _binning_prop_count,
+      |         ^
+gen/vsc/vsc_driver_registry.c:52:9: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:52:31: error: excess elements in scalar initializer [-Werror]
+   52 |         .prop_count         = _binning_prop_count,
+      |                               ^~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:52:31: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:53:9: error: field name not in record or union initializer
+   53 |         .transform_template = &_binning_transform,
+      |         ^
+gen/vsc/vsc_driver_registry.c:53:9: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:53:31: error: excess elements in scalar initializer [-Werror]
+   53 |         .transform_template = &_binning_transform,
+      |                               ^
+gen/vsc/vsc_driver_registry.c:53:31: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:54:9: error: field name not in record or union initializer
+   54 |         .ops                = { 0 },
+      |         ^
+gen/vsc/vsc_driver_registry.c:54:9: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:54:9: error: braces around scalar initializer [-Werror]
+gen/vsc/vsc_driver_registry.c:54:9: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:54:31: error: excess elements in scalar initializer [-Werror]
+   54 |         .ops                = { 0 },
+      |                               ^
+gen/vsc/vsc_driver_registry.c:54:31: note: (near initialization for '_vsc_drivers[2]')
+gen/vsc/vsc_driver_registry.c:56:5: error: braces around scalar initializer [-Werror]
+   56 |     {
+      |     ^
+gen/vsc/vsc_driver_registry.c:56:5: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:57:9: error: field name not in record or union initializer
+   57 |         .name               = "decoder",
+      |         ^
+gen/vsc/vsc_driver_registry.c:57:9: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:57:31: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+   57 |         .name               = "decoder",
+      |                               ^~~~~~~~~
+gen/vsc/vsc_driver_registry.c:57:31: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:57:31: error: initializer element is not computable at load time
+gen/vsc/vsc_driver_registry.c:57:31: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:58:9: error: field name not in record or union initializer
+   58 |         .driver_id          = VSC_DRIVER_ID_DECODER,
+      |         ^
+gen/vsc/vsc_driver_registry.c:58:9: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_prop_ids.h:17:32: error: excess elements in scalar initializer [-Werror]
+   17 | #define VSC_DRIVER_ID_DECODER  0x05
+      |                                ^~~~
+gen/vsc/vsc_driver_registry.c:58:31: note: in expansion of macro 'VSC_DRIVER_ID_DECODER'
+   58 |         .driver_id          = VSC_DRIVER_ID_DECODER,
+      |                               ^~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_prop_ids.h:17:32: note: (near initialization for '_vsc_drivers[3]')
+   17 | #define VSC_DRIVER_ID_DECODER  0x05
+      |                                ^~~~
+gen/vsc/vsc_driver_registry.c:58:31: note: in expansion of macro 'VSC_DRIVER_ID_DECODER'
+   58 |         .driver_id          = VSC_DRIVER_ID_DECODER,
+      |                               ^~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:59:9: error: field name not in record or union initializer
+   59 |         .schema             = _decoder_schema,
+      |         ^
+gen/vsc/vsc_driver_registry.c:59:9: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:59:31: error: excess elements in scalar initializer [-Werror]
+   59 |         .schema             = _decoder_schema,
+      |                               ^~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:59:31: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:60:9: error: field name not in record or union initializer
+   60 |         .prop_count         = _decoder_prop_count,
+      |         ^
+gen/vsc/vsc_driver_registry.c:60:9: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:60:31: error: excess elements in scalar initializer [-Werror]
+   60 |         .prop_count         = _decoder_prop_count,
+      |                               ^~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:60:31: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:61:9: error: field name not in record or union initializer
+   61 |         .transform_template = &_decoder_transform,
+      |         ^
+gen/vsc/vsc_driver_registry.c:61:9: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:61:31: error: excess elements in scalar initializer [-Werror]
+   61 |         .transform_template = &_decoder_transform,
+      |                               ^
+gen/vsc/vsc_driver_registry.c:61:31: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:62:9: error: field name not in record or union initializer
+   62 |         .ops                = { 0 },
+      |         ^
+gen/vsc/vsc_driver_registry.c:62:9: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:62:9: error: braces around scalar initializer [-Werror]
+gen/vsc/vsc_driver_registry.c:62:9: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:62:31: error: excess elements in scalar initializer [-Werror]
+   62 |         .ops                = { 0 },
+      |                               ^
+gen/vsc/vsc_driver_registry.c:62:31: note: (near initialization for '_vsc_drivers[3]')
+gen/vsc/vsc_driver_registry.c:64:5: error: braces around scalar initializer [-Werror]
+   64 |     {
+      |     ^
+gen/vsc/vsc_driver_registry.c:64:5: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:65:9: error: field name not in record or union initializer
+   65 |         .name               = "histogram",
+      |         ^
+gen/vsc/vsc_driver_registry.c:65:9: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:65:31: error: initialization of 'int' from 'char *' makes integer from pointer without a cast [-Wint-conversion]
+   65 |         .name               = "histogram",
+      |                               ^~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:65:31: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:65:31: error: initializer element is not computable at load time
+gen/vsc/vsc_driver_registry.c:65:31: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:66:9: error: field name not in record or union initializer
+   66 |         .driver_id          = VSC_DRIVER_ID_HISTOGRAM,
+      |         ^
+gen/vsc/vsc_driver_registry.c:66:9: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_prop_ids.h:18:34: error: excess elements in scalar initializer [-Werror]
+   18 | #define VSC_DRIVER_ID_HISTOGRAM  0x10
+      |                                  ^~~~
+gen/vsc/vsc_driver_registry.c:66:31: note: in expansion of macro 'VSC_DRIVER_ID_HISTOGRAM'
+   66 |         .driver_id          = VSC_DRIVER_ID_HISTOGRAM,
+      |                               ^~~~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_prop_ids.h:18:34: note: (near initialization for '_vsc_drivers[4]')
+   18 | #define VSC_DRIVER_ID_HISTOGRAM  0x10
+      |                                  ^~~~
+gen/vsc/vsc_driver_registry.c:66:31: note: in expansion of macro 'VSC_DRIVER_ID_HISTOGRAM'
+   66 |         .driver_id          = VSC_DRIVER_ID_HISTOGRAM,
+      |                               ^~~~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:67:9: error: field name not in record or union initializer
+   67 |         .schema             = _histogram_schema,
+      |         ^
+gen/vsc/vsc_driver_registry.c:67:9: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:67:31: error: excess elements in scalar initializer [-Werror]
+   67 |         .schema             = _histogram_schema,
+      |                               ^~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:67:31: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:68:9: error: field name not in record or union initializer
+   68 |         .prop_count         = _histogram_prop_count,
+      |         ^
+gen/vsc/vsc_driver_registry.c:68:9: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:68:31: error: excess elements in scalar initializer [-Werror]
+   68 |         .prop_count         = _histogram_prop_count,
+      |                               ^~~~~~~~~~~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c:68:31: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:69:9: error: field name not in record or union initializer
+   69 |         .transform_template = NULL,
+      |         ^
+gen/vsc/vsc_driver_registry.c:69:9: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:69:31: error: excess elements in scalar initializer [-Werror]
+   69 |         .transform_template = NULL,
+      |                               ^~~~
+gen/vsc/vsc_driver_registry.c:69:31: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:70:9: error: field name not in record or union initializer
+   70 |         .ops                = { 0 },
+      |         ^
+gen/vsc/vsc_driver_registry.c:70:9: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:70:9: error: braces around scalar initializer [-Werror]
+gen/vsc/vsc_driver_registry.c:70:9: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:70:31: error: excess elements in scalar initializer [-Werror]
+   70 |         .ops                = { 0 },
+      |                               ^
+gen/vsc/vsc_driver_registry.c:70:31: note: (near initialization for '_vsc_drivers[4]')
+gen/vsc/vsc_driver_registry.c:72:5: error: braces around scalar initializer [-Werror]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |     ^
+gen/vsc/vsc_driver_registry.c:72:5: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:72:7: error: initialization of 'int' from 'void *' makes integer from pointer without a cast [-Wint-conversion]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |       ^~~~
+gen/vsc/vsc_driver_registry.c:72:7: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:72:13: error: excess elements in scalar initializer [-Werror]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |             ^
+gen/vsc/vsc_driver_registry.c:72:13: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:72:16: error: excess elements in scalar initializer [-Werror]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |                ^~~~
+gen/vsc/vsc_driver_registry.c:72:16: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:72:22: error: excess elements in scalar initializer [-Werror]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |                      ^
+gen/vsc/vsc_driver_registry.c:72:22: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:72:25: error: excess elements in scalar initializer [-Werror]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |                         ^~~~
+gen/vsc/vsc_driver_registry.c:72:25: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:72:5: error: braces around scalar initializer [-Werror]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |     ^
+gen/vsc/vsc_driver_registry.c:72:5: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:72:31: error: excess elements in scalar initializer [-Werror]
+   72 |     { NULL, 0, NULL, 0, NULL, { 0 } },
+      |                               ^
+gen/vsc/vsc_driver_registry.c:72:31: note: (near initialization for '_vsc_drivers[5]')
+gen/vsc/vsc_driver_registry.c:76:7: error: unknown type name 'vsc_driver_t'
+   76 | const vsc_driver_t *vsc_driver_find(const char *name)
+      |       ^~~~~~~~~~~~
+gen/vsc/vsc_driver_registry.c: In function 'vsc_driver_find':
+gen/vsc/vsc_driver_registry.c:78:36: error: request for member 'name' in something not a structure or union
+   78 |     for (int i = 0; _vsc_drivers[i].name != NULL; i++) {
+      |                                    ^
+gen/vsc/vsc_driver_registry.c:79:35: error: request for member 'name' in something not a structure or union
+   79 |         if (strcmp(_vsc_drivers[i].name, name) == 0)
+      |                                   ^
+cc1.exe: all warnings being treated as errors

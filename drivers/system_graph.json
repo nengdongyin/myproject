@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {"type": "crop",      "id": "crop_0",      "base": "0x43C00000"},
+    {"type": "binning",   "id": "binning_0",   "base": "0x43C10000"},
+    {"type": "decoder",   "id": "decoder_0",   "base": "0x43C20000"},
+    {"type": "histogram", "id": "histogram_0", "base": "0x43C30000"}
+  ],
+  "links": [
+    {"src": "crop_0",    "dst": "binning_0",   "type": "STREAM"},
+    {"src": "binning_0", "dst": "decoder_0",   "type": "STREAM"},
+    {"src": "binning_0", "dst": "histogram_0", "type": "TAP"}
+  ]
+}

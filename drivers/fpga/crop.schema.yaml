@@ -1,0 +1,69 @@
+driver: crop
+schema_version: 1
+caps: [CROP]
+description: "Crop / ROI IP 核"
+
+properties:
+  - name: max_width
+    index: 0x00
+    type: u32
+    flags: [readonly]
+    default: 8192
+    min: 64
+    max: 8192
+    description: "硬件最大裁剪宽度"
+
+  - name: max_height
+    index: 0x01
+    type: u32
+    flags: [readonly]
+    default: 8192
+    min: 4
+    max: 8192
+    description: "硬件最大裁剪高度"
+
+  - name: roi.x
+    index: 0x02
+    type: u32
+    flags: [runtime, persist]
+    default: 0
+    min: 0
+    max_ref: max_width
+    description: "ROI 起始 X 坐标"
+
+  - name: roi.y
+    index: 0x03
+    type: u32
+    flags: [runtime, persist]
+    default: 0
+    min: 0
+    max_ref: max_height
+    description: "ROI 起始 Y 坐标"
+
+  - name: roi.width
+    index: 0x04
+    type: u32
+    flags: [runtime, persist, transaction]
+    default: 1920
+    min: 64
+    max_ref: max_width
+    description: "ROI 宽度"
+
+  - name: roi.height
+    index: 0x05
+    type: u32
+    flags: [runtime, persist, transaction]
+    default: 1080
+    min: 4
+    max_ref: max_height
+    description: "ROI 高度"
+
+transform:
+  type: CROP
+  params:
+    min_w: 64
+    min_h: 4
+    max_w_ref: max_width
+    max_h_ref: max_height
+    align_w: 8
+    align_h: 8

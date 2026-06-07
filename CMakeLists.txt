@@ -9,6 +9,8 @@ target_include_directories(app PRIVATE
     src/test/core
     src/test/core/unity
     src/test/param_manager
+    src/vsc
+    gen/vsc
     src/test/camyu
     src/core/protocol_parser
     src/core/param_manager/core
@@ -66,6 +68,25 @@ if(TEST_MODE)
 
   target_sources(app PRIVATE
       src/test/camyu/test_camyu.c
+  )
+
+  target_sources(app PRIVATE
+      src/test/vsc/test_vsc_resolver.c
+      src/vsc/vsc_resolver.c
+      src/vsc/vsc_feature.c
+      src/vsc/vsc_loader.c
+      src/modules/ip/crop/crop_driver.c
+      src/modules/ip/crop/crop_vsc.c
+      src/modules/ip/binning/binning_driver.c
+      src/modules/ip/binning/binning_vsc.c
+      src/modules/ip/decoder/decoder_driver.c
+      src/modules/ip/decoder/decoder_vsc.c
+      src/modules/ip/histogram/histogram_driver.c
+      src/modules/ip/histogram/histogram_vsc.c
+      src/modules/sensor/sensor_vsc.c
+      src/modules/sensor/isc_bridge.c
+      src/core/isc/isc_core.c
+      src/core/isc/sensors/isc_sensor_imx477.c
   )
 
   target_sources(app PRIVATE

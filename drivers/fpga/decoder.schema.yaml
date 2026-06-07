@@ -1,0 +1,40 @@
+driver: decoder
+schema_version: 1
+caps: [FORMAT_CONV]
+description: "Bayer → RGB 解码器"
+
+properties:
+  - name: enable
+    index: 0x00
+    type: bool
+    flags: [runtime, persist]
+    default: true
+    description: "解码器使能"
+
+  - name: fmt_in
+    index: 0x01
+    type: u32
+    flags: [readonly]
+    default: 0
+    description: "输入像素格式 (RAW8/RAW10/RAW12)"
+
+  - name: fmt_out
+    index: 0x02
+    type: u32
+    flags: [readonly]
+    default: 0
+    description: "输出像素格式 (RGB888)"
+
+  - name: pattern
+    index: 0x03
+    type: enum
+    flags: [runtime]
+    default: 0
+    enum_values: ["RGGB", "BGGR", "GRBG", "GBRG"]
+    description: "Bayer 色彩滤波阵列模式"
+
+transform:
+  type: PIXEL_FMT_CONV
+  params:
+    fmt_in: "RAW10"
+    fmt_out: "RGB888"

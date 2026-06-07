@@ -1,0 +1,1012 @@
+# VSC P1 — Property Schema、IDL 与代码生成
+
+**版本**：1.0.0-draft
+**前置**：P0 Resolver freeze (v0.5)
+**定位**：将 P0 中已冻结的 `vsc_fmt_transform_desc_t`、Driver callback 接口、
+Property 元数据契约工程化为可维护的 Schema + 代码生成体系。
+
+---
+
+## 一、P1 要解决的核心问题
+
+P0 冻结后，以下问题仍然是手工维护的：
+
+| 问题 | 当前状态 | P1 目标 |
+|------|---------|--------|
+| Property ID 分配 | 枚举值手工定义，碰撞风险高 | 工具自动生成，CI 校验唯一性 |
+| transform_desc 初始化 | 每个 Driver 手写 C 结构体 | YAML → 代码生成 → 编译期常量 |
+| Property 元数据（type/flags/min/max） | 分散在各 Driver 的 C 代码中 | Schema YAML 统一描述，工具生成注册表 |
+| Driver 注册 | 无统一机制 | `vsc_driver_t` 结构体 + 框架级注册 |
+| Instance override | 无 | Bitstream Descriptor 中的 `prop_overrides` 收紧边界 |
+
+---
+
+## 二、Property ID 命名空间设计
+
+### 2.1 编码规则
+
+```
+Property ID (16-bit) = (Driver_ID << 8) | Property_Index
+
+  Bit 15..8  → Driver_ID   (0x01–0xFE, 0x00 保留给框架, 0xFF 保留)
+  Bit 7..0   → Property_Index (0x00–0xFF, 每 Driver 最多 256 个属性)
+
+**Property_Index 上限策略**：
+
+- 单 Driver 推荐 Property 数量 < 128，硬上限 255（0xFF 保留）
+- 如果某个 Driver 的 Property 数量逼近上限，应将模块拆分为多个 Driver
+  （例如超级 ISP 不应作为一个 Driver，而应拆为 AE Driver、AWB Driver、Gamma Driver 等）
+- 8-bit Property_Index 已 ABI 冻结，未来不会扩大位宽
+```
+
+### 2.2 Driver_ID 分配机制
+
+采用**中央注册表 + CI 校验**，不使用哈希（调试时需要可读的 ID）：
+
+**`drivers/registry.yaml`**（手工维护，纳入版本控制）：
+
+```yaml
+# VSC Driver Registry — 所有 Driver_ID 的唯一分配入口
+# CI 在 pre-commit 阶段校验无重复、无缺失
+
+drivers:
+  - id: 0x01
+    name: sensor_imx477
+    category: sensor
+    version: "1.0"
+    status: active
+    description: "Sony IMX477 图像传感器"
+
+  - id: 0x02
+    name: sensor_imx296
+    category: sensor
+    version: "1.0"
+    status: active
+    description: "Sony IMX296 全局快门传感器"
+
+  - id: 0x03
+    name: crop
+    category: ip
+    version: "1.0"
+    status: active
+    description: "裁剪 / ROI IP 核"
+
+  - id: 0x04
+    name: binning
+    category: ip
+    version: "1.0"
+    status: active
+    description: "Binning IP 核 (2×2 / 4×4)"
+
+  - id: 0x05
+    name: decoder
+    category: ip
+    version: "1.0"
+    status: active
+    description: "Bayer → RGB 解码器"
+
+  - id: 0x10
+    name: histogram
+    category: analyzer
+    version: "2.0"
+    status: active
+    aliases: ["histogram_v1"]
+    description: "直方图统计 IP (v2: 支持 256-bin)"
+
+  - id: 0x11
+    name: sharpening
+    category: ip
+    version: "1.0"
+    status: active
+    description: "锐化 IP"
+
+  # ── 废弃示例 ──
+  - id: 0x20
+    name: ae_engine_legacy
+    category: analyzer
+    version: "1.0"
+    status: deprecated
+    replaced_by: "ae_engine"
+    description: "旧版 AE 统计引擎（已废弃，ID 0x20 永不复用）"
+
+  # ... 最多 254 个
+```
+
+**ID 分配规则**：
+- 0x00 保留给框架级属性（如 `output.width`、`output.height`）
+- 0x01–0x7F 传感器 Driver
+- 0x80–0xBF FPGA IP Driver
+- 0xC0–0xDF ANALYZER Driver
+- 0xE0–0xFE 其他（编码器、虚拟 Driver 等）
+- 0xFF 保留
+
+**Driver_ID 生命周期规则**：
+
+> Driver_ID 永不复用。一旦分配，即使对应 Driver 废弃，ID 也永久保留。
+> 禁止在新 Driver 中重新使用已废弃的 Driver_ID。
+> 违反此规则会导致旧 bitstream（携带旧 Driver_ID）+ 新驱动库的组合出现静默的属性语义错乱。
+
+此规则通过 `registry.yaml` 中的 `status: deprecated` 标记强制，CI 校验禁止为 deprecated ID
+重新分配新 Driver。
+
+### 2.3 Driver 生命周期管理
+
+**状态机**：
+
+```
+active → deprecated → (永久保留，不复用)
+```
+
+**registry.yaml 字段规范**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `id` | ✅ | Driver_ID（hex），分配后永不更改 |
+| `name` | ✅ | 当前规范名，Bitstream Descriptor 中 `type` 字段以此为准 |
+| `status` | ✅ | `active` / `deprecated` |
+| `version` | ✅ | 语义版本号字符串 `"MAJOR.MINOR"` |
+| `aliases` | ❌ | 历史名称列表，用于 Bitstream Descriptor 向后兼容 |
+| `replaced_by` | ❌ | 替代此 Driver 的新 Driver name（仅 `status: deprecated` 时使用） |
+| `category` | ✅ | `sensor` / `ip` / `analyzer` / `endpoint` / `other` |
+
+**废弃流程**：
+
+1. 将 `status` 改为 `deprecated`，填写 `replaced_by`
+2. Driver_ID **永久保留**，不回收
+3. 如果只是重命名，在 `aliases` 中保留旧名称
+4. CI 校验：`deprecated` 的 ID 不可被新 Driver 重新分配
+5. 废弃 Driver 的 `.schema.yaml` 和 `.c` 文件从构建中移除
+
+**别名向后兼容**：
+
+```yaml
+# histogram v1 → v2 重命名示例
+- id: 0x10
+  name: histogram           # 当前名称
+  aliases: ["histogram_v1"] # Bitstream 中写 "histogram_v1" 仍能匹配
+  status: active
+
+# Bitstream Descriptor 中两种写法都合法：
+# { "type": "histogram" }     → 匹配成功
+# { "type": "histogram_v1" }  → 通过 aliases 匹配成功
+```
+
+**CI 校验脚本**（扩展版）：
+
+```python
+# tools/check_driver_ids.py — CI pre-commit hook
+def check_ids(registry):
+    ids = set()
+    names = set()
+    aliases_global = set()
+
+    for d in registry['drivers']:
+        did = d['id']
+        name = d['name']
+        status = d.get('status', 'active')
+
+        # 唯一性
+        assert did not in ids, f"Duplicate Driver_ID: 0x{did:02X}"
+        assert name not in names, f"Duplicate Driver name: {name}"
+        ids.add(did)
+        names.add(name)
+
+        # ID 范围
+        assert 0x01 <= did <= 0xFE, f"Invalid Driver_ID: 0x{did:02X}"
+
+        # deprecated 不可复用 — ID 永远属于该 Driver
+        # （无额外检查，因为 ids set 已经保证不重复）
+
+        # aliases 全局唯一
+        for alias in d.get('aliases', []):
+            assert alias not in aliases_global, f"Duplicate alias: {alias}"
+            aliases_global.add(alias)
+
+    # 生成生命周期报告
+    generate_driver_lifecycle_report(registry)
+```
+
+**生命周期报告**（CI 产物，纳入版本控制）：
+
+```
+# Driver Lifecycle Report — auto-generated by check_driver_ids.py
+# DO NOT EDIT
+
+ID    Name                Status      Version  Aliases
+0x01  sensor_imx477       active      1.0
+0x02  sensor_imx296       active      1.0
+0x03  crop                active      1.0
+0x04  binning             active      1.0
+0x05  decoder             active      1.0
+0x10  histogram           active      2.0      histogram_v1
+0x11  sharpening          active      1.0
+0x20  ae_engine_legacy    deprecated  1.0      → replaced by ae_engine
+```
+---
+
+## 三、Schema YAML 格式规范
+
+### 3.1 顶层结构
+
+每个 Driver 一个 `<driver_name>.schema.yaml`，放在 `drivers/<driver_name>/` 目录下：
+
+```yaml
+# drivers/crop/crop.schema.yaml
+driver: crop          # 必须与 registry.yaml 中的 name 一致
+version: 1            # Schema 版本号（Driver 升级时递增）
+description: "Crop / ROI IP 核"
+
+# ── Property 定义 ──
+properties:
+  - name: max_width
+    index: 0x00       # Driver 内唯一序号（0–255）
+    type: u32
+    flags: [readonly]
+    default: 8192
+    min: 64
+    max: 8192
+    description: "硬件最大裁剪宽度"
+
+  - name: max_height
+    index: 0x01
+    type: u32
+    flags: [readonly]
+    default: 8192
+    min: 4
+    max: 8192
+    description: "硬件最大裁剪高度"
+
+  - name: roi.x
+    index: 0x02
+    type: u32
+    flags: [runtime, persist]
+    default: 0
+    min: 0
+    max_ref: max_width       # 最大值引用同 Driver 的另一个 Property
+    description: "ROI 起始 X 坐标"
+
+  - name: roi.y
+    index: 0x03
+    type: u32
+    flags: [runtime, persist]
+    default: 0
+    min: 0
+    max_ref: max_height
+
+  - name: roi.width
+    index: 0x04
+    type: u32
+    flags: [runtime, persist, transaction]
+    default: 1920
+    min: 64
+    max_ref: max_width
+    description: "ROI 宽度"
+
+  - name: roi.height
+    index: 0x05
+    type: u32
+    flags: [runtime, persist, transaction]
+    default: 1080
+    min: 4
+    max_ref: max_height
+    description: "ROI 高度"
+
+# ── Transform 描述符（映射到 vsc_fmt_transform_desc_t）──
+transform:
+  type: CROP
+  params:
+    min_w: 64
+    min_h: 4
+    max_w_ref: max_width      # 引用 Property 的值
+    max_h_ref: max_height
+    align_w: 8
+    align_h: 8
+```
+
+### 3.2 Property 字段规范
+
+| 字段 | 必填 | 类型 | 说明 |
+|------|------|------|------|
+| `name` | ✅ | string | Property 名称，如 `roi.width`。生成 `VSC_PROP_<DRIVER>_<NAME>` 宏 |
+| `index` | ✅ | hex | Driver 内序号 (0x00–0xFF) |
+| `type` | ✅ | enum | `u32` / `i32` / `f32` / `bool` / `enum` / `string` |
+| `flags` | ✅ | list | 见下方 Flag 定义 |
+| `default` | ✅ | — | 默认值（类型与 `type` 对应） |
+| `min` | ❌ | — | 硬下限 |
+| `max` | ❌ | — | 硬上限 |
+| `max_ref` | ❌ | string | 引用同 Driver Property 的运行时值作为上限 |
+| `enum_values` | ❌ | list | 仅 `type: enum` 时使用 |
+| `description` | ❌ | string | 文档注释，注入生成的 .h 文件 |
+
+### 3.3 Property Flag 规范
+
+| Flag | 宏 | 语义 |
+|------|-----|------|
+| `readonly` | `VSC_PROP_READONLY` | 应用不可写（硬边界 / 能力查询） |
+| `runtime` | `VSC_PROP_RUNTIME` | 流中可修改 |
+| `persist` | `VSC_PROP_PERSIST` | 需持久化到 Flash |
+| `transaction` | `VSC_PROP_TRANSACTION` | 需通过 Pipeline Transaction 提交 |
+| `atomic` | `VSC_PROP_ATOMIC` | 必须与同 tx_group 的其他属性原子写入 |
+| `lazy` | `VSC_PROP_LAZY` | 写入不自动 flush |
+| `debug` | `VSC_PROP_DEBUG` | 仅调试模式可见 |
+
+### 3.4 Transform 类型 → YAML 映射
+
+| `transform.type` | YAML `params` 字段 | 对应 C union |
+|------------------|-------------------|-------------|
+| `PASS_THROUGH` | 无 | `{ .type = VSC_TRANSFORM_PASS_THROUGH }` |
+| `BINNING` | `factor_x`, `factor_y` | `.params.binning` |
+| `CROP` | `min_w`, `min_h`, `max_w_ref`, `max_h_ref`, `align_w`, `align_h` | `.params.crop` |
+| `PIXEL_FMT_CONV` | `fmt_in`, `fmt_out` (FourCC 字符串) | `.params.pixel_fmt_conv` |
+| `MULTI_STAGE` | `stages: [...]` (子 transform 列表) | `.params.multi_stage` |
+
+**MULTI_STAGE 示例**（ISP 复合模块）：
+
+```yaml
+transform:
+  type: MULTI_STAGE
+  stages:
+    - type: BINNING
+      params: { factor_x: 2, factor_y: 2 }
+    - type: PIXEL_FMT_CONV
+      params: { fmt_in: "RAW10", fmt_out: "RGB888" }
+    - type: CROP
+      params:
+        min_w: 64
+        min_h: 4
+        max_w: 1920
+        max_h: 1080
+        align_w: 8
+        align_h: 8
+```
+
+---
+
+## 四、代码生成工具链
+
+### 4.1 生成流程
+
+```
+drivers/registry.yaml
+        │
+        ▼
+drivers/<name>/<name>.schema.yaml  (×N)
+        │
+        ▼
+┌─────────────────────────────┐
+│  tools/vsc_prop_gen.py       │
+│                              │
+│  1. 解析 registry.yaml       │
+│  2. 校验所有 Driver_ID 唯一   │
+│  3. 逐文件解析 schema.yaml   │
+│  4. 校验 Property index 唯一  │
+│  5. 解析 max_ref 引用链      │
+│  6. 展开 MULTI_STAGE stages  │
+│  7. 生成三个输出文件          │
+└──────────┬──────────────────┘
+           │
+    ┌──────┼──────┐
+    ▼      ▼      ▼
+vsc_prop_ids.h    vsc_prop_strings.c    vsc_prop_schema.c
+(宏定义)          (name→id 查找)        (Schema 注册表)
+```
+
+### 4.2 生成产物
+
+**`build/gen/vsc_prop_ids.h`**（示例片段）：
+
+```c
+/* Auto-generated by vsc_prop_gen.py — DO NOT EDIT */
+
+#ifndef VSC_PROP_IDS_H
+#define VSC_PROP_IDS_H
+
+/* ── Driver ID constants ── */
+#define VSC_DRIVER_ID_SENSOR_IMX477   0x01
+#define VSC_DRIVER_ID_SENSOR_IMX296   0x02
+#define VSC_DRIVER_ID_CROP            0x03
+#define VSC_DRIVER_ID_BINNING         0x04
+#define VSC_DRIVER_ID_DECODER         0x05
+#define VSC_DRIVER_ID_HISTOGRAM       0x10
+#define VSC_DRIVER_ID_SHARPENING      0x11
+
+/* ── sensor_imx477 ── */
+#define VSC_PROP_SENSOR_IMX477_MAX_WIDTH        ((0x01 << 8) | 0x00)
+#define VSC_PROP_SENSOR_IMX477_MAX_HEIGHT       ((0x01 << 8) | 0x01)
+#define VSC_PROP_SENSOR_IMX477_EXPOSURE_US      ((0x01 << 8) | 0x02)
+#define VSC_PROP_SENSOR_IMX477_GAIN_ANALOG      ((0x01 << 8) | 0x03)
+
+/* ── crop ── */
+#define VSC_PROP_CROP_MAX_WIDTH        ((0x03 << 8) | 0x00)
+#define VSC_PROP_CROP_MAX_HEIGHT       ((0x03 << 8) | 0x01)
+#define VSC_PROP_CROP_ROI_X            ((0x03 << 8) | 0x02)
+#define VSC_PROP_CROP_ROI_Y            ((0x03 << 8) | 0x03)
+#define VSC_PROP_CROP_ROI_WIDTH        ((0x03 << 8) | 0x04)
+#define VSC_PROP_CROP_ROI_HEIGHT       ((0x03 << 8) | 0x05)
+
+/* ── histogram ── */
+#define VSC_PROP_HISTOGRAM_MAX_BINS    ((0x10 << 8) | 0x00)
+#define VSC_PROP_HISTOGRAM_CHANNELS    ((0x10 << 8) | 0x01)
+
+#endif /* VSC_PROP_IDS_H */
+```
+
+**`build/gen/vsc_prop_schema.c`**（示例片段）：
+
+```c
+/* Auto-generated by vsc_prop_gen.py — DO NOT EDIT */
+#include "vsc_types.h"
+#include "vsc_prop_ids.h"
+
+/* ═══════════════════════════════════════════════════════════
+ *  crop driver
+ * ═══════════════════════════════════════════════════════════ */
+
+static const vsc_fmt_transform_desc_t _crop_transform = {
+    .type = VSC_TRANSFORM_CROP,
+    .params.crop = {
+        .min_w  = 64,
+        .min_h  = 4,
+        .max_w  = 8192,
+        .max_h  = 8192,
+        .align_w = 8,
+        .align_h = 8,
+    },
+};
+
+const vsc_prop_meta_t _crop_schema[] = {
+    {
+        .prop_id     = VSC_PROP_CROP_MAX_WIDTH,
+        .name        = "crop.max_width",
+        .type        = VSC_TYPE_U32,
+        .flags       = VSC_PROP_READONLY,
+        .default_val = { .u32 = 8192 },
+        .min_val     = { .u32 = 64 },
+        .max_val     = { .u32 = 8192 },
+        .max_ref_id  = 0,
+    },
+    {
+        .prop_id     = VSC_PROP_CROP_ROI_WIDTH,
+        .name        = "crop.roi.width",
+        .type        = VSC_TYPE_U32,
+        .flags       = VSC_PROP_RUNTIME | VSC_PROP_PERSIST | VSC_PROP_TRANSACTION,
+        .default_val = { .u32 = 1920 },
+        .min_val     = { .u32 = 64 },
+        .max_val     = { .u32 = 8192 },
+        .max_ref_id  = VSC_PROP_CROP_MAX_WIDTH,  /* → 运行时查 Instance Value Table */
+    },
+    /* ... */
+};
+const uint8_t _crop_prop_count = 6;
+```
+
+### 4.3 Property 依赖图生成
+
+Codegen 从 Schema YAML 的 `max_ref` / `min_ref` 字段自动提取依赖关系，生成依赖表：
+
+```c
+/* Auto-generated — Property dependency map for crop driver */
+typedef struct {
+    vsc_prop_id_t prop_id;       /* dependent property */
+    vsc_prop_id_t ref_id;        /* referenced property (max_ref target) */
+} vsc_prop_dep_t;
+
+static const vsc_prop_dep_t _crop_dependencies[] = {
+    { VSC_PROP_CROP_ROI_X,      VSC_PROP_CROP_MAX_WIDTH  },
+    { VSC_PROP_CROP_ROI_Y,      VSC_PROP_CROP_MAX_HEIGHT },
+    { VSC_PROP_CROP_ROI_WIDTH,  VSC_PROP_CROP_MAX_WIDTH  },
+    { VSC_PROP_CROP_ROI_HEIGHT, VSC_PROP_CROP_MAX_HEIGHT },
+};
+static const uint8_t _crop_dep_count = 4;
+```
+
+在 Instance 创建阶段，override 写入后立即进行依赖一致性校验：
+
+```
+vsc_instance_apply_override(instance, prop_id, override_val):
+    step 1: 校验 override 值在 schema min/max 范围内
+    step 2: 写入 Instance Value Table
+    step 3: 查依赖表：找到所有 max_ref 指向 prop_id 的 Property
+    step 4: 对每个依赖 Property，校验其当前值 ≤ override_val
+            如果 roi.width=1920 且 max_width 被 override 为 640 → 拒绝
+    step 5: 同步更新 resolved transform_desc
+```
+
+**设计理由**：这是 Schema 层职责，不应推迟到 Resolver Phase 1 才发现矛盾。
+Instance 创建是系统初始化阶段，此时发现配置冲突可以立即 fail-fast，
+而非等到应用调用 try_fmt 时才报错。
+
+### 4.4 `max_ref` 的运行时解析
+
+`max_ref_id` 不为 0 时，校验逻辑为：
+
+```
+vsc_prop_validate(instance, prop_id, new_value):
+    meta = find_meta(prop_id)
+    effective_max = meta.max_val
+
+    if meta.max_ref_id != 0:
+        ref_val = vsc_instance_get(instance, meta.max_ref_id)
+        effective_max = min(meta.max_val, ref_val)
+
+    if new_value > effective_max:
+        return VSC_ERR_RANGE
+```
+
+即：`max_ref` 引用的 Property 值可以**收紧**（但不放宽）编译期声明的 `max` 边界。
+
+### 4.5 Codegen 确定性
+
+**目标**：同一组 YAML 输入，在任何构建环境（OS、Python 版本、时区）都产出
+字节级完全相同的 `vsc_prop_ids.h`、`vsc_prop_strings.c`、`vsc_prop_schema.c`。
+
+**确定性策略**：
+
+| 策略 | 说明 |
+|------|------|
+| **固定排序** | Driver 按 `registry.yaml` 中的声明顺序处理；每个 Driver 内的 Property 按 `index` 升序；MULTI_STAGE 的 `stages` 按 YAML 中的书写顺序 |
+| **禁止浮点** | `default` / `min` / `max` 中的 `f32` 值以 `%.6g` 格式序列化，确保跨平台一致 |
+| **固定时间戳** | 生成注释中的时间戳使用 YAML 文件的 git commit date（而非系统时钟），或统一使用 `0000-00-00T00:00:00Z` |
+| **无随机化** | 禁止在生成过程中使用随机数、UUID、内存地址等非确定性源 |
+
+**CI Checksum 校验**：
+
+```
+# CI 流程
+python3 tools/vsc_prop_gen.py --schemas drivers/ --output build/gen/
+
+# 计算 checksum
+sha256sum build/gen/vsc_prop_ids.h \
+         build/gen/vsc_prop_strings.c \
+         build/gen/vsc_prop_schema.c > build/gen/checksum.sha256
+
+# 与已提交的 checksum 对比
+diff build/gen/checksum.sha256 drivers/expected_checksum.sha256
+# 如果不一致 → CI 失败
+```
+
+**生成文件头部注释**：
+
+```c
+/* ═══════════════════════════════════════════════════════════════════════
+ *  Auto-generated by vsc_prop_gen.py  v1.0.0
+ *
+ *  Source YAML:
+ *    drivers/crop/crop.schema.yaml          (git: a1b2c3d)
+ *    drivers/binning/binning.schema.yaml    (git: e4f5g6h)
+ *    drivers/registry.yaml                  (git: i7j8k9l)
+ *
+ *  Generation time: 2025-01-15T10:30:00Z (fixed — git commit date of registry.yaml)
+ *
+ *  DO NOT EDIT — changes will be overwritten.
+ * ═══════════════════════════════════════════════════════════════════════ */
+```
+
+**破坏性变更的检测**：当 checksum 变更时，CI 要求同时更新 `drivers/expected_checksum.sha256`
+并附上变更说明（如"新增 Driver: ae_engine"）。这确保每次 Schema YAML 变更都是有意为之的。
+
+---
+
+## 五、Driver 注册机制
+
+### 5.1 `vsc_driver_t` 结构体
+
+P1 引入 Driver 级别的统一注册结构体：
+
+```c
+/**
+ * @brief Driver descriptor — one per IP/sensor type, shared by all Instances.
+ *
+ * **Transform ownership**: transform_template is a Driver-level default.
+ * Each Instance resolves its own transform_desc by copying the template and
+ * applying prop_overrides.  The Resolver reads entity->transform_desc (which
+ * comes from the Instance), NOT the Driver's template.
+ *
+ *   Driver YAML → Codegen → transform_template (compile-time default)
+ *   Instance Create → copy template → apply overrides → resolved transform_desc
+ *   Entity → copy from Instance → Resolver
+ */
+typedef struct vsc_driver {
+    const char                 *name;          /* "crop", "sensor_imx477" */
+    uint16_t                    driver_id;     /* VSC_DRIVER_ID_CROP */
+    const vsc_prop_meta_t      *schema;        /* generated schema array */
+    uint8_t                     prop_count;
+    const vsc_fmt_transform_desc_t *transform_template;  /* Driver default */
+    const vsc_ip_ops_t          ops;           /* try_fmt_sink/source, commit_fmt */
+} vsc_driver_t;
+```
+
+### 5.2 Driver 实现侧
+
+每个 Driver 的 `.c` 文件中定义 Driver 实例（引用生成的 Schema）：
+
+```c
+/* crop_driver.c */
+#include "vsc_types.h"
+#include "vsc_prop_ids.h"      /* generated */
+#include "vsc_prop_schema.h"   /* generated — declares _crop_schema */
+
+static int crop_try_fmt_sink(void *ctx, const vsc_mbus_fmt_t *prop,
+                              vsc_mbus_fmt_t *clamped) { /* ... */ }
+static int crop_try_fmt_source(void *ctx, const vsc_mbus_fmt_t *sink,
+                                vsc_mbus_fmt_t *src) { /* ... */ }
+static int crop_commit_fmt(void *ctx, const vsc_mbus_fmt_t *fmt) { /* ... */ }
+
+const vsc_driver_t crop_driver = {
+    .name               = "crop",
+    .driver_id          = VSC_DRIVER_ID_CROP,
+    .schema             = _crop_schema,
+    .prop_count         = _crop_prop_count,
+    .transform_template = &_crop_transform,   /* compile-time default */
+    .ops = {
+        .try_fmt_sink   = crop_try_fmt_sink,
+        .try_fmt_source = crop_try_fmt_source,
+        .commit_fmt     = crop_commit_fmt,
+    },
+};
+```
+
+### 5.3 框架侧注册
+
+框架维护一个全局 Driver 注册表（S0 静态数组）：
+
+```c
+/* vsc_driver_registry.c */
+extern const vsc_driver_t crop_driver;
+extern const vsc_driver_t binning_driver;
+extern const vsc_driver_t sensor_imx477_driver;
+/* ... */
+
+const vsc_driver_t *g_vsc_drivers[] = {
+    &crop_driver,
+    &binning_driver,
+    &sensor_imx477_driver,
+    /* ... */
+    NULL,  /* sentinel */
+};
+```
+
+`vsc_system_init()` 中通过 driver name 查找：
+```c
+const vsc_driver_t *vsc_driver_find(const char *name) {
+    for (int i = 0; g_vsc_drivers[i] != NULL; i++)
+        if (strcmp(g_vsc_drivers[i]->name, name) == 0)
+            return g_vsc_drivers[i];
+    return NULL;
+}
+```
+
+---
+
+## 六、Instance 创建与 Property Override
+
+### 6.1 Bitstream Descriptor 中的 `prop_overrides`
+
+```json
+{
+  "nodes": [
+    {
+      "type": "crop",
+      "id": "crop_0",
+      "base": "0x43C00000",
+      "prop_overrides": {
+        "crop.max_width": 8192,
+        "crop.max_height": 8192
+      }
+    },
+    {
+      "type": "crop",
+      "id": "crop_1",
+      "base": "0x43C10000",
+      "prop_overrides": {
+        "crop.max_width": 640,
+        "crop.max_height": 480
+      }
+    }
+  ]
+}
+```
+
+### 6.2 Override 校验规则 + Transform 解析
+
+```
+vsc_instance_create(driver, overrides):
+    1. 分配 Instance（静态池）
+    2. 初始化 Instance Value Table = driver->schema 中的 default 值
+    3. 从 driver->transform_template 拷贝一份 transform_desc（值拷贝，非指针）
+    4. 遍历 overrides:
+       a. 查找 prop_id = vsc_prop_id_from_name(key)
+       b. 获取 schema 中该 Property 的 meta
+       c. 如果 meta.flags 不含 readonly → 拒绝（只能 override 硬边界）
+       d. 如果 override 值比 meta.min 更小 → 拒绝（不可放宽）
+       e. 如果 override 值比 meta.max 更大 → 拒绝（不可放宽）
+       f. 写入 Instance Value Table
+       g. 如果该 Property 影响 transform_desc 的边界（如 max_width），
+          同步更新 Instance 的 resolved transform_desc
+          （例如 crop.max_width 从 8192 → 1920，resolved transform_desc.crop.max_w ← 1920）
+    5. 返回 Instance 句柄（携带 resolved transform_desc）
+```
+
+**关键语义**：
+
+- `driver->transform_template` 是编译期常量，所有 Instance 共享同一份只读模板
+- `instance->transform_desc` 是实例级 resolved 值，由模板 + overrides 共同决定
+- `entity->transform_desc` 从 Instance 拷贝，Resolver Phase 1 直接消费
+- overrides 只能**收紧** transform_desc 的边界值（降 max、升 min），不可放宽
+
+**关键约束**：override 只能**收紧**约束（降低 max、提高 min），不能放宽 Driver 声明的硬边界。
+
+### 6.3 Instance 创建流程
+
+```
+vsc_system_init():
+    1. 解析 Bitstream Descriptor → nodes[]
+    2. 解析 Board Config → sensor 型号、I2C 地址
+    3. 遍历 nodes[]:
+       a. driver = vsc_driver_find(node.type)
+          → 找不到 && node.optional → 跳过
+          → 找不到 && !node.optional → panic
+       b. instance = vsc_instance_create(driver, node.prop_overrides)
+       c. entity = vsc_entity_create(driver, instance)
+       d. 添加到 pipeline.entities[]
+    4. 遍历 nodes[].links[]:
+       a. 创建 pipeline.links[]
+    5. vsc_pipeline_build()
+       → 拓扑排序
+       → 自动桥接 optional entity
+```
+
+### 6.4 Bitstream Descriptor ↔ Driver 自动绑定
+
+**问题**：`system_graph.json` 中的 `"type": "crop"` 字符串如何可靠映射到
+`vsc_driver_find("crop")`？
+
+**绑定流程**：
+
+```
+Bitstream Descriptor
+  node.type = "crop"
+        │
+        ▼
+vsc_driver_find("crop")
+  ├── 1. 精确匹配 driver->name == "crop"          → ✅ 直接返回
+  ├── 2. 遍历所有 active driver 的 aliases[]       → ✅ 匹配 "crop" → 返回
+  └── 3. 未匹配
+         ├── node.optional == true  → ⚠️ 跳过，不报错
+         └── node.optional == false → ❌ panic: "Unknown driver type 'crop'"
+```
+
+**诊断输出（初始化失败时）**：
+
+```
+[VSC] ERROR: Bitstream node "crop_0" references unknown driver type "crop_v3"
+[VSC]        Known driver types:
+[VSC]          crop          (id=0x03, v1.0, active)
+[VSC]          binning       (id=0x04, v1.0, active)
+[VSC]          decoder       (id=0x05, v1.0, active)
+[VSC]        Did you mean "crop"? (alias mismatch: "crop_v3" not in aliases list)
+[VSC] HINT:  Add "crop_v3" to crop driver's aliases in drivers/registry.yaml
+[VSC]        or update the Bitstream Descriptor to use type "crop"
+```
+
+**Bitstream 校验 CI**（Vivado Tcl 脚本侧）：
+
+```tcl
+# Vivado Tcl 脚本：生成 system_graph.json 后校验 type 名称
+set registry [yaml::parse drivers/registry.yaml]
+set known_types {}
+foreach drv $registry::drivers {
+    if {$drv(status) == "active"} {
+        lappend known_types $drv(name)
+        foreach alias $drv(aliases) { lappend known_types $alias }
+    }
+}
+
+foreach node $graph::nodes {
+    if {$node(type) ni $known_types} {
+        error "Bitstream node '$node(id)' uses unknown type '$node(type)'"
+    }
+}
+```
+
+**Optional entity 的特殊处理**：
+
+```json
+// system_graph.json
+{ "type": "scaler", "id": "scaler_0", "optional": true }
+```
+
+如果 `scaler` Driver 不存在：
+- `optional: true` → 静默跳过，P0 的 auto-bridge 逻辑接管
+- `optional: false`（默认）→ 初始化失败
+
+---
+
+## 七、P1 对 P0 的影响
+
+P1 **不修改** P0 已冻结的任何接口。影响仅限于：
+
+| P0 组件 | P1 替换/补充 |
+|---------|-------------|
+| Entity 的 `drv_ctx`、`try_fmt_*`、`commit_fmt` | 从 `vsc_driver_t.ops` 复制到 Entity（驱动注册时） |
+| Entity 的 `transform_desc` | 从 Instance 的 resolved transform_desc 拷贝（模板 + overrides 解析后） |
+| 手工 `VSC_PROP_*` 宏 | 替换为生成的 `vsc_prop_ids.h` |
+| Property 元数据散落各处 | 统一到生成的 `vsc_prop_schema.c` |
+
+---
+
+## 八、P1 交付物清单
+
+| 序号 | 交付物 | 说明 |
+|------|--------|------|
+| 1 | `drivers/registry.yaml` | Driver_ID 注册表 + CI 校验脚本 + 生命周期报告 |
+| 2 | Schema YAML 规范文档 | 字段定义、类型系统、Flag 语义、Transform 映射 |
+| 3 | `tools/vsc_prop_gen.py` | 代码生成工具（确定性的，checksum 可复现） |
+| 4 | 生成产物模板 | `vsc_prop_ids.h`、`vsc_prop_strings.c`、`vsc_prop_schema.c` + 依赖图 |
+| 5 | `vsc_driver_t` 接口 | 驱动注册结构体 + 框架侧 `vsc_driver_find()` + aliases 解析 |
+| 6 | Instance override 校验 | `vsc_instance_create()` + override 收紧规则 + 依赖一致性 |
+| 7 | Bitstream 绑定校验 | type name → Driver 映射 + Vivado Tcl CI 脚本 |
+| 8 | 示例 Driver 迁移 | 将 crop / binning / sensor_imx477 迁移到新 Schema |
+
+---
+
+## 九、已知风险
+
+| 风险 | 缓解 |
+|------|------|
+| **手工 Driver_ID 分配冲突** | CI pre-commit hook 校验唯一性，registry.yaml 作为 single source of truth |
+| **Driver_ID 被意外回收** | 生命周期报告中标记 `deprecated`，CI 禁止为已分配 ID 注册新 Driver |
+| **max_ref 引用链循环** | 生成工具检测循环引用，报错退出 |
+| **Schema YAML 与 C 代码不同步** | 生成产物纳入 CMake 依赖链，YAML 变更自动触发重新生成 |
+| **Codegen 非确定性输出** | CI checksum 校验，禁止浮点随机化、固定排序规则 |
+| **MULTI_STAGE 递归生成深度** | 限制最大嵌套深度为 4，超出报错 |
+| **Instance override 绕过 Schema** | 校验逻辑在 `vsc_instance_create()` 中强制执行，不接受放宽松的 override |
+| **Bitstream type name 断裂** | `vsc_driver_find()` 支持 aliases；Vivado Tcl CI 校验 type 名称；未匹配时打印诊断 |
+| **依赖 Property 在 override 后不一致** | 依赖图生成 + Instance 创建时 fail-fast 校验 |
+
+### 风险 4：Schema 演化兼容性（二级风险）
+
+Schema YAML 会随 Driver 升级而变化，即使 Property ID 不变，以下变更也可能破坏 ABI：
+
+| 变更类型 | 示例 | 破坏性 |
+|---------|------|--------|
+| `type` 变更 | `u32` → `u64` | 🔴 BREAKING（Instance Value Table 内存布局改变） |
+| `min` 上移 | `min: 64` → `min: 128` | 🔴 BREAKING（旧 override 值 64 不再合法） |
+| `max` 下移 | `max: 8192` → `max: 4096` | 🔴 BREAKING（旧 override 值 8192 不再合法） |
+| enum 值删除 | `[RAW10, RAW12]` → `[RAW10]` | 🔴 BREAKING（旧配置引用 RAW12 失效） |
+| enum 值新增 | `[RAW10]` → `[RAW10, RAW12, RGB888]` | 🟢 NON-BREAKING |
+| `default` 变更 | `1920` → `1280` | 🟡 行为变更（需评估） |
+| 新增 Property | 新增 `roi.priority` | 🟢 NON-BREAKING |
+| `flags` 新增 `readonly` | 原可写 Property 变为只读 | 🔴 BREAKING |
+
+**缓解机制**：
+
+```yaml
+# drivers/crop/crop.schema.yaml
+driver: crop
+schema_version: 3          # ← 每次变更递增
+compatibility:
+  breaks:                  # 声明已知的破坏性变更（供 CI 和人工审查）
+    - version: 3
+      changes:
+        - "roi.width: type u32 → u64"
+        - "max_width: range [64,8192] → [128,4096]"
+```
+
+**CI 兼容性报告**（自动生成）：
+
+```
+# Schema Compatibility Report — crop.schema.yaml v2 → v3
+
+BREAKING:
+  crop.roi.width:  type u32 → u64
+  crop.max_width:  min 64 → 128
+  crop.max_width:  max 8192 → 4096
+
+NON_BREAKING:
+  crop.roi.format: added enum value RGB888
+  crop.roi.priority: new property (default=0)
+
+WARNING:
+  crop.roi.width:  default 1920 → 1280 (behavioral change, not ABI break)
+```
+
+CI 在 Schema YAML 变更时自动对比新旧版本，生成兼容性报告。
+如果存在 BREAKING 变更且 `compatibility.breaks` 中未声明 → CI 失败。
+
+### 风险 5：Generated Artifact 漂移（二级风险）
+
+生成文件（`vsc_prop_ids.h`、`vsc_prop_schema.c`、`vsc_prop_strings.c`）是 build artifact。
+开发者可能绕过 Codegen 直接手改这些文件，导致 Schema 与生成产物漂移。
+
+**检测机制**：
+
+```c
+/* vsc_prop_ids.h — 生成文件头部 */
+/* ═══════════════════════════════════════════════════════════════════════
+ *  GENERATED FILE — DO NOT EDIT
+ *
+ *  Source: drivers/crop/crop.schema.yaml, drivers/registry.yaml
+ *  Tool:   vsc_prop_gen.py v1.0.0
+ *  Schema Checksum: 0xA4B7129F   ← 编译期嵌入
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+#define VSC_SCHEMA_CHECKSUM  0xA4B7129F
+```
+
+**运行时校验**（每个 Driver 注册时执行一次）：
+
+```c
+int vsc_driver_register(const vsc_driver_t *driver)
+{
+    /* checksum 由 Codegen 编译进生成产物，Driver 编译期引用 */
+    if (driver->schema_checksum != VSC_SCHEMA_CHECKSUM) {
+        /* 生成文件被手动修改过，与原始 Schema YAML 不一致 */
+        return VSC_ERR_SCHEMA_CHECKSUM_MISMATCH;
+    }
+    /* ... register driver ... */
+}
+```
+
+`VSC_SCHEMA_CHECKSUM` 是 Codegen 对所有输入 YAML 文件内容的 SHA256 前 32-bit。
+如果开发者手改了 `vsc_prop_ids.h` 中的宏定义（如将 `((0x03<<8)|0x04)` 改为 `((0x03<<8)|0x05)`），
+checksum 仍然匹配——但运行时 Driver 的 `schema[4].prop_id` 与宏不一致会导致逻辑错误。
+
+因此**双重防护**：
+
+1. **Checksum**：检测生成文件整体是否被篡改
+2. **CI diff**：`git diff build/gen/` 为空则通过（生成产物与源代码一致）
+
+---
+
+## 十、P1.1 实现优先级
+
+P1 Architecture Freeze 后，按以下顺序推进实现：
+
+| 步骤 | 内容 | 输入 | 输出 | 验证方式 |
+|------|------|------|------|---------|
+| **Step 1** | Schema Compiler | `registry.yaml` + `*.schema.yaml` | `vsc_prop_ids.h` + `vsc_prop_strings.c` + `vsc_prop_schema.c` + 依赖图 | CI checksum 一致性 |
+| **Step 2** | Schema Validation | 生成的 artifacts | 兼容性报告 + ID 冲突报告 + 依赖图校验 | CI pre-commit hook |
+| **Step 3** | Driver Registration | `vsc_driver_t` 实例 + 生成产物 | `vsc_driver_register()` + `vsc_driver_find()` + `vsc_driver_registry_dump()` | 单元测试：按 name/alias 查找 |
+| **Step 4** | Bitstream Loader | `system_graph.json` + Board Config | `vsc_system_init()` → Instance 创建 → override 应用 → transform 解析 → topo sort → Pipeline 构建 | 集成测试：完整 init → try_fmt → commit |
+| **Step 5** | 示例迁移 | P0 的 crop/binning/sensor_imx477 手写代码 | 迁移到 YAML + Codegen + Driver 注册 | 28 个已有 P0 测试全部通过 |
+
+---
+
+## 十一、P1 Architecture Freeze 声明
+
+以下内容已冻结，P1.1 实现阶段不可修改（需走正式的 Schema 演化兼容性流程）：
+
+| 冻结项 | 冻结范围 |
+|--------|---------|
+| Property ID ABI | 16-bit = (Driver_ID << 8) \| Property_Index，Driver_ID 永不复用 |
+| Driver 生命周期 | active → deprecated，ID 不回收，aliases 向后兼容 |
+| transform 归属 | Driver template → Instance resolve → Entity copy |
+| Schema YAML 语义 | type / flags / min / max / default / max_ref / transform |
+| Codegen 产物格式 | vsc_prop_ids.h + vsc_prop_strings.c + vsc_prop_schema.c + 依赖图 |
+| Codegen 确定性 | 固定排序、禁止浮点随机化、CI checksum |
+| Driver Registry ABI | vsc_driver_t 结构体 + vsc_driver_find() + 注册表 |
+| Bitstream 绑定 | type name 精确匹配 → aliases 回退 → optional 跳过 → panic |
+| Override 规则 | 只收紧不放宽，依赖一致性在 Instance 创建时 fail-fast |
+| P0 Resolver | vsc_types.h、vsc_resolver.c 全部接口 |
+
+**不在 freeze 范围内**（留给 P2+ 或未来扩展）：
+
+- Feature System（VSC_FEATURE_AUTO_EXPOSURE 等推导逻辑）
+- Algorithm Service（AE/AWB/AF 的调度框架）
+- Control Batch（传感器批量写入的原子事务）
+- Property 值的持久化存储策略
+- 统计缓冲区（Statistics Provider 的共享内存布局）
+- MULTI_STAGE 的分叉/条件路径表达能力（保持线性组合）
+
+**后续新增功能应建立在冻结的基础设施之上，不再修改基础设施本身。**
+
+### 风险 6：Property 依赖环路（编译期可检测）
+
+**风险**：`max_ref` / `min_ref` 的引用链可能形成环路（A→B→C→A），
+导致 Instance 创建时的 dependency evaluation 死循环。
+
+**等级**：一级。但**编译期可完全消除**——在 Schema Compiler 的 Dependency Graph
+Builder 阶段使用 Kahn 拓扑排序检测环路，发现即 Fatal（E4001），不产出生成文件。
+
+详见 `docs/vsc-schema-compiler-contract.md` §5、§7。
