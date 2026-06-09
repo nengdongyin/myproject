@@ -38,6 +38,17 @@ extern "C" {
 #define USE_FLASHDB 0
 #endif
 
+/** @brief 启用 iniparser 存储后端 (需链接 iniparser 库)
+ *  1=开 0=关。与 USE_FLASHDB 互斥，同时为 1 时编译报错 */
+#ifndef USE_INIPARSER
+#define USE_INIPARSER 0
+#endif
+
+/* 存储后端互斥检查 */
+#if (USE_FLASHDB + USE_INIPARSER) > 1
+#error "USE_FLASHDB and USE_INIPARSER are mutually exclusive"
+#endif
+
 /* ================================================================
  *  OS 移植选择 (三选一，互斥，仅一个可设为 1)
  * ================================================================ */
@@ -74,6 +85,15 @@ extern "C" {
 /** @brief 裸机模式静态内存池大小 (字节) */
 #ifndef PARAM_PORT_POOL_SIZE
 #define PARAM_PORT_POOL_SIZE 4096
+#endif
+
+/* ================================================================
+ *  iniparser 存储后端
+ * ================================================================ */
+
+/** @brief INI 持久化目录 (Linux 文件系统路径) */
+#ifndef PARAM_INI_BASE_DIR
+#define PARAM_INI_BASE_DIR "/data/params"
 #endif
 
 /* ================================================================

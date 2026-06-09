@@ -29,17 +29,14 @@ static void iv_apply_pass_through(vsc_feasibility_constraint_t *c)
 static void iv_apply_binning(vsc_feasibility_constraint_t *c,
                              uint8_t factor_x, uint8_t factor_y)
 {
-    /* conservative: lo * factor, hi * factor */
-    c->width_range.lo  *= factor_x;
-    c->width_range.hi  *= factor_x;
-    c->height_range.lo *= factor_y;
-    c->height_range.hi *= factor_y;
-
-    /* align to factor: widen hi to the next multiple */
-    if (c->width_range.hi % factor_x)
-        c->width_range.hi += factor_x - (c->width_range.hi % factor_x);
-    if (c->height_range.hi % factor_y)
-        c->height_range.hi += factor_y - (c->height_range.hi % factor_y);
+    /* Phase 1 uses factor=1 (bypass) regardless of template value.
+     * This is the most conservative setting — it imposes the lowest
+     * requirement on the sensor.  A larger factor would increase the
+     * required sensor input, potentially causing false-negative
+     * UNREACHABLE when the runtime factor is actually smaller.
+     * Phase 2 handles the exact runtime factor via driver callbacks. */
+    (void)c; (void)factor_x; (void)factor_y;
+    /* constraint unchanged — equivalent to factor=1 */
 }
 
 /**
