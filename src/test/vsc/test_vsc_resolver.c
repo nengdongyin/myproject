@@ -11,6 +11,7 @@
 #include "unity.h"
 #include "test_suite.h"
 #include "vsc_types.h"
+#include "vsc_resolver.h"
 #include "vsc_driver_registry.h"
 #include "crop_vsc.h"
 #include "binning_vsc.h"

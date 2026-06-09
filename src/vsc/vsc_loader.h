@@ -83,10 +83,12 @@ int vsc_system_init(const vsc_system_desc_t *desc,
                     vsc_pipeline_t *pipeline);
 
 /**
- * @brief Build-time generated init (produced by vsc_prop_gen.py from
- *        system_graph.json + board.json).
- *
- * Calls vsc_system_init() with pre-initialized descriptor data.
+ * @brief 构建期生成的系统初始化（由 vsc_prop_gen.py 从
+ *        system_graph.json + board.json 自动生成）
+ * @details 调用 vsc_system_init()，但使用编译期预初始化的描述符数据，
+ *          避免运行期 JSON 解析开销。生成的代码位于 gen/vsc/vsc_system_init.c。
+ * @param[out] pipeline 待初始化的管线结构体指针
+ * @return VSC_OK（0）或负值错误码
  */
 int vsc_system_init_default(vsc_pipeline_t *pipeline);
 

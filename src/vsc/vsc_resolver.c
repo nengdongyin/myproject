@@ -9,6 +9,7 @@
  */
 
 #include "vsc_types.h"
+#include "vsc_resolver.h"
 #include <string.h>
 
 /* ========================================================================
@@ -16,7 +17,9 @@
  * ======================================================================== */
 
 /**
- * @brief Apply a PASS_THROUGH inverse: constraint unchanged.
+ * @brief 逆变换 — PASS_THROUGH：约束不变
+ * @param[in,out] c 可行性约束（不修改）
+ * @details 直通实体对格式无任何改变，逆传播时约束完全透传。
  */
 static void iv_apply_pass_through(vsc_feasibility_constraint_t *c)
 {
@@ -24,7 +27,15 @@ static void iv_apply_pass_through(vsc_feasibility_constraint_t *c)
 }
 
 /**
- * @brief Apply a BINNING inverse: multiply width/height ranges by factor.
+ * @brief 逆变换 — BINNING：保守策略，Phase 1 使用 factor=1
+ * @param[in,out] c        可行性约束
+ * @param[in]     factor_x X 方向缩放因子（Phase 1 忽略）
+ * @param[in]     factor_y Y 方向缩放因子（Phase 1 忽略）
+ * @details Phase 1 可行性检查采用最保守估计（factor=1），
+ *          约束完全不变。这避免了对传感器提出过高的输入要求，
+ *          防止因运行时缩放因子较小而产生假阴性 UNREACHABLE。
+ *          Phase 2 通过驱动回调处理精确的运行时因子。
+ * @see vsc_resolver_forward_propagate() Phase 2 精确传播
  */
 static void iv_apply_binning(vsc_feasibility_constraint_t *c,
                              uint8_t factor_x, uint8_t factor_y)
@@ -40,11 +51,19 @@ static void iv_apply_binning(vsc_feasibility_constraint_t *c,
 }
 
 /**
- * @brief Apply a CROP inverse: widen constraint conservatively.
- *
- * A CROP entity can only reduce (or pass through) dimensions.  To guarantee
- * output in [lo, hi], the input must be >= effective_lo (at minimum) and
- * <= crop_max (upper bound of the crop hardware).
+ * @brief 逆变换 — CROP：扩展约束区间以反映裁剪能力
+ * @param[in,out] c     可行性约束
+ * @param[in]     min_w 裁剪硬件的最小输出宽度
+ * @param[in]     min_h 裁剪硬件的最小输出高度
+ * @param[in]     max_w 裁剪硬件的最大输出宽度（上界）
+ * @param[in]     max_h 裁剪硬件的最大输出高度（上界）
+ * @return 0 成功；-1 表示约束变为空（意图超出裁剪能力）
+ * @details CROP 实体只能减小（或透传）尺寸。为保证输出落在
+ *          约束要求的 [lo, hi] 区间内，输入必须满足：
+ *          - 输入 ≥ 有效下界（eff_lo_w, eff_lo_h）
+ *          - 输入 ≤ 裁剪最大输出（max_w, max_h）
+ *          该函数将约束区间扩展为 [eff_lo, crop_max]，
+ *          此区间即传感器的输入要求。
  */
 static int iv_apply_crop(vsc_feasibility_constraint_t *c,
                          uint32_t min_w, uint32_t min_h,
@@ -70,8 +89,14 @@ static int iv_apply_crop(vsc_feasibility_constraint_t *c,
 }
 
 /**
- * @brief Apply a PIXEL_FMT_CONV inverse: if output fmt matches fmt_out,
- *        require input fmt to be fmt_in.
+ * @brief 逆变换 — PIXEL_FMT_CONV：格式要求转换为输入格式
+ * @param[in,out] c       可行性约束
+ * @param[in]     fmt_in  转换器接受的输入格式
+ * @param[in]     fmt_out 转换器产生的输出格式
+ * @return 0 成功；-1 表示当前要求格式与转换器不兼容
+ * @details 如果当前约束的 required_format 与转换器输出格式匹配
+ *          （或为 VSC_FMT_INVALID 通配），则将要求格式切换为输入格式。
+ *          不匹配时返回 -1，表示此转换器无法满足当前的格式要求。
  */
 static int iv_apply_fmt_conv(vsc_feasibility_constraint_t *c,
                              uint32_t fmt_in, uint32_t fmt_out)
@@ -87,8 +112,15 @@ static int iv_apply_fmt_conv(vsc_feasibility_constraint_t *c,
 }
 
 /**
- * @brief Run full inverse transform for one entity's transform_desc.
- * @return 0 on success, -1 if constraint becomes empty.
+ * @brief 对单个 Entity 的变换描述符执行完整逆变换
+ * @param[in]     desc Entity 的变换描述符
+ * @param[in,out] c    可行性约束（会被修改）
+ * @return 0 成功；-1 约束变为空（不可达）
+ * @details 根据 desc->type 分发到对应的逆变换函数。
+ *          对于 MULTI_STAGE 类型，按逆序（从最后一级到第一级）
+ *          递归调用自身——这是逆传播的核心递归入口。
+ * @see iv_apply_pass_through(), iv_apply_binning(),
+ *      iv_apply_crop(), iv_apply_fmt_conv()
  */
 static int feasibility_inverse_one(const vsc_fmt_transform_desc_t *desc,
                                    vsc_feasibility_constraint_t *c)
@@ -130,9 +162,35 @@ static int feasibility_inverse_one(const vsc_fmt_transform_desc_t *desc,
 }
 
 /* ========================================================================
- *  Pipeline build — topological sort (Kahn's algorithm, STREAM links only)
+ *  Pipeline build — 拓扑排序（Kahn 算法，仅 STREAM 链路）
  * ======================================================================== */
 
+/**
+ * @brief 构建管线拓扑：拓扑排序、邻接表、端点/TAP 收集
+ * @param[in,out] pipeline 包含 entities[] 和 links[] 的管线
+ * @return VSC_OK 或 VSC_ERR_TOPOLOGY_BROKEN（存在环或断连）
+ * @details 采用 **Kahn 算法**（基于入度的拓扑排序）处理 STREAM 链路：
+ *          **阶段 1 — 构建入度与邻接表**
+ *          遍历所有 STREAM 链路，为每个目标节点增加入度计数，
+ *          同时填充 adj_dst[][] / adj_type[][] 邻接矩阵。
+ *          **阶段 2 — TAP 观察者收集**
+ *          遍历 TAP 链路，将目标为 ANALYZER 实体的节点加入
+ *          tap_observers[] 列表，同时将 TAP 链路加入邻接表
+ *          （供 Phase 2 forward_propagate 使用）。
+ *          **阶段 3 — Kahn 初始化**
+ *          将所有入度为 0 的节点入队。
+ *          **阶段 4 — Kahn 主循环**
+ *          出队节点，写入 execution_order[]，递减其下游邻居的入度，
+ *          入度归零的下游节点入队。
+ *          **阶段 5 — 环检测**
+ *          遍历所有节点，若仍有入度 > 0 的节点则存在环，
+ *          返回 VSC_ERR_TOPOLOGY_BROKEN。
+ *          **阶段 6 — 端点收集**
+ *          将所有 VSC_ENTITY_ENDPOINT 类型的节点加入 endpoints[]。
+ *          最后将管线状态设为 UNCONFIGURED。
+ * @note 时间复杂度 O(V + E)，空间复杂度 O(V²)（固定大小邻接矩阵）
+ * @warning 调用前必须确保 entities[] 和 links[] 已填充完毕
+ */
 int vsc_pipeline_build(vsc_pipeline_t *pipeline)
 {
     uint8_t i, j;
@@ -231,6 +289,27 @@ int vsc_pipeline_build(vsc_pipeline_t *pipeline)
  *  Optional entity auto-bridging
  * ======================================================================== */
 
+/**
+ * @brief 移除可选 Entity 并尝试自动桥接
+ * @param[in,out] pipeline   管线
+ * @param[in]     entity_idx 要移除的 Entity 索引
+ * @return VSC_OK、VSC_ERR_CANNOT_AUTO_BRIDGE 或 VSC_ERR_TOPOLOGY_BROKEN
+ * @details 自动桥接策略处理三种拓扑情况：
+ *          **SISO（单入单出）** — 最常见情况：
+ *          创建一条直接连接 in_src[0] → out_dst[0] 的新 STREAM 链路，
+ *          替代被移除的节点。
+ *          **MIMO（多入或多出）** — 无法自动桥接：
+ *          返回 VSC_ERR_CANNOT_AUTO_BRIDGE，需要应用层干预。
+ *          **叶节点/根节点（0 入或 0 出）** — 直接移除：
+ *          无需创建新链路，仅删除该节点及其关联链路即可。
+ *          操作完成后：
+ *          1. 删除所有涉及 entity_idx 的链路（压缩 links[] 数组）
+ *          2. 删除实体本身（压缩 entities[] 数组并前移后续元素）
+ *          3. 修正所有链路中的 Entity 索引（因数组压缩导致索引偏移）
+ *          4. 重新调用 vsc_pipeline_build() 重建拓扑
+ * @warning 本函数会修改 entities[] 和 links[] 的内容和数量，
+ *          调用者必须确保外部引用（如 entity_idx）在调用后失效
+ */
 int vsc_pipeline_remove_optional(vsc_pipeline_t *pipeline, uint8_t entity_idx)
 {
     if (entity_idx >= pipeline->num_entities)
@@ -302,7 +381,13 @@ int vsc_pipeline_remove_optional(vsc_pipeline_t *pipeline, uint8_t entity_idx)
     return vsc_pipeline_build(pipeline);
 }
 
-/* ── helper: init constraint from intent ── */
+/**
+ * @brief 从用户意图初始化可行性约束
+ * @param[out] c      待初始化的约束
+ * @param[in]  intent 用户期望的输出格式
+ * @details 将意图的 width/height 设为精确的点区间 [val, val]，
+ *          pixel_format 直接赋值。帧率同样精确匹配。
+ */
 static void constraint_from_intent(vsc_feasibility_constraint_t *c,
                                    const vsc_mbus_fmt_t *intent)
 {
@@ -363,9 +448,34 @@ static uint8_t find_reverse_path(const vsc_pipeline_t *pipeline,
 }
 
 /* ========================================================================
- *  Phase 1 — Feasibility check (per-endpoint reverse path)
+ *  Phase 1 — 可行性检查（逐端点逆传播）
  * ======================================================================== */
 
+/**
+ * @brief Phase 1 可行性检查：从输出端点逆向传播约束到传感器
+ * @param[in]  pipeline 已构建的管线（需已完成拓扑排序）
+ * @param[in]  intent   用户期望的输出格式
+ * @param[out] result   协商结果（失败时 reachable_max 会填充可达上限）
+ * @return VSC_OK 表示可行性通过；VSC_ERR_UNREACHABLE 表示不可达
+ * @details 实现三个分支路径：
+ *          **路径 A — 空管线保护**
+ *          entities[] 或 execution_order[] 为空时直接返回失败。
+ *          **路径 B — 无端点回退（线性管线）**
+ *          当 pipeline->num_endpoints == 0 时，按 execution_order 逆序
+ *          遍历所有 STREAM 实体，逐实体执行逆变换。最后检查传感器约束。
+ *          这是一个简化的线性路径，假设管线为单链结构。
+ *          **路径 C — 逐端点检查（主路径）**
+ *          对每个注册的端点：
+ *          1. 调用 find_reverse_path() 回溯到传感器，获得逆序路径
+ *          2. 沿路径逐实体执行 feasibility_inverse_one()
+ *          3. 对传感器进行最终约束检查（分辨率区间 + 像素格式）
+ *          4. 至少一个端点通过即视为可行
+ *          所有路径在失败时填充 result->reachable_max，
+ *          记录从 CROP 实体或传感器获取的最大可达尺寸。
+ * @note 本函数不修改管线状态（const pipeline），可安全并发调用
+ * @warning 本函数约 200 行，包含 goto 跳转（fail_no_endpoints /
+ *          check_sensor_linear），未来可考虑拆分为独立子函数
+ */
 int vsc_resolver_feasibility_check(const vsc_pipeline_t *pipeline,
                                    const vsc_mbus_fmt_t *intent,
                                    vsc_resolver_result_t *result)
@@ -539,9 +649,40 @@ check_sensor_linear:
 }
 
 /* ========================================================================
- *  Phase 2 — Forward propagation (BFS along STREAM links)
+ *  Phase 2 — 正向传播（沿 STREAM 链路的 BFS）
  * ======================================================================== */
 
+/**
+ * @brief Phase 2 正向传播：从传感器沿 STREAM 链路 BFS 传播格式
+ * @param[in,out] pipeline 管线（会修改每个 Entity 的 prop_state）
+ * @param[in]     intent   用户期望的输出格式
+ * @return VSC_OK 或 VSC_ERR_NO_SENSOR / VSC_ERR_TOPOLOGY_BROKEN
+ * @details 采用 **BFS 算法**（广度优先搜索）沿 STREAM 链路传播格式：
+ *          **初始化阶段**
+ *          重置所有实体的 prop_state（sink_fmt/source_fmt 设为 INVALID，
+ *          active=true，visited=false）。
+ *          **根节点发现**
+ *          找到所有 SENSOR 实体作为 BFS 的根节点。对每个 SENSOR：
+ *          - 如果有 try_fmt_source 回调，调用之获取传感器输出格式
+ *          - 否则直接将 intent 赋值给 source_fmt
+ *          - 标记 visited，入队
+ *          - 如果没有 SENSOR，返回 VSC_ERR_NO_SENSOR
+ *          **BFS 主循环**
+ *          对队首节点 u，遍历其所有下游邻居：
+ *          - **STREAM 链路**：
+ *            Step A+B: 将 u 的 source_fmt 传给下游的 try_fmt_sink，
+ *            获取下游的 sink_fmt。失败则标记 inactive。
+ *            Step C: 如果下游是 STREAM 实体，调用 try_fmt_source 计算
+ *            其输出格式；否则 source_fmt = sink_fmt
+ *            Step D: 将下游入队（若未访问过）
+ *          - **TAP 链路**：
+ *            仅做被动验证——调用 try_fmt_sink 检查 TAP 是否接受该格式，
+ *            但不入队（TAP 不传播格式）。
+ *          **完成检查**
+ *          确保所有 STREAM/ENDPOINT 实体均被访问，否则返回
+ *          VSC_ERR_TOPOLOGY_BROKEN。
+ * @note 每次调用 vsc_resolver_try_fmt() 都会重新执行本函数
+ */
 int vsc_resolver_forward_propagate(vsc_pipeline_t *pipeline,
                                    const vsc_mbus_fmt_t *intent)
 {
@@ -654,9 +795,17 @@ int vsc_resolver_forward_propagate(vsc_pipeline_t *pipeline,
 }
 
 /* ========================================================================
- *  adjustment_trace helpers
+ *  adjustment_trace helpers — 格式变更检测与轨迹记录
  * ======================================================================== */
 
+/**
+ * @brief 检测 sink 到 source 之间哪个格式字段发生了变化
+ * @param[in] sink   输入端格式
+ * @param[in] source 输出端格式
+ * @return 第一个变化的字段 ID，无变化返回 VSC_FMT_FIELD_NONE
+ * @details 按 width → height → pixel_format → framerate 的优先级顺序检测，
+ *          返回第一个不匹配的字段。
+ */
 static vsc_fmt_field_t detect_field_change(const vsc_mbus_fmt_t *sink,
                                            const vsc_mbus_fmt_t *source)
 {
@@ -669,6 +818,15 @@ static vsc_fmt_field_t detect_field_change(const vsc_mbus_fmt_t *sink,
     return VSC_FMT_FIELD_NONE;
 }
 
+/**
+ * @brief 根据 Entity 的变换类型推断格式调整的原因分类
+ * @param[in] e     Entity 指针
+ * @param[in] field 发生变化的格式字段
+ * @return 调整原因枚举值
+ * @details BINNING → VSC_ADJUST_HALVE（halve 语义不准确，实际为缩放），
+ *          PIXEL_FMT_CONV → VSC_ADJUST_FORMAT_CONV，
+ *          CROP/其他 → VSC_ADJUST_CLAMP。
+ */
 static vsc_adjust_reason_t infer_reason(const vsc_entity_t *e,
                                         vsc_fmt_field_t field)
 {
@@ -686,6 +844,18 @@ static vsc_adjust_reason_t infer_reason(const vsc_entity_t *e,
     }
 }
 
+/**
+ * @brief 向调整轨迹中添加一条记录
+ * @param[in,out] trace  轨迹容器
+ * @param[in]     e      相关 Entity
+ * @param[in]     pad    Pad 名称（"SINK" 或 "SOURCE"）
+ * @param[in]     field  变化的字段
+ * @param[in]     orig   变化前的格式值
+ * @param[in]     adj    变化后的格式值
+ * @param[in]     reason 调整原因
+ * @param[in]     detail 原因的文字说明
+ * @details 轨迹条目达到 VSC_MAX_TRACE_ENTRIES 上限后静默丢弃后续记录。
+ */
 static void add_trace_entry(vsc_adjustment_trace_t *trace,
                             const vsc_entity_t *e,
                             const char *pad,
@@ -709,9 +879,33 @@ static void add_trace_entry(vsc_adjustment_trace_t *trace,
 }
 
 /* ========================================================================
- *  Phase 3 — Convergence
+ *  Phase 3 — 收敛（收集端点格式 + 构建调整轨迹 + 判定协商状态）
  * ======================================================================== */
 
+/**
+ * @brief Phase 3 收敛：收集端点格式、构建调整轨迹、判定协商状态
+ * @param[in]  pipeline 已完成正向传播的管线
+ * @param[in]  intent   用户原始意图格式
+ * @param[out] result   协商结果（填充 primary_fmt、endpoint_fmts、trace、status）
+ * @return VSC_OK 或 VSC_ERR_NO_ACTIVE_ENDPOINT
+ * @details 三个子阶段：
+ *          **子阶段 1 — 端点格式收集**
+ *          - 有显式端点：遍历 endpoints[]，收集所有 active 且格式有效的端点
+ *          - 无显式端点（回退）：从 execution_order 逆序查找最后一个
+ *            STREAM 实体，取其 source_fmt（优先）或 sink_fmt 作为主输出
+ *          - 第一个有效端点即设为主输出（primary_fmt）
+ *          - 无任何有效端点时返回 VSC_ERR_NO_ACTIVE_ENDPOINT
+ *          **子阶段 2 — 调整轨迹构建**
+ *          沿 execution_order 遍历，对每个 Entity 的 SOURCE pad
+ *          检测 sink → source 之间的格式变化，记录到 trace 中。
+ *          同时检查所有 TAP 观察者：active=false 的 TAP 记录一条
+ *          VSC_ADJUST_REJECTED 条目。
+ *          **子阶段 3 — 协商状态判定**
+ *          - primary_fmt == intent → VSC_NEGOTIATE_EXACT
+ *          - 否则 → VSC_NEGOTIATE_ADJUSTED
+ *          - 存在任何 TAP 被拒绝 → 降级为 VSC_NEGOTIATE_PARTIAL
+ * @see vsc_resolver_forward_propagate() 必须先执行
+ */
 int vsc_resolver_converge(vsc_pipeline_t *pipeline,
                           const vsc_mbus_fmt_t *intent,
                           vsc_resolver_result_t *result)
@@ -829,9 +1023,22 @@ int vsc_resolver_converge(vsc_pipeline_t *pipeline,
 }
 
 /* ========================================================================
- *  Phase 4 — Commit
+ *  Phase 4 — 硬件提交（将协商结果写入 FPGA 寄存器）
  * ======================================================================== */
 
+/**
+ * @brief Phase 4 提交：将最终协商格式写入各实体的硬件寄存器
+ * @param[in,out] pipeline  管线
+ * @param[in]     final_fmt 协商确定的最终格式
+ * @return VSC_OK 或 VSC_ERR_BUSY / VSC_ERR_COMMIT_FAILED
+ * @details 沿 execution_order（SENSOR → … → ENDPOINT）遍历，
+ *          对每个有 commit_fmt 回调的实体调用之。
+ *          - 若管线当前处于 STREAMING 状态，拒绝提交（VSC_ERR_BUSY）
+ *          - 任何实体的 commit_fmt 失败会导致管线标记为 DIRTY，
+ *            且不执行回滚（硬件状态不确定）
+ *          - 全部成功则将管线状态设为 CONFIGURED
+ * @warning 部分提交失败不回滚——调用者应在重试前重建管线
+ */
 int vsc_pipeline_commit_fmt(vsc_pipeline_t *pipeline,
                             const vsc_mbus_fmt_t *final_fmt)
 {
@@ -860,9 +1067,28 @@ int vsc_pipeline_commit_fmt(vsc_pipeline_t *pipeline,
 }
 
 /* ========================================================================
- *  Full try_fmt pipeline
+ *  完整 try_fmt 管线（Phase 1 → 2 → 3，不含 commit）
  * ======================================================================== */
 
+/**
+ * @brief 完整格式协商管线：Phase 1（可行性）→ Phase 2（正向传播）→ Phase 3（收敛）
+ * @param[in]  pipeline 已构建的管线
+ * @param[in]  intent   用户期望的输出格式
+ * @param[out] result   协商结果（含状态、主格式、端点格式、轨迹）
+ * @return VSC_OK 或负值错误码
+ * @details 三阶段流水线：
+ *          1. **意图校验** — width/height/pixel_format 合法性检查
+ *          2. **Phase 1** — 可行性逆传播检查，不可达时直接返回
+ *             （result.reachable_max 已填充）
+ *          3. **Phase 2** — BFS 正向传播，填充各实体的 prop_state
+ *          4. **Phase 3** — 收敛：收集端点格式、构建轨迹、判定状态
+ * @note 本函数不执行硬件提交（commit），调用者需显式调用
+ *        vsc_pipeline_commit_fmt() 将结果写入硬件。
+ * @see vsc_resolver_feasibility_check()
+ * @see vsc_resolver_forward_propagate()
+ * @see vsc_resolver_converge()
+ * @see vsc_pipeline_commit_fmt()
+ */
 int vsc_resolver_try_fmt(vsc_pipeline_t *pipeline,
                          const vsc_mbus_fmt_t *intent,
                          vsc_resolver_result_t *result)

@@ -44,6 +44,12 @@ extern "C" {
  *  Media-bus format descriptor
  * ======================================================================== */
 
+/**
+ * @brief 媒体总线格式描述符
+ * @details 描述视频数据在 Entity 之间传输时的格式参数，
+ *          包括分辨率、像素格式（FourCC 风格）、帧率、位深和通道数。
+ *          帧率分子为 0 表示"不关心"（通配）。
+ */
 typedef struct {
     uint32_t width;
     uint32_t height;
@@ -57,6 +63,12 @@ typedef struct {
 
 #define VSC_MBUS_FMT_INIT {0, 0, VSC_FMT_INVALID, 0, 1, 0, 0, {0}}
 
+/**
+ * @brief 比较两个格式描述符是否完全相等
+ * @param[in] a 第一个格式描述符指针
+ * @param[in] b 第二个格式描述符指针
+ * @return 逐字段相等时返回 true
+ */
 static inline bool vsc_fmt_equal(const vsc_mbus_fmt_t *a, const vsc_mbus_fmt_t *b)
 {
     return a->width == b->width &&
@@ -68,6 +80,11 @@ static inline bool vsc_fmt_equal(const vsc_mbus_fmt_t *a, const vsc_mbus_fmt_t *
            a->lanes == b->lanes;
 }
 
+/**
+ * @brief 检查格式描述符是否有效
+ * @param[in] f 格式描述符指针
+ * @return pixel_format 非 INVALID 且宽高均大于 0 时返回 true
+ */
 static inline bool vsc_fmt_is_valid(const vsc_mbus_fmt_t *f)
 {
     return f->pixel_format != VSC_FMT_INVALID && f->width > 0 && f->height > 0;
@@ -161,11 +178,21 @@ struct vsc_fmt_transform_desc {
  *  Interval for feasibility constraint propagation
  * ======================================================================== */
 
+/**
+ * @brief 整数闭区间，用于可行性约束传播
+ * @details lo ≤ hi 表示合法区间；lo > hi 表示空区间（无合法值）。
+ *          hi = UINT32_MAX 表示上界无限制。
+ */
 typedef struct {
-    uint32_t lo;   /* inclusive */
-    uint32_t hi;   /* inclusive, UINT32_MAX = unbounded upper */
+    uint32_t lo;   /**< 下界（包含） */
+    uint32_t hi;   /**< 上界（包含），UINT32_MAX 表示无限制 */
 } vsc_interval_t;
 
+/**
+ * @brief 判断区间是否为空
+ * @param[in] iv 区间指针
+ * @return lo > hi 时返回 true
+ */
 static inline bool vsc_interval_is_empty(const vsc_interval_t *iv)
 {
     return iv->lo > iv->hi;
@@ -175,23 +202,36 @@ static inline bool vsc_interval_is_empty(const vsc_interval_t *iv)
  *  Feasibility constraint (output of inverse propagation)
  * ======================================================================== */
 
+/**
+ * @brief 可行性约束 — 逆传播的输出
+ * @details Phase 1 可行性检查将用户意图从端点沿管线逆向传播到传感器，
+ *          生成此约束。如果传感器的能力范围覆盖该约束，则协商可行。
+ *          required_format = VSC_FMT_INVALID 表示格式方面无要求（通配）。
+ */
 typedef struct {
-    vsc_interval_t width_range;
-    vsc_interval_t height_range;
-    uint32_t       required_format;   /* VSC_FMT_INVALID = any */
-    uint32_t       frame_rate_num;
-    uint32_t       frame_rate_den;
+    vsc_interval_t width_range;        /**< 宽度允许区间 [lo, hi] */
+    vsc_interval_t height_range;       /**< 高度允许区间 [lo, hi] */
+    uint32_t       required_format;    /**< 要求的像素格式，VSC_FMT_INVALID 表示任意 */
+    uint32_t       frame_rate_num;     /**< 要求的帧率分子 */
+    uint32_t       frame_rate_den;     /**< 要求的帧率分母 */
 } vsc_feasibility_constraint_t;
 
 /* ========================================================================
  *  Propagation state (per-entity, reset each try)
  * ======================================================================== */
 
+/**
+ * @brief 单次格式协商中每个 Entity 的传播状态
+ * @details 每次调用 vsc_resolver_try_fmt() 时重置。
+ *          sink_fmt 记录该实体接收到的输入格式，
+ *          source_fmt 记录该实体产生的输出格式，
+ *          visited/active 供 BFS 传播算法使用。
+ */
 typedef struct {
-    vsc_mbus_fmt_t sink_fmt;
-    vsc_mbus_fmt_t source_fmt;
-    bool           visited;
-    bool           active;
+    vsc_mbus_fmt_t sink_fmt;    /**< 输入侧（SINK pad）协商后的格式 */
+    vsc_mbus_fmt_t source_fmt;  /**< 输出侧（SOURCE pad）协商后的格式 */
+    bool           visited;     /**< BFS 是否已访问过该节点 */
+    bool           active;      /**< 该实体在当前协商中是否有效 */
 } vsc_propagation_state_t;
 
 /* ========================================================================
@@ -200,6 +240,14 @@ typedef struct {
 
 typedef struct vsc_ip_ops vsc_ip_ops_t;
 
+/**
+ * @brief 视频管线中的一个处理节点
+ * @details Entity 是 Pipeline 图的基本顶点，代表传感器、
+ *          FPGA IP 核（crop/binning/decoder）、分析器或输出端点。
+ *          每个 Entity 携带一个 transform_desc（Phase 1 代数模型）
+ *          和一个可选的 ops 虚表（Phase 2 精确模型）。
+ *          生命周期由 vsc_pipeline_t 管理，无独立分配。
+ */
 typedef struct vsc_entity {
     char                      name[VSC_MAX_ENTITY_NAME];
     vsc_entity_class_t        entity_class;
@@ -312,27 +360,47 @@ typedef struct {
  *  Link
  * ======================================================================== */
 
+/**
+ * @brief 两个 Entity 之间的有向连接
+ * @details Link 表示数据流方向（src → dst），分为 STREAM（主数据流）
+ *          和 TAP（被动观测）两种类型。flags 字段用于标记链路状态
+ *          （如 VSC_LINK_FLAG_ENABLED）。
+ */
 typedef struct {
-    uint8_t          src_entity;   /* index into pipeline.entities[] */
-    uint8_t          dst_entity;
-    vsc_link_type_t  type;
-    uint8_t          flags;        /* reserved */
-    uint8_t          reserved;
+    uint8_t          src_entity;   /**< 源 Entity 在 pipeline.entities[] 中的索引 */
+    uint8_t          dst_entity;   /**< 目标 Entity 在 pipeline.entities[] 中的索引 */
+    vsc_link_type_t  type;         /**< 链路类型：STREAM 或 TAP */
+    uint8_t          flags;        /**< 链路标志位（如 VSC_LINK_FLAG_ENABLED） */
+    uint8_t          reserved;     /**< 保留字段 */
 } vsc_link_t;
 
 #define VSC_LINK_FLAG_ENABLED  0x01
 
 /* ========================================================================
- *  Pipeline — the central graph container
+ *  Pipeline — 核心图容器
  * ======================================================================== */
 
+/**
+ * @brief 管线状态枚举
+ * @details 用于跟踪管线生命周期：UNCONFIGURED → CONFIGURED（commit 后）→
+ *          STREAMING（流传输中）→ DIRTY（部分提交失败需重建）。
+ */
 typedef enum {
-    VSC_PIPELINE_UNCONFIGURED = 0,
-    VSC_PIPELINE_CONFIGURED   = 1,
-    VSC_PIPELINE_STREAMING    = 2,
-    VSC_PIPELINE_DIRTY        = 3,
+    VSC_PIPELINE_UNCONFIGURED = 0,  /**< 初始状态：未配置 */
+    VSC_PIPELINE_CONFIGURED   = 1,  /**< 已配置：commit 成功 */
+    VSC_PIPELINE_STREAMING    = 2,  /**< 流传输中：不可重配置 */
+    VSC_PIPELINE_DIRTY        = 3,  /**< 脏状态：部分提交失败 */
 } vsc_pipeline_state_t;
 
+/**
+ * @brief 视频管线 — 核心图容器
+ * @details Pipeline 是整个 VSC 子系统的核心数据结构，包含：
+ *          - 拓扑信息（entities + links）
+ *          - 预计算数据（拓扑排序执行顺序、邻接表、TAP/端点索引）
+ *          - 运行时状态（管线状态机）
+ *          所有成员均为固定大小数组（S0 内存策略），无动态分配。
+ * @see vsc_pipeline_build() 用于从 entities/links 计算派生字段
+ */
 typedef struct {
     /* ── topology ── */
     uint8_t       num_entities;
@@ -373,23 +441,35 @@ typedef enum {
  *  Adjustment trace entry
  * ======================================================================== */
 
+/**
+ * @brief 格式调整轨迹中的单条记录
+ * @details 记录一次格式协商过程中，某个 Entity 的某个 Pad 上
+ *          发生的格式变化（字段、原值、新值、原因）。
+ *          用于诊断为何最终格式与用户意图不一致。
+ */
 typedef struct {
-    char                entity_name[VSC_MAX_ENTITY_NAME];
-    char                pad_name[8];        /* "SINK" / "SOURCE" */
-    vsc_fmt_field_t     field_changed;
-    vsc_mbus_fmt_t      original;
-    vsc_mbus_fmt_t      adjusted;
-    vsc_adjust_reason_t reason;
-    char                reason_detail[64];
+    char                entity_name[VSC_MAX_ENTITY_NAME]; /**< 实体名称 */
+    char                pad_name[8];        /**< Pad 名称："SINK" 或 "SOURCE" */
+    vsc_fmt_field_t     field_changed;      /**< 发生变化的格式字段 */
+    vsc_mbus_fmt_t      original;           /**< 变化前的格式值 */
+    vsc_mbus_fmt_t      adjusted;           /**< 变化后的格式值 */
+    vsc_adjust_reason_t reason;             /**< 调整原因分类 */
+    char                reason_detail[64];  /**< 调整原因的文本说明 */
 } vsc_adjustment_entry_t;
 
 /* ========================================================================
  *  Adjustment trace (diagnostics returned to application)
  * ======================================================================== */
 
+/**
+ * @brief 格式调整轨迹 — 协商过程的诊断记录
+ * @details 包含最多 VSC_MAX_TRACE_ENTRIES 条调整记录，
+ *          按传播顺序排列。应用层可通过此轨迹了解
+ *          每个 Entity 对格式所做的修改及其原因。
+ */
 typedef struct {
-    uint8_t                num_entries;
-    vsc_adjustment_entry_t entries[VSC_MAX_TRACE_ENTRIES];
+    uint8_t                num_entries;                          /**< 有效条目数 */
+    vsc_adjustment_entry_t entries[VSC_MAX_TRACE_ENTRIES];       /**< 调整记录数组 */
 } vsc_adjustment_trace_t;
 
 /* ========================================================================
@@ -417,6 +497,15 @@ typedef struct {
  *  Resolver result (returned to application)
  * ======================================================================== */
 
+/**
+ * @brief 格式协商的完整结果
+ * @details 由 vsc_resolver_try_fmt() 返回，包含：
+ *          - status：协商状态（精确匹配/调整后接受/部分失败/完全失败）
+ *          - primary_fmt：主输出端点的最终格式
+ *          - endpoint_fmts：所有端点的格式（支持多分支输出）
+ *          - trace：格式变更轨迹（诊断用途）
+ *          - reachable_max：协商失败时的可达上限（调试用途）
+ */
 typedef struct {
     vsc_negotiation_status_t status;
     vsc_mbus_fmt_t           primary_fmt;
@@ -445,92 +534,12 @@ typedef struct {
 #define VSC_ERR_COMMIT_FAILED         -10
 #define VSC_WARN_TAP_INACTIVE          1
 
-/* ========================================================================
- *  Pipeline build / topo helpers
- * ======================================================================== */
-
-/**
- * @brief Run topological sort on STREAM links and populate execution_order,
- *        tap_observers, endpoints, and adjacency arrays.
+/* ────────────────────────────────────────────────────────────────────────
+ *  Pipeline Graph API  —  see  vsc_resolver.h
+ *  Property Resolver API —  see  vsc_resolver.h
  *
- * execution_order contains SENSOR + STREAM + ENDPOINT entities in topo order
- * (all entities reachable via STREAM links).
- *
- * Must be called after entities[] and links[] are populated.
- * Returns VSC_OK or VSC_ERR_TOPOLOGY_BROKEN (cycle or disconnected STREAM).
- */
-int vsc_pipeline_build(vsc_pipeline_t *pipeline);
-
-/**
- * @brief Remove an optional entity and auto-bridge if possible.
- *
- * Handles SISO auto-bridging, TAP link removal, leaf/root removal.
- * Re-runs topological sort.
- *
- * @return VSC_OK, VSC_ERR_CANNOT_AUTO_BRIDGE, or VSC_ERR_TOPOLOGY_BROKEN.
- */
-int vsc_pipeline_remove_optional(vsc_pipeline_t *pipeline, uint8_t entity_idx);
-
-/**
- * @brief Commit: write the final negotiated format to hardware registers
- *        for all STREAM entities in execution_order.
- *
- * Must be called after a successful try_fmt whose result was accepted.
- * Does NOT perform rollback on partial failure — marks pipeline DIRTY.
- *
- * @return VSC_OK or VSC_ERR_COMMIT_FAILED.
- */
-int vsc_pipeline_commit_fmt(vsc_pipeline_t *pipeline,
-                            const vsc_mbus_fmt_t *final_fmt);
-
-/* ── Driver registry access (see vsc_driver_registry.h) ── */
-
-/* ========================================================================
- *  Resolver API
- * ======================================================================== */
-
-/**
- * @brief Full try_fmt pipeline: Phase 1 (feasibility) → Phase 2 (forward
- *        propagate) → Phase 3 (converge).
- *
- * @param pipeline   Pre-built pipeline with entities and links.
- * @param intent     Application's desired output format.
- * @param result     [out] Negotiation result, including final fmt and trace.
- * @return VSC_OK on success, negative error code on failure.
- */
-int vsc_resolver_try_fmt(vsc_pipeline_t *pipeline,
-                         const vsc_mbus_fmt_t *intent,
-                         vsc_resolver_result_t *result);
-
-/**
- * @brief Phase 1 only: reverse-constraint feasibility check.
- *
- * @return VSC_OK if feasible, VSC_ERR_UNREACHABLE if not (result.reachable_max
- *         populated with approximate bounds).
- */
-int vsc_resolver_feasibility_check(const vsc_pipeline_t *pipeline,
-                                   const vsc_mbus_fmt_t *intent,
-                                   vsc_resolver_result_t *result);
-
-/**
- * @brief Phase 2 only: forward propagation along STREAM links.
- *
- * Requires pipeline.execution_order to be already sorted.
- * Populates each entity's prop_state.
- *
- * @return VSC_OK or negative error.
- */
-int vsc_resolver_forward_propagate(vsc_pipeline_t *pipeline,
-                                   const vsc_mbus_fmt_t *intent);
-
-/**
- * @brief Phase 3 only: converge endpoint formats into result.
- *
- * Requires forward_propagate to have completed.
- */
-int vsc_resolver_converge(vsc_pipeline_t *pipeline,
-                          const vsc_mbus_fmt_t *intent,
-                          vsc_resolver_result_t *result);
+ *  vsc_types.h 只包含类型定义；所有公开函数声明已迁移到 vsc_resolver.h。
+ * ──────────────────────────────────────────────────────────────────────── */
 
 #ifdef __cplusplus
 }

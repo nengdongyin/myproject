@@ -17,6 +17,11 @@
  *  Feature registry
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/**
+ * @brief 全局特性注册表（编译期静态初始化，运行时由 vsc_feature_derive() 更新）
+ * @details 每个条目的 name/description 在编译期固化，
+ *          available 字段在运行时由 vsc_feature_derive() 根据驱动注册表动态设置。
+ */
 static vsc_feature_t g_features[VSC_FEATURE_COUNT] = {
     [VSC_FEATURE_STREAMING]          = {"streaming",           "Video streaming output", false},
     [VSC_FEATURE_AUTO_EXPOSURE]      = {"auto_exposure",       "Automatic exposure control", false},
@@ -34,6 +39,23 @@ static bool g_derived = false;
  *  Auto-derivation (from registered drivers)
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/**
+ * @brief 从已注册驱动自动推导特性可用性
+ * @details 算法分为两个阶段：
+ *          **阶段 1 — 能力扫描**
+ *          遍历所有已注册驱动（vsc_driver_by_index），收集其 capabilities
+ *          位掩码中的各项能力标志。
+ *          **阶段 2 — 特性合成**
+ *          - 直接映射：CROP/BINNING 等特性直接对应 capability 位。
+ *          - 组合特性：AUTO_EXPOSURE 和 AUTO_WHITE_BALANCE 需要多个
+ *            capability 同时存在（AND 逻辑）。
+ *            · AUTO_EXPOSURE → STATISTICS && EXPOSURE_CTRL
+ *            · AUTO_WHITE_BALANCE → STATISTICS && SENSOR
+ *          STREAMING 特性始终为 true（有管线即支持流传输）。
+ *          完成后设置全局标志 g_derived = true。
+ * @note 本函数不是幂等的——每次调用都会重新扫描并覆盖所有特性状态。
+ *       应在 vsc_system_init() 之后调用一次。
+ */
 void vsc_feature_derive(void)
 {
     /* ── scan all registered drivers for capabilities ── */
@@ -78,7 +100,7 @@ void vsc_feature_derive(void)
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
- *  Query API
+ *  Query API（详细文档见 vsc_feature.h）
  * ═══════════════════════════════════════════════════════════════════════ */
 
 bool vsc_has_feature(vsc_feature_id_t feature)

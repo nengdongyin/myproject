@@ -9,12 +9,33 @@
 #include "vsc_loader.h"
 #include "vsc_driver_registry.h"
 #include "vsc_feature.h"
+#include "vsc_resolver.h"
 #include <string.h>
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  Instance creation
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/**
+ * @brief 从驱动模板创建 Entity 实例并应用参数覆盖
+ * @details 创建流程：
+ *          1. 清零 Entity 内存
+ *          2. 从 driver->transform_template 拷贝变换描述符模板
+ *          3. 遍历 overrides[]，对匹配的键收紧约束：
+ *             - CROP 类型：可收紧 max_width / max_height（但不可放宽，
+ *               放宽会返回 VSC_ERR_UNREACHABLE）
+ *             - BINNING 类型：可收紧 factor_x / factor_y
+ *          4. 调用 driver->ops.init() 初始化驱动私有上下文
+ *          5. 将 ops 虚表赋值给 Entity（不拷贝，仅指针共享）
+ * @param[in]  driver    已注册的驱动模板
+ * @param[in]  base_addr 硬件基地址
+ * @param[in]  overrides 约束覆盖值数组
+ * @param[in]  num_over  覆盖值数量
+ * @param[out] entity    创建的 Entity 实例
+ * @return VSC_OK 或 VSC_ERR_UNREACHABLE（覆盖值放宽了约束）
+ * @note overrides 只能收紧约束，不可放宽——这是设计约束，防止应用层
+ *       通过覆盖值绕过硬件能力限制。
+ */
 int vsc_instance_create(const vsc_driver_t *driver,
                         uint32_t base_addr,
                         const vsc_override_t *overrides,
@@ -69,12 +90,47 @@ int vsc_instance_create(const vsc_driver_t *driver,
  *  System init
  * ═══════════════════════════════════════════════════════════════════════ */
 
+/**
+ * @brief 在管线中按名称查找 Entity 索引
+ * @param[in] p  管线指针
+ * @param[in] id Entity 名称
+ * @return Entity 在 entities[] 中的索引，未找到返回 0xFF
+ */
 static uint8_t find_by_id(vsc_pipeline_t *p, const char *id) {
     for (uint8_t i = 0; i < p->num_entities; i++)
         if (strcmp(p->entities[i].name, id) == 0) return i;
     return 0xFF;
 }
 
+/**
+ * @brief 从系统描述符和板级配置构建完整管线
+ * @details 按以下 6 个步骤完成系统初始化：
+ *          **Step 1 — 创建 SENSOR Entity**
+ *          根据 board->sensor_type 查找对应的传感器驱动，
+ *          传入 I2C 总线号和地址作为覆盖参数。传感器 Entity 总是
+ *          排在 entities[] 的首位。
+ *          **Step 2 — 创建 FPGA 节点 Entity**
+ *          遍历 desc->nodes[]，为每个 FPGA IP 核调用
+ *          vsc_instance_create()。如果驱动未找到且节点标记为 optional，
+ *          则跳过；否则返回 VSC_ERR_CANNOT_AUTO_BRIDGE。
+ *          带 STATISTICS capability 的节点自动归类为 ANALYZER，
+ *          其余为 STREAM。
+ *          **Step 3 — 传感器到首节点的隐式连接**
+ *          如果存在传感器和至少一个 FPGA 节点，自动创建一条
+ *          sensor → first_fpga 的 STREAM 链接。
+ *          **Step 4 — 显式链接**
+ *          根据 desc->links[] 创建用户声明的链接（STREAM/TAP）。
+ *          通过 find_by_id() 将字符串 ID 解析为 Entity 索引。
+ *          **Step 5 — 拓扑构建**
+ *          调用 vsc_pipeline_build() 进行拓扑排序、邻接表构建
+ *          和端点/TAP 收集。
+ *          **Step 6 — 特性推导**
+ *          调用 vsc_feature_derive() 根据已注册驱动推导特性可用性。
+ * @param[in]  desc     解析后的系统描述符（来自 system_graph.json）
+ * @param[in]  board    解析后的板级配置（来自 board.json）
+ * @param[out] pipeline 构建完成的管线
+ * @return VSC_OK 或负值错误码
+ */
 int vsc_system_init(const vsc_system_desc_t *desc,
                     const vsc_board_config_t *board,
                     vsc_pipeline_t *pipeline)

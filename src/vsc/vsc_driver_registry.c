@@ -14,12 +14,20 @@ static uint8_t g_registered_count;
 
 extern const vsc_driver_t _vsc_drivers[];
 
+/**
+ * @brief 向全局注册表注册一个驱动（详细文档见 vsc_driver_registry.h）
+ */
 void vsc_driver_register(const vsc_driver_t *driver)
 {
     if (g_registered_count < VSC_REGISTERED_MAX)
         g_registered[g_registered_count++] = driver;
 }
 
+/**
+ * @brief 按名称查找驱动（详细文档见 vsc_driver_registry.h）
+ * @details 两阶段查找：先查运行时注册表 g_registered，
+ *          未命中则回退到编译期静态数组 _vsc_drivers[]。
+ */
 const vsc_driver_t *vsc_driver_find(const char *name)
 {
     for (uint8_t i = 0; i < g_registered_count; i++)
@@ -33,6 +41,9 @@ const vsc_driver_t *vsc_driver_find(const char *name)
     return NULL;
 }
 
+/**
+ * @brief 按索引访问驱动（详细文档见 vsc_driver_registry.h）
+ */
 const vsc_driver_t *vsc_driver_by_index(int idx)
 {
     if (idx < 0) return NULL;
