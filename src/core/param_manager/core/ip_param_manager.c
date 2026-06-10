@@ -290,24 +290,40 @@ static int ip_module_flush(param_module_node_t *m)
     ip_instance_t *inst = (ip_instance_t *)m;
     if (inst->dirty_map == 0) return PARAM_OK;
 
-    for (uint16_t i = 0; i < m->param_count; i++) {
-        if ((inst->dirty_map >> i) & 1) {
-            param_entry_t *e = m->table[i];
-            if (!e || !inst->write) continue;
+    int last_err = PARAM_OK;
 
-            int ret = _ip_flush_write_entry(e, inst);
-            if (ret != PARAM_OK) return ret;
+    for (uint16_t i = 0; i < m->param_count; i++) {
+        if (!((inst->dirty_map >> i) & 1))
+            continue;
+
+        param_entry_t *e = m->table[i];
+        if (!e || !inst->write) {
+            /* 无法 flush 的参数: 清除 dirty 位避免死循环 */
+            inst->dirty_map &= ~(1ULL << i);
+            if (e)
+                param_entry_clear_dirty(e);
+            continue;
+        }
+
+        int ret = _ip_flush_write_entry(e, inst);
+        if (ret == PARAM_OK) {
+            inst->dirty_map &= ~(1ULL << i);
+        } else {
+            last_err = ret;
+            /* 保留 dirty 位以便下次 flush 重试 */
         }
     }
 
     if (inst->flush) {
         int ret = inst->flush(inst->driver, inst->dirty_map);
-        if (ret != PARAM_OK) return ret;
+        if (ret != PARAM_OK)
+            last_err = ret;
     }
 
-    inst->dirty_map = 0;
-    m->dirty = 0;
-    return PARAM_OK;
+    if (inst->dirty_map == 0)
+        m->dirty = 0;
+
+    return last_err;
 }
 
 static void ip_module_deinit(param_module_node_t *m)
