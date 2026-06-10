@@ -24,6 +24,21 @@ static void dump_cb(const char *line, void *user_data)
     (void)user_data;
     LOG_INF("%s", line);
 }
+/* ================================================================
+ *  字节序转换 — wire format 为 big-endian
+ * ================================================================ */
+
+static inline uint16_t endian_swap16(uint16_t val)
+{
+    return (uint16_t)(((val & 0xFF00u) >> 8) | ((val & 0x00FFu) << 8));
+}
+
+static inline uint32_t endian_swap32(uint32_t val)
+{
+    return ((val & 0xFF000000ul) >> 24) | ((val & 0x00FF0000ul) >> 8)
+         | ((val & 0x0000FF00ul) << 8)  | ((val & 0x000000FFul) << 24);
+}
+
 static void imperx_on_frame_ready(protocol_parser_t *parser,
                                   void *parsed_data, void *user_ctx)
 {
@@ -36,10 +51,15 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
             (cmd == IMPERX_CMD_READ) ? "READ" : "WRITE",
             (unsigned long long)pri->parsed_id);
 
-    const cmd_map_entry_t *e = cmd_map_lookup((uint16_t)pri->parsed_id);
+    uint16_t addr = (uint16_t)(pri->parsed_id & 0xFFFF);
+    const cmd_map_entry_t *e = cmd_map_lookup(endian_swap16(addr));
     if (e) {
         if (cmd == IMPERX_CMD_WRITE) {
-            int ret = param_write_raw(e->param_id, pri->parsed_data, pri->parsed_len);
+            uint32_t raw;
+            memcpy(&raw, pri->parsed_data, 4);
+            uint32_t val = endian_swap32(raw);
+            int ret = param_write_u32(e->param_id, val);
+            (void)ret;
             param_flush();
             param_dump(PARAM_MODULE_ID(e->param_id), dump_cb, NULL);
         } else {
@@ -47,14 +67,15 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
             int ret = param_read(e->param_id, &v);
             if (ret == PARAM_OK) {
                 static uint8_t s_resp[4];
-                memcpy(s_resp, &v.u32, 4);
+                uint32_t raw = endian_swap32(v.u32);
+                memcpy(s_resp, &raw, 4);
                 pri->parsed_data = s_resp;
                 pri->parsed_len = sizeof(s_resp);
             }
         }
-    LOG_INF("Resp Imperx %s, Address: 0x%04llX",
-            (cmd == IMPERX_CMD_READ) ? "READ" : "WRITE",
-            (unsigned long long)pri->parsed_id);
+        LOG_INF("Resp Imperx %s, Address: 0x%04llX",
+                (cmd == IMPERX_CMD_READ) ? "READ" : "WRITE",
+                (unsigned long long)pri->parsed_id);
         return;
     }
 

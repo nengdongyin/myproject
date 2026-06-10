@@ -181,9 +181,9 @@ static int imperx_parse_data(protocol_parser_t* parser,
                 if (ip->pri.parsed_cmd == IMPERX_CMD_READ) {
                     /* 完整的 READ 命令 — 通知框架 */
                     ip->pri.state = IMPERX_STATE_WAIT_HEAD;
-                    ip->pri.parsed_id =
-                        (ip->base.rx.buffer[IMPERX_CMD_INDEX] << 8)
-                        | ip->base.rx.buffer[IMPERX_CMD_INDEX + 1];
+                    ip->pri.parsed_id = 0;
+                    memcpy(&ip->pri.parsed_id,
+                           &ip->base.rx.buffer[IMPERX_CMD_INDEX], 2);
                     ip->pri.parsed_data = NULL;
                     ip->pri.parsed_len = 0;
 
@@ -203,15 +203,9 @@ static int imperx_parse_data(protocol_parser_t* parser,
             ip->base.rx.buffer[ip->base.rx.data_len++] = byte;
             if (ip->base.rx.data_len == IMPERX_WRITE_FRAME_LEN) {
                 /* 完整的 WRITE 命令 */
-                ip->pri.parsed_id =
-                    (ip->base.rx.buffer[IMPERX_CMD_INDEX] << 8)
-                    | ip->base.rx.buffer[IMPERX_CMD_INDEX + 1];
-
-                {
-                    uint8_t *d = &ip->base.rx.buffer[IMPERX_DATA_INDEX];
-                    uint8_t t = d[0]; d[0] = d[3]; d[3] = t;
-                    t = d[1]; d[1] = d[2]; d[2] = t;
-                }
+                ip->pri.parsed_id = 0;
+                memcpy(&ip->pri.parsed_id,
+                       &ip->base.rx.buffer[IMPERX_CMD_INDEX], 2);
 
                 ip->pri.parsed_data = &ip->base.rx.buffer[IMPERX_DATA_INDEX];
                 ip->pri.parsed_len = IMPERX_DATA_LEN;
