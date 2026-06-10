@@ -293,21 +293,24 @@ static int ip_module_flush(param_module_node_t *m)
     int last_err = PARAM_OK;
 
     for (uint16_t i = 0; i < m->param_count; i++) {
-        if (!((inst->dirty_map >> i) & 1))
+        param_entry_t *e = m->table[i];
+        if (!e)
             continue;
 
-        param_entry_t *e = m->table[i];
-        if (!e || !inst->write) {
-            /* 无法 flush 的参数: 清除 dirty 位避免死循环 */
-            inst->dirty_map &= ~(1ULL << i);
-            if (e)
-                param_entry_clear_dirty(e);
+        uint16_t lid = PARAM_LOCAL_ID(e->param_id);
+        if (!((inst->dirty_map >> lid) & 1))
+            continue;
+
+        if (!inst->write) {
+            /* 驱动无 write 回调: 清除 dirty 避免死循环 */
+            inst->dirty_map &= ~(1ULL << lid);
+            param_entry_clear_dirty(e);
             continue;
         }
 
         int ret = _ip_flush_write_entry(e, inst);
         if (ret == PARAM_OK) {
-            inst->dirty_map &= ~(1ULL << i);
+            inst->dirty_map &= ~(1ULL << lid);
         } else {
             last_err = ret;
             /* 保留 dirty 位以便下次 flush 重试 */
