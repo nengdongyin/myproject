@@ -97,7 +97,7 @@ __attribute__((unused)) static int mock_storage_load(void *ctx, uint32_t id, uin
     memcpy(data, kv->data, copy_len);
     if (copy_len < len)
         memset(data + copy_len, 0, len - copy_len);
-    return 0;
+    return copy_len;
 }
 
 static int mock_storage_save(void *ctx, uint32_t id, const uint8_t *data, uint16_t len)
@@ -188,7 +188,7 @@ static int mock_storage2_load(void *ctx, uint32_t id, uint8_t *data, uint16_t le
     memcpy(data, kv->data, copy_len);
     if (copy_len < len)
         memset(data + copy_len, 0, len - copy_len);
-    return 0;
+    return copy_len;
 }
 
 static int mock_storage2_save(void *ctx, uint32_t id, const uint8_t *data, uint16_t len)
@@ -262,8 +262,9 @@ void mock_callbacks_reset(void)
     mock_ip_reset();
 }
 
-int mock_apply_ok(uint32_t param_id, param_value_t value)
+int mock_apply_ok(void *ctx, uint32_t param_id, param_value_t value)
 {
+    (void)ctx;
     g_apply_call_count++;
     g_apply_last_id = param_id;
     g_apply_last_value = value;
@@ -271,8 +272,9 @@ int mock_apply_ok(uint32_t param_id, param_value_t value)
     return PARAM_OK;
 }
 
-int mock_apply_fail(uint32_t param_id, param_value_t value)
+int mock_apply_fail(void *ctx, uint32_t param_id, param_value_t value)
 {
+    (void)ctx;
     g_apply_call_count++;
     g_apply_last_id = param_id;
     g_apply_last_value = value;

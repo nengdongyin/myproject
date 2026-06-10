@@ -220,7 +220,7 @@ static int ip_param_load(param_entry_t *e)
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
     int ret = g_param_data_ops[t].load(e);
-    if (ret == 0) {
+    if (ret >= 0) {
         param_entry_mark_dirty(e);
         param_module_node_t *m = param_module_find((uint16_t)PARAM_MODULE_ID(e->param_id));
         if (m && m->vtable && m->vtable->mark_dirty)

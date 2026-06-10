@@ -74,7 +74,7 @@ static int app_write(param_entry_t *e, param_value_t value)
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
     if (m->write) {
-        int ret = m->write(e->param_id, value);
+        int ret = m->write(m->ctx, e->param_id, value);
         if (ret != PARAM_OK) return ret;
     }
 
@@ -134,7 +134,7 @@ static int app_write_immediate(param_entry_t *e, param_value_t value)
 
     if (!m->write) return PARAM_ERR_NOT_FOUND;
 
-    int ret = m->write(e->param_id, value);
+    int ret = m->write(m->ctx, e->param_id, value);
     if (ret == PARAM_OK) {
         LOCK();
         g_param_data_ops[t].cache_update(e, value);

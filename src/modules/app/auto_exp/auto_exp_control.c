@@ -3,17 +3,19 @@
 
 ae_instance_t g_ae_instance;
 
-static int ae_apply(uint32_t param_id, param_value_t value)
+static int ae_write(void *ctx, uint32_t param_id, param_value_t value)
 {
+    ae_instance_t *ae = (ae_instance_t *)ctx;
+
     switch (param_id) {
     case PID_AE_TARGET_LUMA:
-        ae_instance_set_target_luma(&g_ae_instance, (uint8_t)value.u32);
+        ae_instance_set_target_luma(ae, (uint8_t)value.u32);
         break;
     case PID_AE_SPEED:
-        ae_instance_set_speed(&g_ae_instance, value.f32);
+        ae_instance_set_speed(ae, value.f32);
         break;
     case PID_AE_ENABLE:
-        ae_instance_set_enable(&g_ae_instance, value.b);
+        ae_instance_set_enable(ae, value.b);
         break;
     case PID_AE_MODEL_NAME:
     case PID_AE_CALIB_DATA:
@@ -75,7 +77,7 @@ PARAM_TABLE(ae_params,
 );
 
 PARAM_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
-                    &g_ae_instance, ae_init, NULL, ae_apply, NULL, ae_flush);
+                    &g_ae_instance, ae_init, NULL, ae_write, NULL, ae_flush);
 
 void auto_exp_module_init(void)
 {

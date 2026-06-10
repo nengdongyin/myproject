@@ -149,8 +149,8 @@ extern "C"
     void mock_init_reset(void);
     void mock_callbacks_reset(void);
 
-    int mock_apply_ok(uint32_t param_id, param_value_t value);
-    int mock_apply_fail(uint32_t param_id, param_value_t value);
+    int mock_apply_ok(void *ctx, uint32_t param_id, param_value_t value);
+    int mock_apply_fail(void *ctx, uint32_t param_id, param_value_t value);
     int mock_flush_ok(void *ctx);
     int mock_flush_fail(void *ctx);
     int mock_init_ok(void *ctx);

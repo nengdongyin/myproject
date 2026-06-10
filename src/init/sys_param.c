@@ -9,8 +9,9 @@ PARAM_EXEC(g_cmd_switch, MAKE_PARAM_ID(MODULE_SYS, 0x01));
 
 PARAM_TABLE(sys_params, &g_boot_index.base, &g_cmd_switch.base);
 
-static int sys_apply_cb(uint32_t param_id, param_value_t value)
+static int sys_apply_cb(void *ctx, uint32_t param_id, param_value_t value)
 {
+    (void)ctx;
     if (param_id == MAKE_PARAM_ID(MODULE_SYS, 0x00))
         param_storage_set_active_partition((uint8_t)value.u32);
     return PARAM_OK;

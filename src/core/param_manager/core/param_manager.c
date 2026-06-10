@@ -1142,8 +1142,8 @@ int param_load_all(void)
         if (!e)
             continue;
         int ret = e->vtable->load(e);
-        if (ret != 0 && first_err == PARAM_OK)
-            first_err = (ret < 0) ? ret : PARAM_ERR_FLASH_FAIL;
+        if (ret < 0 && first_err == PARAM_OK)
+            first_err = ret;
     }
 
     UNLOCK();
@@ -1185,13 +1185,13 @@ int param_load_one(uint32_t param_id)
     LOCK();
     ret = e->vtable->load(e);
     UNLOCK();
-    if (ret == PARAM_OK) {
+    if (ret >= 0) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->mark_dirty)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
     }
     /* apply 重新校验恢复值 (多分区兼容); 有意不走 param_write 以避免 notify */
-    if (ret == PARAM_OK)
+    if (ret >= 0)
         ret = e->vtable->write(e, *entry_cache(e));
 
     return ret;

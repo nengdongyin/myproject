@@ -144,7 +144,7 @@ extern "C"
      * @param value    待写入的新值
      * @return PARAM_OK 表示接受，其他值表示拒绝
      */
-    typedef int (*param_write_fn)(uint32_t param_id, param_value_t value);
+    typedef int (*param_write_fn)(void *ctx, uint32_t param_id, param_value_t value);
 
 
 

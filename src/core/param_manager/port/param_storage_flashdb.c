@@ -294,7 +294,7 @@ static int flashdb_load(void *ctx, uint32_t param_id,
     struct fdb_blob blob;
     size_t read_len = fdb_kv_get_blob(&c->kvdb, key,
                                       fdb_blob_make(&blob, data, len));
-    return (read_len > 0) ? 0 : -1;
+    return (int)read_len;
 }
 
 /**

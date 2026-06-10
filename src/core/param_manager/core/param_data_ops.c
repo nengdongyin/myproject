@@ -223,7 +223,7 @@ static int value_type_load(param_entry_t *e)
 
     param_value_t stored;
     int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)&stored, sizeof(stored));
-    if (ret == 0) *entry_cache_ptr(e) = stored;
+    if (ret > 0) *entry_cache_ptr(e) = stored;
     return ret;
 }
 
