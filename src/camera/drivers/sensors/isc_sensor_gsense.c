@@ -6,7 +6,7 @@
  * 特征: 曝光-读出交叠危险区域需应用显式躲避, 曝光按时钟颗粒计数.
  */
 
-#include "../isc_internal.h"
+#include "isc_internal.h"
 
 /* ──── GSENSE 私有约束 ──── */
 #define GSENSE_CONSTRAINT_DANGER_ZONE  (ISC_CONSTRAINT_PRIVATE_BASE + 0)

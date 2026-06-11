@@ -6,7 +6,7 @@
  * 特征: 全局快门, SPI 控制, 部分型号支持片上 AE.
  */
 
-#include "../isc_internal.h"
+#include "isc_internal.h"
 
 /* ──── 内部 ──── */
 

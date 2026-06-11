@@ -2,8 +2,8 @@
 #include <zephyr/sys/printk.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/uart.h>
-#include "init/app_config.h"
-#include "init/init_thread.h"
+#include "app_config.h"
+#include "init_thread.h"
 #include "ymodem_common.h"
 
 #define UART1_NODE DT_NODELABEL(uart1)

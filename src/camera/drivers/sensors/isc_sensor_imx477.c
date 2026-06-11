@@ -42,7 +42,7 @@
  *      isc_fmt_t.pixel_format 反映实际 Bayer 顺序。
  */
 
-#include "../isc_internal.h"
+#include "isc_internal.h"
 #include <string.h>
 
 /* ═══════════════════════════════════════════════════════════════════════════

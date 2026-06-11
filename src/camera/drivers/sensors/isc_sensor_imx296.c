@@ -47,7 +47,7 @@
  *      try_fmt 实现完整的约束校验链。
  */
 
-#include "../isc_internal.h"
+#include "isc_internal.h"
 #include <string.h>
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -6,7 +6,7 @@
  * 测试环境使用空实现 port/fpga_ops（无真实硬件 I2C）。
  */
 
-#include "isc/isc.h"
+#include "isc.h"
 #include <stdbool.h>
 #include <string.h>
 

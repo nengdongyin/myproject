@@ -7,7 +7,7 @@
 
 #include "sensor_vsc.h"
 #include "isc_bridge.h"
-#include "isc/isc.h"
+#include "isc.h"
 #include "vsc_prop_ids.h"
 #include <string.h>
 

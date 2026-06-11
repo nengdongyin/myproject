@@ -11,7 +11,7 @@
 
 #include <stdio.h>
 #include <string.h>
-#include "isc/isc.h"
+#include "isc.h"
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * 1. 平台移植 — 实现 isc_port_t 和 isc_fpga_ops_t

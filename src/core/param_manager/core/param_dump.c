@@ -12,6 +12,7 @@
 #include "param_dump.h"
 #include "param_manager.h"
 #include "param_manager_internal.h"
+#include "port.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
