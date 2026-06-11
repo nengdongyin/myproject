@@ -42,4 +42,4 @@ static inline param_value_t param_event_get_value(const lwevt_t *evt)
 }
 #endif
 
-#endif
+#endif /* PARAM_EVENT_LWEVT_H */

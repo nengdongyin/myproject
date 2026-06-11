@@ -25,7 +25,7 @@
 #include "fal.h"
 #include <string.h>
 #include <stdbool.h>
-#include "system_adapter.h"
+#include "port.h"
 
 /**
  * @brief Footer 魔数（ASCII: "FOOT" 的小端表示）

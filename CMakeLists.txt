@@ -13,9 +13,10 @@ target_include_directories(app PRIVATE
     gen/vsc
     src/test/camyu
     src/core/protocol_parser
+    src/port
     src/core/param_manager/core
     src/core/param_manager/config
-    src/core/param_manager/port
+    src/core/param_manager/storage
     src/protocols/ymodem/src
     src/protocols/ymodem/adapter
     src/protocols/imperx
@@ -98,7 +99,7 @@ if(TEST_MODE)
       src/core/param_manager/core/ip_param_manager.c
       src/core/param_manager/core/param_data_ops.c
       src/core/param_manager/core/param_dump.c
-      src/core/param_manager/port/param_manager_port.c
+      src/port/port_impl.c
       src/protocols/ymodem/src/ymodem_common.c
       src/protocols/ymodem/src/ymodem_receiver.c
       src/protocols/ymodem/src/ymodem_sender.c
@@ -126,8 +127,8 @@ else()
       src/core/param_manager/core/ip_param_manager.c
       src/core/param_manager/core/param_data_ops.c
       src/core/param_manager/core/param_dump.c
-      src/core/param_manager/port/param_manager_port.c
-      src/core/param_manager/port/param_storage_flashdb.c
+      src/port/port_impl.c
+      src/core/param_manager/storage/param_storage_flashdb.c
       src/bsp/rp2350/fal_flash_rp2350.c
       src/protocols/camyu/protocol_parser_camyu.c
       src/protocols/imperx/protocol_parser_imperx.c

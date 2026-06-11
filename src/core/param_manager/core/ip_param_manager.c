@@ -20,7 +20,7 @@
 
 #include "param_manager.h"
 #include "param_manager_internal.h"
-#include "param_manager_port.h"
+#include "port.h"
 #include "param_data_ops.h"
 #include "ip_param_manager.h"
 #include <string.h>
@@ -56,12 +56,12 @@ static int ip_param_read(param_entry_t *e, param_value_t *value)
     if (inst && inst->read) {
         int ret = inst->read(inst->driver, e->param_id, value);
         if (ret == PARAM_OK) {
-            LOCK();
+            system_lock();
             param_type_t t = entry_type(e);
             if (t < PARAM_TYPE_COUNT) {
                 g_param_data_ops[t].cache_update(e, *value);
             }
-            UNLOCK();
+            system_unlock();
             return PARAM_OK;
         }
     }
@@ -89,10 +89,10 @@ static int ip_param_write(param_entry_t *e, param_value_t value)
 
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
-    LOCK();
+    system_lock();
     g_param_data_ops[t].cache_update(e, value);
     param_entry_mark_dirty(e);
-    UNLOCK();
+    system_unlock();
     return PARAM_OK;
 }
 
@@ -109,9 +109,9 @@ static int ip_write_immediate(param_entry_t *e, param_value_t value)
         if (inst->exec) {
             int ret = inst->exec(inst->driver, e->param_id, value);
             if (ret == PARAM_OK) {
-                LOCK();
+                system_lock();
                 param_entry_clear_dirty(e);
-                UNLOCK();
+                system_unlock();
             }
             return ret;
         }
@@ -126,10 +126,10 @@ static int ip_write_immediate(param_entry_t *e, param_value_t value)
 
     int ret = inst->write(inst->driver, e->param_id, value);
     if (ret == PARAM_OK) {
-        LOCK();
+        system_lock();
         g_param_data_ops[t].cache_update(e, value);
         param_entry_clear_dirty(e);
-        UNLOCK();
+        system_unlock();
     }
     return ret;
 }
@@ -148,9 +148,9 @@ static int ip_param_write_raw(param_entry_t *e, const uint8_t *data, uint16_t le
             param_value_t arg = { .ptr = (void *)data };
             int ret = inst->exec(inst->driver, e->param_id, arg);
             if (ret == PARAM_OK) {
-                LOCK();
+                system_lock();
                 param_entry_clear_dirty(e);
-                UNLOCK();
+                system_unlock();
             }
             return ret;
         }
@@ -393,25 +393,25 @@ int ip_control(uint16_t ip_id, uint16_t local_id, uint8_t *data,
     if (len != 1 && len != 2 && len != 4) return PARAM_ERR_INVALID_ID;
     if (!data) return PARAM_ERR_INVALID_ID;
 
-    LOCK();
+    system_lock();
     ip_instance_t *inst = ip_find(ip_id);
-    if (!inst) { UNLOCK(); return PARAM_ERR_NOT_FOUND; }
+    if (!inst) { system_unlock(); return PARAM_ERR_NOT_FOUND; }
 
     if (action == IP_WRITE) {
-        if (!inst->write) { UNLOCK(); return PARAM_ERR_NOT_FOUND; }
+        if (!inst->write) { system_unlock(); return PARAM_ERR_NOT_FOUND; }
         param_value_t val;
         memset(&val, 0, sizeof(val));
         memcpy(&val, data, len);
         int ret = inst->write(inst->driver, MAKE_PARAM_ID(ip_id, local_id), val);
-        UNLOCK();
+        system_unlock();
         return ret;
     } else {
-        if (!inst->read) { UNLOCK(); return PARAM_ERR_NOT_FOUND; }
+        if (!inst->read) { system_unlock(); return PARAM_ERR_NOT_FOUND; }
         param_value_t val;
         memset(&val, 0, sizeof(val));
         int ret = inst->read(inst->driver, MAKE_PARAM_ID(ip_id, local_id), &val);
         if (ret == PARAM_OK) memcpy(data, &val, len);
-        UNLOCK();
+        system_unlock();
         return ret;
     }
 }

@@ -49,24 +49,7 @@ extern "C" {
 #error "USE_FLASHDB and USE_INIPARSER are mutually exclusive"
 #endif
 
-/* ================================================================
- *  OS 移植选择 (三选一，互斥，仅一个可设为 1)
- * ================================================================ */
-
-/** @brief FreeRTOS 移植 (互斥锁 + pvPortMalloc) */
-#ifndef PARAM_MANAGER_PORT_FREERTOS
-#define PARAM_MANAGER_PORT_FREERTOS 0
-#endif
-
-/** @brief 裸机移植 (关中断 + 静态内存池) */
-#ifndef PARAM_MANAGER_NO_OS
-#define PARAM_MANAGER_NO_OS 0
-#endif
-
-/* OS 移植互斥检查: 三者最多选一 */
-#if (PARAM_MANAGER_PORT_FREERTOS + PARAM_MANAGER_NO_OS) > 1
-#error "Only one OS port (FREERTOS / NO_OS) may be set to 1"
-#endif
+/* OS 移植选择已迁移至 port/port.h (PORT_OS_* 宏系列) */
 
 /* ================================================================
  *  容量 / 上限

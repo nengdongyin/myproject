@@ -51,8 +51,9 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
             (cmd == IMPERX_CMD_READ) ? "READ" : "WRITE",
             (unsigned long long)pri->parsed_id);
 
-    uint16_t addr = (uint16_t)(pri->parsed_id & 0xFFFF);
-    const cmd_map_entry_t *e = cmd_map_lookup(endian_swap16(addr));
+    uint16_t raw_addr = (uint16_t)(pri->parsed_id & 0xFFFF);
+    uint16_t addr = endian_swap16(raw_addr);
+    const cmd_map_entry_t *e = cmd_map_lookup(addr);
     if (e) {
         if (cmd == IMPERX_CMD_WRITE) {
             uint32_t raw;
@@ -79,12 +80,12 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
         return;
     }
 
-    if (cmd == IMPERX_CMD_WRITE && pri->parsed_id == 0xF000) {
+    if (cmd == IMPERX_CMD_WRITE && addr == 0xF000) {
         LOG_INF("Triggering Ymodem receiver start...");
         ymodem_adapter_start_receiver(ctx->ymodem_recv_parser);
         protocol_chain_set_locked_parser(ctx->chain,
                                          (protocol_parser_t *)ctx->ymodem_recv_parser);
-    } else if (cmd == IMPERX_CMD_WRITE && pri->parsed_id == 0xF001) {
+    } else if (cmd == IMPERX_CMD_WRITE && addr == 0xF001) {
         LOG_INF("Triggering Ymodem sender start...");
         ymodem_adapter_start_sender(ctx->ymodem_send_parser);
         protocol_chain_set_locked_parser(ctx->chain,

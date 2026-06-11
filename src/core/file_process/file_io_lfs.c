@@ -21,7 +21,7 @@
 #include "file_io_lfs.h"
 #include <string.h>
 #include <lfs.h>
-#include "system_adapter.h"
+#include "port.h"
 
 #define LFS_OPEN_PATH_MAX 256
 

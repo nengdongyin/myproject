@@ -6,7 +6,7 @@
 #include "param_manager_internal.h"
 #include "app_param_manager.h"
 #include "ip_param_manager.h"
-#include "param_manager_port.h"
+#include "port.h"
 
 #ifdef __cplusplus
 extern "C"

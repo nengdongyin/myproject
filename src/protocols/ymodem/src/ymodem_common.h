@@ -16,6 +16,7 @@
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>
+#include "port.h"
 
 /* ================================================================
  *  帧结构宏定义
@@ -132,12 +133,4 @@ typedef enum
  */
 uint16_t ymodem_calculate_crc16(const uint8_t* data, uint32_t size);
 
-/**
- * @brief 获取系统毫秒级时间戳
- *
- * 该函数**必须**由应用层实现。库不提供默认实现，
- * 链接时将因符号未定义而失败。
- *
- * @return uint32_t 当前系统时间（毫秒）
- */
-uint32_t system_get_time_ms(void);
+/* system_get_time_ms 声明统一在 port/port.h */

@@ -14,7 +14,7 @@
 
 #include "param_manager.h"
 #include "param_manager_internal.h"
-#include "param_manager_port.h"
+#include "port.h"
 #include "param_data_ops.h"
 #include "module_ids.h"
 #include <string.h>
@@ -311,7 +311,7 @@ int param_init(const param_storage_drv_t *storage, param_notify_fn notify)
  */
 void param_deinit(void)
 {
-    LOCK();
+    system_lock();
 
     if (g_pm.storage && g_pm.storage->deinit)
         g_pm.storage->deinit(g_pm.storage->ctx);
@@ -326,7 +326,7 @@ void param_deinit(void)
     }
 
     memset(&g_pm, 0, sizeof(g_pm));
-    UNLOCK();
+    system_unlock();
 }
 
 /* ================================================================
@@ -374,11 +374,11 @@ int param_module_register_node(param_module_node_t *node,
     if (!node || !entries || count == 0)
         return PARAM_ERR_INVALID_ID;
 
-    LOCK();
+    system_lock();
 
     /* 步骤 1: 检查模块是否已注册 */
     if (param_module_find(node->module_id)) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_ALREADY_REG;
     }
 
@@ -387,7 +387,7 @@ int param_module_register_node(param_module_node_t *node,
         if (!entries[i])
             continue;
         if (hash_find(entries[i]->param_id)) {
-            UNLOCK();
+            system_unlock();
             return PARAM_ERR_ALREADY_REG;
         }
     }
@@ -400,7 +400,7 @@ int param_module_register_node(param_module_node_t *node,
         if (!entries[i])
             continue;
         if (!hash_insert(entries[i])) {
-            UNLOCK();
+            system_unlock();
             return PARAM_ERR_NO_MEMORY;
         }
     }
@@ -415,7 +415,7 @@ int param_module_register_node(param_module_node_t *node,
     for (uint16_t i = 0; i < count; i++)
         param_stats_persist_inc(entries[i]);
 
-    UNLOCK();
+    system_unlock();
     return PARAM_OK;
 }
 
@@ -452,9 +452,9 @@ int param_write(uint32_t param_id, param_value_t value)
     if (ret == PARAM_OK) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->mark_dirty) {
-            LOCK();
+            system_lock();
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-            UNLOCK();
+            system_unlock();
         }
         if (g_pm.notify_cb)
             g_pm.notify_cb(param_id, value);
@@ -476,9 +476,9 @@ int param_write_cache(uint32_t param_id, param_value_t value)
     if (ret == PARAM_OK) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->mark_dirty) {
-            LOCK();
+            system_lock();
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-            UNLOCK();
+            system_unlock();
         }
         if (g_pm.notify_cb)
             g_pm.notify_cb(param_id, value);
@@ -500,9 +500,9 @@ int param_write_immediate(uint32_t param_id, param_value_t value)
     if (ret == PARAM_OK) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->clear_dirty) {
-            LOCK();
+            system_lock();
             m->vtable->clear_dirty(m, PARAM_LOCAL_ID(param_id));
-            UNLOCK();
+            system_unlock();
         }
         if (g_pm.notify_cb)
             g_pm.notify_cb(param_id, value);
@@ -526,9 +526,9 @@ int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
     if (ret == PARAM_OK) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->mark_dirty) {
-            LOCK();
+            system_lock();
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-            UNLOCK();
+            system_unlock();
         }
         if (g_pm.notify_cb) {
             param_value_t change;
@@ -558,9 +558,9 @@ int param_read(uint32_t param_id, param_value_t *value)
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
-    LOCK();
+    system_lock();
     int ret = e->vtable->read(e, value);
-    UNLOCK();
+    system_unlock();
     return ret;
 }
 
@@ -596,10 +596,10 @@ int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
     if (!len)
         return PARAM_ERR_INVALID_ID;
 
-    LOCK();
+    system_lock();
     param_entry_t *e = param_entry_find(param_id);
     if (!e) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_INVALID_ID;
     }
 
@@ -626,12 +626,12 @@ int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
         src = (const uint8_t *)entry_cache(e)->ptr;
         break;
     default:
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_TYPE_MISMATCH;
     }
 
     if (!src) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_NOT_FOUND;
     }
 
@@ -644,7 +644,7 @@ int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
         *len = total;
     }
 
-    UNLOCK();
+    system_unlock();
     return PARAM_OK;
 }
 
@@ -730,17 +730,17 @@ int param_read_string(uint32_t id, char *buf, uint16_t buf_size)
     if (entry_type(e) != PARAM_TYPE_STRING)
         return PARAM_ERR_TYPE_MISMATCH;
 
-    LOCK();
+    system_lock();
     const char *src = (const char *)entry_cache(e)->ptr;
     if (!src) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_NOT_FOUND;
     }
 
     uint16_t copy = buf_size - 1;
     strncpy(buf, src, copy);
     buf[copy] = '\0';
-    UNLOCK();
+    system_unlock();
 
     return PARAM_OK;
 }
@@ -779,10 +779,10 @@ int param_write_string(uint32_t id, const char *str)
  */
 uint16_t param_get_size(uint32_t param_id)
 {
-    LOCK();
+    system_lock();
     param_entry_t *e = param_entry_find(param_id);
     if (!e) {
-        UNLOCK();
+        system_unlock();
         return 0;
     }
 
@@ -806,7 +806,7 @@ uint16_t param_get_size(uint32_t param_id)
         result = 0;
         break;
     }
-    UNLOCK();
+    system_unlock();
     return result;
 }
 
@@ -825,18 +825,18 @@ int param_exec(uint32_t cmd_id, void *user_arg)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
-    LOCK();
+    system_lock();
     param_entry_t *e = param_entry_find(cmd_id);
     if (!param_entry_is_exec(e)) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_NOT_FOUND;
     }
     param_module_node_t *m = param_module_find(PARAM_MODULE_ID(cmd_id));
     if (!m || !m->vtable || !m->vtable->exec) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_NOT_FOUND;
     }
-    UNLOCK();
+    system_unlock();
     param_value_t arg = {.ptr = user_arg};
     return m->vtable->exec(m, cmd_id, arg);
 }
@@ -856,7 +856,7 @@ int param_flush(void)
 
     int last_err = PARAM_OK;
 
-    LOCK();
+    system_lock();
 
     param_module_node_t *m = g_pm.module_head;
     while (m) {
@@ -871,7 +871,7 @@ int param_flush(void)
         m = m->next;
     }
 
-    UNLOCK();
+    system_unlock();
     return last_err;
 }
 
@@ -898,7 +898,7 @@ int param_check_flush_integrity(void)
 
     g_pm.stats.flush_order_miss_count = 0;
 
-    LOCK();
+    system_lock();
 
     param_module_node_t *m = g_pm.module_head;
     while (m) {
@@ -910,7 +910,7 @@ int param_check_flush_integrity(void)
         m = m->next;
     }
 
-    UNLOCK();
+    system_unlock();
 
     if (g_pm.stats.flush_order_miss_count > 0)
         return PARAM_ERR_NOT_FOUND;
@@ -938,7 +938,7 @@ int param_save_all(void)
         return PARAM_ERR_NOT_FOUND;
     int first_err = PARAM_OK;
 
-    LOCK();
+    system_lock();
     for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
         param_entry_t *e = g_pm.hash[i];
         if (!e)
@@ -947,7 +947,7 @@ int param_save_all(void)
         if (ret != 0 && first_err == PARAM_OK)
             first_err = (ret < 0) ? ret : PARAM_ERR_FLASH_FAIL;
     }
-    UNLOCK();
+    system_unlock();
     return first_err;
 }
 
@@ -958,14 +958,14 @@ int param_save_one(uint32_t param_id)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->save)
         return PARAM_ERR_NOT_FOUND;
-    LOCK();
+    system_lock();
     param_entry_t *e = find_entry(param_id);
     if (!e) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_INVALID_ID;
     }
     int ret = e->vtable->save(e);
-    UNLOCK();
+    system_unlock();
     return ret;
 }
 
@@ -1134,7 +1134,7 @@ int param_load_all(void)
         return PARAM_ERR_NOT_FOUND;
     int first_err = PARAM_OK;
 
-    LOCK();
+    system_lock();
 
     /* 第一阶段: 遍历哈希表，恢复所有 entry 的缓存值 */
     for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
@@ -1146,7 +1146,7 @@ int param_load_all(void)
             first_err = ret;
     }
 
-    UNLOCK();
+    system_unlock();
 
     /* 第二阶段: 按 MODULE_INIT_ORDER 顺序初始化每个模块 */
     param_module_node_t *m = g_pm.module_head;
@@ -1182,9 +1182,9 @@ int param_load_one(uint32_t param_id)
         return PARAM_ERR_INVALID_ID;
 
     int ret;
-    LOCK();
+    system_lock();
     ret = e->vtable->load(e);
-    UNLOCK();
+    system_unlock();
     if (ret >= 0) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->mark_dirty)
@@ -1240,7 +1240,7 @@ int param_reset_all(void)
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
 
-    LOCK();
+    system_lock();
 
     for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
         param_entry_t *e = g_pm.hash[i];
@@ -1249,7 +1249,7 @@ int param_reset_all(void)
         e->vtable->reset(e);
     }
 
-    UNLOCK();
+    system_unlock();
 
     param_module_node_t *m = g_pm.module_head;
     while (m) {
@@ -1283,10 +1283,10 @@ int param_reset_one(uint32_t param_id)
     param_entry_t *e;
     int ret;
 
-    LOCK();
+    system_lock();
     e = find_entry(param_id);
     if (!e) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_INVALID_ID;
     }
     ret = e->vtable->reset(e);
@@ -1295,7 +1295,7 @@ int param_reset_one(uint32_t param_id)
         if (m && m->vtable && m->vtable->mark_dirty)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
     }
-    UNLOCK();
+    system_unlock();
 
     /* apply 重新校验默认值 + 恢复 entry 级 dirty; 有意不走 param_write 以避免 notify */
     if (ret == PARAM_OK)
@@ -1310,9 +1310,9 @@ void param_get_stats(param_stats_t *stats)
     if (!g_pm.initialized)
         return;
     if (stats) {
-        LOCK();
+        system_lock();
         *stats = g_pm.stats;
-        UNLOCK();
+        system_unlock();
     }
 }
 
@@ -1321,11 +1321,11 @@ void param_clear_stats(void)
 {
     if (!g_pm.initialized)
         return;
-    LOCK();
+    system_lock();
     g_pm.stats.dirty_count = 0;
     g_pm.stats.flush_error_count = 0;
     g_pm.stats.flush_order_miss_count = 0;
-    UNLOCK();
+    system_unlock();
 }
 
 /**
@@ -1339,7 +1339,7 @@ void param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data)
 {
     if (!g_pm.initialized || !cb)
         return;
-    LOCK();
+    system_lock();
 
     param_module_node_t *m = g_pm.module_head;
     while (m) {
@@ -1349,14 +1349,14 @@ void param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data)
                 if (!e)
                     continue;
                 if (!cb(e, user_data)) {
-                    UNLOCK();
+                    system_unlock();
                     return;
                 }
             }
         }
         m = m->next;
     }
-    UNLOCK();
+    system_unlock();
 }
 
 /**
@@ -1373,16 +1373,16 @@ int param_set_range(uint32_t param_id,
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
-    LOCK();
+    system_lock();
     param_entry_t *e = find_entry(param_id);
     if (!e) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_INVALID_ID;
     }
 
     param_type_t t = entry_type(e);
     if (t != PARAM_TYPE_UINT && t != PARAM_TYPE_INT && t != PARAM_TYPE_FLOAT) {
-        UNLOCK();
+        system_unlock();
         return PARAM_ERR_TYPE_MISMATCH;
     }
 
@@ -1402,7 +1402,7 @@ int param_set_range(uint32_t param_id,
     param_value_t new_val = *entry_cache(e);
     bool clamped = memcmp(&old_val, &new_val, sizeof(param_value_t)) != 0;
 
-    UNLOCK();
+    system_unlock();
 
     if (clamped)
         return param_write(param_id, new_val);
@@ -1415,7 +1415,7 @@ void param_validate_all(void)
 {
     if (!g_pm.initialized)
         return;
-    LOCK();
+    system_lock();
     param_module_node_t *m = g_pm.module_head;
     while (m) {
         for (uint16_t i = 0; i < m->param_count; i++) {
@@ -1425,7 +1425,7 @@ void param_validate_all(void)
         }
         m = m->next;
     }
-    UNLOCK();
+    system_unlock();
 }
 
 /** @brief 遍历所有已注册模块节点 */
@@ -1433,13 +1433,13 @@ void param_module_foreach(param_module_iter_fn cb, void *ctx)
 {
     if (!g_pm.initialized || !cb)
         return;
-    LOCK();
+    system_lock();
     param_module_node_t *m = g_pm.module_head;
     while (m) {
         cb(m, ctx);
         m = m->next;
     }
-    UNLOCK();
+    system_unlock();
 }
 
 #if PARAM_MODULE_AUTO_REGISTER

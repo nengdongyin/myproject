@@ -19,7 +19,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stdlib.h>
-#include "system_adapter.h"
+#include "port.h"
 
 /* ========================== 通用宏定义 ============================== */
 

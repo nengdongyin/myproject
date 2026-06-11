@@ -20,12 +20,13 @@ extern "C"
      *  锁策略 (Lock Discipline)
      * ================================================================
      *
-     * 全局互斥锁通过 LOCK() / UNLOCK() 宏操作，底层由 param_manager_port
-     * 提供 (RTOS 互斥锁 / 裸机关中断 / 无操作)。
+     * 全局互斥锁通过 system_lock() / system_unlock() 函数操作，
+ * 底层由 port/port.h 声明、port_impl.c 提供实现
+ * (RTOS 互斥锁 / 裸机关中断 / 空操作)。
      *
      * 原则:
      *   1. 所有对 g_pm 全局状态的读写 (哈希表、模块链表、统计计数)
-     *      必须在 LOCK/UNLOCK 对内完成。
+     *      必须在 system_lock/system_unlock 对内完成。
      *   2. 参数级 vtable 函数 (app_write / ip_param_write 等) 内部自行
      *      加锁保护缓存更新和 dirty 标记 —— 调用者进入 vtable 前不持锁。
      *   3. 模块级 dirty 标记 (mark_dirty / clear_dirty) 由公共 API 层

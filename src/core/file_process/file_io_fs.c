@@ -15,8 +15,7 @@
 #include "file_io_fs.h"
 #include <zephyr/fs/fs.h>
 #include <string.h>
-#include "param_manager_port.h"
-#include "system_adapter.h"
+#include "port.h"
 
 /**
  * @brief 最多同时打开的文件数
@@ -76,7 +75,7 @@ void file_io_fs_init(void)
  */
 static int fd_alloc(void)
 {
-    LOCK();
+    system_lock();
 
     /* 线性扫描空闲槽位 */
     for (int i = 0; i < FS_MAX_OPEN; i++)
@@ -87,13 +86,13 @@ static int fd_alloc(void)
             g_fs_io.fds[i].allocated = 1;
             g_fs_io.fds[i].idx = i;
             fs_file_t_init(&g_fs_io.fds[i].fd);
-            UNLOCK();
+            system_unlock();
             return i;
         }
     }
 
     /* 池已满：无可用 fd */
-    UNLOCK();
+    system_unlock();
     return -1;
 }
 
@@ -108,7 +107,7 @@ static int fd_alloc(void)
  */
 static void fd_free(int idx)
 {
-    LOCK();
+    system_lock();
 
     /* 边界校验后清零 */
     if (idx >= 0 && (uint32_t)idx < FS_MAX_OPEN)
@@ -116,7 +115,7 @@ static void fd_free(int idx)
         memset(&g_fs_io.fds[idx], 0, sizeof(g_fs_io.fds[idx]));
     }
 
-    UNLOCK();
+    system_unlock();
 }
 
 /**
