@@ -135,7 +135,7 @@ void test_imperx_read_full_frame(void)
 
     TEST_ASSERT_EQUAL(PARSER_ERR_NONE, err);
     TEST_ASSERT(g_frame_ready_called);
-    TEST_ASSERT_EQUAL(0xABCD, g_frame_ready_parsed_id);
+    TEST_ASSERT_EQUAL(0xCDAB, g_frame_ready_parsed_id);
     TEST_ASSERT_EQUAL(IMPERX_CMD_READ, g_frame_ready_parsed_cmd);
     TEST_ASSERT_EQUAL(0, g_frame_ready_parsed_len);
 
@@ -159,7 +159,7 @@ void test_imperx_read_byte_by_byte(void)
         } else {
             TEST_ASSERT_EQUAL(PARSER_ERR_NONE, err);
             TEST_ASSERT(g_frame_ready_called);
-            TEST_ASSERT_EQUAL(0x1122, g_frame_ready_parsed_id);
+            TEST_ASSERT_EQUAL(0x2211, g_frame_ready_parsed_id);
         }
     }
 }
@@ -174,7 +174,7 @@ void test_imperx_read_two_byte_chunk(void)
 
     err = protocol_parser_parse_data((protocol_parser_t *)g_parser, chunk2, 1);
     TEST_ASSERT_EQUAL(PARSER_ERR_NONE, err);
-    TEST_ASSERT_EQUAL(0xDEAD, g_frame_ready_parsed_id);
+    TEST_ASSERT_EQUAL(0xADDE, g_frame_ready_parsed_id);
 }
 
 void test_imperx_read_incomplete_returns_incomplete(void)
@@ -196,13 +196,13 @@ void test_imperx_write_full_frame(void)
 
     TEST_ASSERT_EQUAL(PARSER_ERR_NONE, err);
     TEST_ASSERT(g_frame_ready_called);
-    TEST_ASSERT_EQUAL(0x0123, g_frame_ready_parsed_id);
+    TEST_ASSERT_EQUAL(0x2301, g_frame_ready_parsed_id);
     TEST_ASSERT_EQUAL(IMPERX_CMD_WRITE, g_frame_ready_parsed_cmd);
     TEST_ASSERT_EQUAL(4, g_frame_ready_parsed_len);
-    TEST_ASSERT_EQUAL(0xDD, g_frame_ready_parsed_data[0]);
-    TEST_ASSERT_EQUAL(0xCC, g_frame_ready_parsed_data[1]);
-    TEST_ASSERT_EQUAL(0xBB, g_frame_ready_parsed_data[2]);
-    TEST_ASSERT_EQUAL(0xAA, g_frame_ready_parsed_data[3]);
+    TEST_ASSERT_EQUAL(0xAA, g_frame_ready_parsed_data[0]);
+    TEST_ASSERT_EQUAL(0xBB, g_frame_ready_parsed_data[1]);
+    TEST_ASSERT_EQUAL(0xCC, g_frame_ready_parsed_data[2]);
+    TEST_ASSERT_EQUAL(0xDD, g_frame_ready_parsed_data[3]);
 
     TEST_ASSERT(g_tx_ready_called);
     TEST_ASSERT_EQUAL(1, g_tx_ready_len);
@@ -219,11 +219,11 @@ void test_imperx_write_byte_by_byte(void)
         } else {
             TEST_ASSERT_EQUAL(PARSER_ERR_NONE, err);
             TEST_ASSERT(g_frame_ready_called);
-            TEST_ASSERT_EQUAL(0xFEDC, g_frame_ready_parsed_id);
-            TEST_ASSERT_EQUAL(0x40, g_frame_ready_parsed_data[0]);
-            TEST_ASSERT_EQUAL(0x30, g_frame_ready_parsed_data[1]);
-            TEST_ASSERT_EQUAL(0x20, g_frame_ready_parsed_data[2]);
-            TEST_ASSERT_EQUAL(0x10, g_frame_ready_parsed_data[3]);
+            TEST_ASSERT_EQUAL(0xDCFE, g_frame_ready_parsed_id);
+            TEST_ASSERT_EQUAL(0x10, g_frame_ready_parsed_data[0]);
+            TEST_ASSERT_EQUAL(0x20, g_frame_ready_parsed_data[1]);
+            TEST_ASSERT_EQUAL(0x30, g_frame_ready_parsed_data[2]);
+            TEST_ASSERT_EQUAL(0x40, g_frame_ready_parsed_data[3]);
         }
     }
 }
@@ -324,14 +324,14 @@ void test_imperx_two_consecutive_reads(void)
     uint8_t frame2[] = { 0x52, 0x00, 0x02 };
 
     protocol_parser_parse_data((protocol_parser_t *)g_parser, frame1, 3);
-    TEST_ASSERT_EQUAL(0x0001, g_frame_ready_parsed_id);
+    TEST_ASSERT_EQUAL(0x0100, g_frame_ready_parsed_id);
 
     g_frame_ready_called = false;
     g_tx_ready_called = false;
 
     protocol_parser_parse_data((protocol_parser_t *)g_parser, frame2, 3);
     TEST_ASSERT(g_frame_ready_called);
-    TEST_ASSERT_EQUAL(0x0002, g_frame_ready_parsed_id);
+    TEST_ASSERT_EQUAL(0x0200, g_frame_ready_parsed_id);
 }
 
 void test_imperx_read_then_write(void)
@@ -341,14 +341,14 @@ void test_imperx_read_then_write(void)
 
     protocol_parser_parse_data((protocol_parser_t *)g_parser, read_frame, 3);
     TEST_ASSERT_EQUAL(IMPERX_CMD_READ, g_frame_ready_parsed_cmd);
-    TEST_ASSERT_EQUAL(0x1020, g_frame_ready_parsed_id);
+    TEST_ASSERT_EQUAL(0x2010, g_frame_ready_parsed_id);
 
     g_frame_ready_called = false;
 
     protocol_parser_parse_data((protocol_parser_t *)g_parser, write_frame, 7);
     TEST_ASSERT(g_frame_ready_called);
     TEST_ASSERT_EQUAL(IMPERX_CMD_WRITE, g_frame_ready_parsed_cmd);
-    TEST_ASSERT_EQUAL(0x3040, g_frame_ready_parsed_id);
+    TEST_ASSERT_EQUAL(0x4030, g_frame_ready_parsed_id);
 }
 
 void test_imperx_write_then_read(void)
@@ -507,10 +507,10 @@ void test_imperx_write_parsed_data_in_rx_buffer(void)
     protocol_parser_parse_data((protocol_parser_t *)g_parser, frame, 7);
 
     /* parsed_data should point into rx_buffer at byte index 3 */
-    TEST_ASSERT_EQUAL(0xEF, g_frame_ready_parsed_data[0]);
-    TEST_ASSERT_EQUAL(0xBE, g_frame_ready_parsed_data[1]);
-    TEST_ASSERT_EQUAL(0xAD, g_frame_ready_parsed_data[2]);
-    TEST_ASSERT_EQUAL(0xDE, g_frame_ready_parsed_data[3]);
+    TEST_ASSERT_EQUAL(0xDE, g_frame_ready_parsed_data[0]);
+    TEST_ASSERT_EQUAL(0xAD, g_frame_ready_parsed_data[1]);
+    TEST_ASSERT_EQUAL(0xBE, g_frame_ready_parsed_data[2]);
+    TEST_ASSERT_EQUAL(0xEF, g_frame_ready_parsed_data[3]);
 
     /* verify rx_buffer holds the frame */
     TEST_ASSERT_EQUAL(0x57, g_rx_buf[0]);

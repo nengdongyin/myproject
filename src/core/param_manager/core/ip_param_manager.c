@@ -313,7 +313,10 @@ static int ip_module_flush(param_module_node_t *m)
             inst->dirty_map &= ~(1ULL << lid);
         } else {
             last_err = ret;
-            /* 保留 dirty 位以便下次 flush 重试 */
+            /* 永久清除 dirty: write 失败重试无意义,
+               下次 param_write 会重新标脏触发 flush */
+            inst->dirty_map &= ~(1ULL << lid);
+            param_entry_clear_dirty(e);
         }
     }
 

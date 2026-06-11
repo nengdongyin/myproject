@@ -124,7 +124,7 @@ static void dump_line(param_entry_t *e, const char *name,
          c_vl[COL_VALUE_W + 1], c_rg[COL_RANGE_W + 1],
          c_dt[COL_DIRTY_W + 1], c_fl[COL_FLAGS_W + 1], fb[8];
 
-    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)e->param_id & 0xFFFF);
+    col_fill(c_id, COL_ID_W, " [%04X]", (unsigned)PARAM_LOCAL_ID(e->param_id));
     col_fill(c_nm, COL_NAME_W, "%s", name);
     col_fill(c_vl, COL_VALUE_W, "%s", val_str);
     if (range_str)
