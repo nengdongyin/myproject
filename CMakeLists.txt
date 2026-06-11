@@ -14,6 +14,7 @@ target_include_directories(app PRIVATE
     src/test/camyu
     src/core/protocol_parser
     src/core/param_manager/core
+    src/core/param_manager/config
     src/core/param_manager/port
     src/protocols/ymodem/src
     src/protocols/ymodem/adapter
