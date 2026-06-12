@@ -13,6 +13,7 @@ target_include_directories(app PRIVATE
     src/test/protocols/camyu
     src/core/protocol_parser
     src/platform
+    src/platform/port
     src/core/param_manager/core
     src/core/param_manager/config
     src/core/param_manager/storage
@@ -136,7 +137,7 @@ else()
       src/core/param_manager/core/ip_param_manager.c
       src/core/param_manager/core/param_data_ops.c
       src/core/param_manager/core/param_dump.c
-      src/platform/port_impl.c
+      src/platform/port/port_impl.c
       src/core/param_manager/storage/param_storage_flashdb.c
       src/platform/bsp/rp2350/fal_flash_rp2350.c
       src/protocols/camyu/protocol_parser_camyu.c
@@ -159,6 +160,9 @@ else()
       src/camera/modules/auto_exp/ae_instance.c
       src/camera/modules/auto_exp/auto_exp_control.c
       src/camera/drivers/bridge/sensor_module.c
+      src/camera/core/isc/example_app.c
+      src/camera/core/isc/isc_core.c
+      src/camera/drivers/sensors/isc_sensor_imx296.c
   )
 
 endif()

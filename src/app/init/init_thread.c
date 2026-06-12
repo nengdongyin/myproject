@@ -13,7 +13,7 @@ K_THREAD_STACK_DEFINE(protocol_parser_stack, STACK_SIZE);
 static struct k_thread protocol_parser_thread_data;
 
 test_ctx_t test_ctx;
-
+extern void app_sensor_demo(void);
 void init_thread_entry(void *arg1, void *arg2, void *arg3)
 {
     ARG_UNUSED(arg1);
@@ -45,6 +45,9 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
     LOG_INF("  Ymodem Tx:  idle (start via Imperx WRITE 0xF001)");
     LOG_INF("  File io:   LittleFS (file_io_fs)");
     LOG_INF("=========================================");
+
+
+    app_sensor_demo();
 
     k_thread_create(&protocol_parser_thread_data, protocol_parser_stack,
                     K_THREAD_STACK_SIZEOF(protocol_parser_stack),
