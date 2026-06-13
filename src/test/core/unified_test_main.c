@@ -10,6 +10,7 @@ extern const test_suite_t _ts_ymodem_receiver;
 extern const test_suite_t _ts_protocol_chain;
 extern const test_suite_t _ts_imperx;
 extern const test_suite_t _ts_camyu;
+extern const test_suite_t _ts_isc;
 
 //uint32_t mock_time_ms;
 
@@ -29,6 +30,7 @@ int main(void)
     test_suite_add(&_ts_protocol_chain);
     test_suite_add(&_ts_imperx);
     test_suite_add(&_ts_camyu);
+    test_suite_add(&_ts_isc);
 
     int failures = test_suite_run_all();
     (void)failures;
