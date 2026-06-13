@@ -66,6 +66,4 @@ typedef enum {
 #define ISC_GAIN_AUTO_ONCE           1   /**< 单次自动增益                        */
 #define ISC_GAIN_AUTO_CONTINUOUS     2   /**< 连续自动增益                        */
 
-#define ISC_ENUM_END               (-6)  /**< 枚举正常结束                        */
-
 #endif /* ISC_CONTROL_H */

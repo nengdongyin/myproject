@@ -65,7 +65,7 @@ typedef struct isc_sensor_ops {
 
     /* ── 格式 ── */
     /** @brief 枚举支持的像素格式 (必须)
-     *  @param[in]  index  格式索引 (0-based, 递增至 ISC_ERR_NO_MORE)
+     *  @param[in]  index  格式索引 (0-based, 递增至 ISC_ENUM_END)
      *  @param[out] desc   格式描述 (含约束)
      */
     int (*enum_fmts)(isc_dev_t *dev, uint8_t index,

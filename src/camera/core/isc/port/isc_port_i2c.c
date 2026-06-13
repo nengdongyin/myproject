@@ -35,7 +35,6 @@
  *
  *   // 平台延时
  *   void isc_delay_ms(uint32_t ms);
- *   void isc_delay_us(uint32_t us);
  *
  *   // GPIO 写 (PWDN/RESET/XCLR)
  *   int isc_gpio_write(uint8_t pin, uint8_t level);

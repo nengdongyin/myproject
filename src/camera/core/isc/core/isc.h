@@ -35,12 +35,12 @@ typedef struct isc_dev_t isc_dev_t;
 #define ISC_OK                    0    /**< 操作成功                                */
 #define ISC_ERR_INVALID_ARG      -1    /**< 参数非法 (NULL/越界/crop 不合法)         */
 #define ISC_ERR_NOT_OPEN         -2    /**< 设备未 open                             */
-#define ISC_ERR_ALREADY_OPEN     -3    /**< 设备已 open (多开保护)                   */
+#define ISC_ERR_ALREADY_OPEN     -3    /**< @reserved 预留: 多开保护                  */
 #define ISC_ERR_NOT_SUPPORTED    -4    /**< 传感器/驱动不支持该操作                  */
-#define ISC_ERR_TIMEOUT          -5    /**< 通信超时                                */
-#define ISC_ERR_NO_MORE          -6    /* @deprecated 用 ISC_ENUM_END */
-#define ISC_ERR_NO_MEM           -7    /**< 内存不足 (S0 策略下保留)                 */
-#define ISC_ERR_BUSY             -8    /**< 设备忙 (流中调 set_fmt 等)               */
+#define ISC_ERR_TIMEOUT          -5    /**< @reserved 预留: 通信超时                  */
+#define ISC_ENUM_END             -6    /**< 枚举正常结束                            */
+#define ISC_ERR_NO_MEM           -7    /**< 槽位已满                                 */
+#define ISC_ERR_BUSY             -8    /**< 设备忙 (流中调不可改的控制项)             */
 #define ISC_ERR_NOT_FOUND        -9    /**< 未匹配到传感器                           */
 #define ISC_ERR_IO               -10   /**< 底层通信失败                             */
 #define ISC_ERR_CTRL_RANGE       -11   /**< 控制值超出 [min, max]                    */

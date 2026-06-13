@@ -35,7 +35,7 @@ static int smartsens_enum_fmts(isc_dev_t *dev, uint8_t index,
                                isc_fmt_desc_t *desc)
 {
     (void)dev; (void)index; (void)desc;
-    if (index > 0) return ISC_ERR_NO_MORE;
+    if (index > 0) return ISC_ENUM_END;
     return ISC_ERR_NOT_SUPPORTED;
 }
 

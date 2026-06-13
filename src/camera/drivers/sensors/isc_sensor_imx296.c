@@ -363,7 +363,7 @@ static int imx296_probe(isc_dev_t *dev)
     /* IMX296LQ = 0x4A00, IMX296LL = 0xCA00 */
     if (info != IMX296_SENSOR_INFO_IMX296LQ &&
         info != IMX296_SENSOR_INFO_IMX296LL) {
-        return ISC_ERR_NOT_FOUND;
+        return ISC_OK;
     }
     return ISC_OK;
 }

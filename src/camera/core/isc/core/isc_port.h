@@ -13,9 +13,9 @@
 
 /* ──── 总线类型 ──── */
 typedef enum {
-    ISC_BUS_I2C = 0,    /**< I2C 总线: reg_addr 低 16-bit 为寄存器地址       */
-    ISC_BUS_SPI = 1,    /**< SPI 总线: reg_addr 按传感器约定编码              */
-    ISC_BUS_AXI = 2,    /**< FPGA AXI 直写: reg_addr 为完整内存映射地址       */
+    ISC_BUS_I2C = 0,    /**< I2C 总线                               */
+    ISC_BUS_SPI = 1,    /**< SPI 总线                               */
+    ISC_BUS_AXI = 2,    /**< FPGA AXI 直写 — reg_addr 即内存地址      */
 } isc_bus_type_t;
 
 /**

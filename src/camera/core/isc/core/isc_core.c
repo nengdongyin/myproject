@@ -140,10 +140,15 @@ static void compute_timing(isc_timing_t *t)
             (1000000000ULL * t->line_length_pclk) / t->pixel_clock_hz);
     }
     if (t->line_period_ns > 0) {
-        t->frame_period_ns   = t->line_period_ns * t->frame_length_lines;
-        t->readout_time_ns   = t->line_period_ns * t->readout_lines;
-        t->exposure_time_ns  = t->line_period_ns * t->exposure_lines;
-        t->exposure_max_ns   = t->line_period_ns * t->exposure_max_lines;
+        uint64_t lp = t->line_period_ns;
+        t->frame_period_ns   = (lp * t->frame_length_lines > 0xFFFFFFFFULL)
+            ? 0xFFFFFFFFu : (uint32_t)(lp * t->frame_length_lines);
+        t->readout_time_ns   = (lp * t->readout_lines > 0xFFFFFFFFULL)
+            ? 0xFFFFFFFFu : (uint32_t)(lp * t->readout_lines);
+        t->exposure_time_ns  = (lp * t->exposure_lines > 0xFFFFFFFFULL)
+            ? 0xFFFFFFFFu : (uint32_t)(lp * t->exposure_lines);
+        t->exposure_max_ns   = (lp * t->exposure_max_lines > 0xFFFFFFFFULL)
+            ? 0xFFFFFFFFu : (uint32_t)(lp * t->exposure_max_lines);
     }
 }
 
@@ -215,14 +220,10 @@ int isc_deinit(void)
 
     for (uint8_t i = 0; i < ISC_MAX_DEVS; i++) {
         if (g_devs[i].state != ISC_STATE_FREE) {
-            isc_close(&g_devs[i]);
+            isc_close(&g_devs[i]);  /* 内部调 dev_slot_reset */
         }
     }
 
-    memset(g_devs, 0, sizeof(g_devs));
-    for (uint8_t i = 0; i < ISC_MAX_DEVS; i++) {
-        g_devs[i].state = ISC_STATE_FREE;
-    }
     g_port         = NULL;
     g_fpga_ops     = NULL;
     g_sensor_count = 0;
@@ -364,7 +365,11 @@ int isc_close(isc_dev_t *dev)
     }
 
     if (d->ops->deinit != NULL) {
-        d->ops->deinit(d);
+        int drc = d->ops->deinit(d);
+        if (drc != ISC_OK) {
+            /* deinit 失败 — 保留状态不释放 */
+            return drc;
+        }
     }
 
     dev_slot_reset(d);
@@ -420,19 +425,25 @@ int isc_query_cap(isc_dev_t *dev, isc_cap_t *cap)
     cap->capabilities = dev->cached_caps;
 
     /* 枚举格式数 */
+    cap->num_formats = 0;
     if (dev->ops->enum_fmts) {
         isc_fmt_desc_t desc;
-        uint8_t idx = 0;
-        while (idx < 255 && dev->ops->enum_fmts(dev, idx, &desc) == ISC_OK) idx++;
-        cap->num_formats = idx;
+        while (dev->ops->enum_fmts(dev, cap->num_formats, &desc) == ISC_OK)
+            cap->num_formats++;
     }
 
-    /* 枚举控制项数 */
+    /* 枚举控制项数 (标准 + 私有) */
     cap->num_ctrls = 0;
     if (dev->ops->query_ctrl) {
         isc_ctrl_desc_t cd;
         uint32_t std_end = ISC_CID_STANDARD_BASE + ISC_CID_STANDARD_COUNT;
+        uint32_t priv_end = ISC_CID_PRIVATE_BASE + ISC_PRIVATE_CID_SCAN_COUNT;
         for (uint32_t cid = ISC_CID_STANDARD_BASE + 1; cid <= std_end; cid++) {
+            memset(&cd, 0, sizeof(cd));
+            cd.cid = cid;
+            if (dev->ops->query_ctrl(dev, &cd) == ISC_OK) cap->num_ctrls++;
+        }
+        for (uint32_t cid = ISC_CID_PRIVATE_BASE; cid < priv_end; cid++) {
             memset(&cd, 0, sizeof(cd));
             cd.cid = cid;
             if (dev->ops->query_ctrl(dev, &cd) == ISC_OK) cap->num_ctrls++;
@@ -515,9 +526,9 @@ static int query_next_ctrl_impl(isc_dev_t *dev, isc_ctrl_desc_t *desc)
     int found = 0;
 
     /* 标准 CID 空间: ISC_CID_STANDARD_BASE + 1 .. + COUNT */
-    {
+    if (start < ISC_CID_STANDARD_BASE + ISC_CID_STANDARD_COUNT) {
         uint32_t std_end = ISC_CID_STANDARD_BASE + ISC_CID_STANDARD_COUNT;
-        uint32_t scan = (start >= ISC_CID_STANDARD_BASE && start < std_end)
+        uint32_t scan = (start >= ISC_CID_STANDARD_BASE)
             ? start + 1 : ISC_CID_STANDARD_BASE + 1;
         for (; scan <= std_end; scan++) {
             isc_ctrl_desc_t test;
@@ -627,7 +638,7 @@ int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value)
     memset(&desc, 0, sizeof(desc));
     desc.cid = cid;
     int rc = dev->ops->query_ctrl(dev, &desc);
-    if (rc != ISC_OK) return ISC_ERR_NOT_SUPPORTED;
+    if (rc != ISC_OK) return rc;  /* 透传驱动错误码 */
 
     /* 检查流中修改权限 */
     if (dev->state == ISC_STATE_STREAMING) {
