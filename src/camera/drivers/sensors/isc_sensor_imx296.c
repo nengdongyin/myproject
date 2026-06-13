@@ -206,10 +206,11 @@ static uint32_t imx296_read(const isc_dev_t *dev, uint32_t addr, int *err)
     uint8_t  buf[3] = { 0, 0, 0 };
     uint16_t reg    = (uint16_t)(addr & IMX296_REG_ADDR_MASK);
     uint8_t  width  = (uint8_t)((addr >> IMX296_REG_SIZE_SHIFT) & 3u);
+    uint8_t  reg_buf[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
 
     if (*err) return 0;
 
-    int rc = dev->port->read(dev->port->user_data, (uint32_t)reg, buf, width);
+    int rc = dev->port->read(dev->port->user_data, reg_buf, 2, buf, width);
     if (rc != 0) {
         *err = ISC_ERR_IO;
         return 0;
@@ -226,6 +227,7 @@ static void imx296_write(const isc_dev_t *dev, uint32_t addr, uint32_t value,
     uint8_t  buf[3];
     uint16_t reg   = (uint16_t)(addr & IMX296_REG_ADDR_MASK);
     uint8_t  width = (uint8_t)((addr >> IMX296_REG_SIZE_SHIFT) & 3u);
+    uint8_t  reg_buf[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
 
     if (*err) return;
 
@@ -233,7 +235,7 @@ static void imx296_write(const isc_dev_t *dev, uint32_t addr, uint32_t value,
     buf[1] = (uint8_t)((value >> 8) & 0xFF);
     buf[2] = (uint8_t)((value >> 16) & 0xFF);
 
-    int rc = dev->port->write(dev->port->user_data, (uint32_t)reg, buf, width);
+    int rc = dev->port->write(dev->port->user_data, reg_buf, 2, buf, width);
     if (rc != 0) *err = ISC_ERR_IO;
 }
 
@@ -539,20 +541,19 @@ static int imx296_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
     /* ── 4. Binning: 仅全阵列时允许 ── */
     if (fmt->crop_width  != IMX296_PIXEL_ARRAY_WIDTH ||
         fmt->crop_height != IMX296_PIXEL_ARRAY_HEIGHT) {
-        if (fmt->reduction != ISC_REDUCTION_NONE) {
-            fmt->reduction = ISC_REDUCTION_NONE;
-        }
+        fmt->reduction_x = 1; fmt->reduction_y = 1; fmt->reduction_mode = ISC_REDUCE_NONE;
     }
 
     /* ── 5. 输出分辨率 ── */
     if (fmt->width  == 0) fmt->width  = fmt->crop_width;
     if (fmt->height == 0) fmt->height = fmt->crop_height;
 
-    /* Binning 时输出 = 裁剪 / 2                                             */
-    if (fmt->reduction == ISC_REDUCTION_BIN_2) {
-        fmt->width  = fmt->crop_width  / 2u;
-        fmt->height = fmt->crop_height / 2u;
-    }
+    /* Binning 时输出 = 裁剪 / 因子                                        */
+    if (fmt->reduction_x > 1) fmt->width  /= (uint32_t)fmt->reduction_x;
+    if (fmt->reduction_y > 1) fmt->height /= (uint32_t)fmt->reduction_y;
+    /* 默认 binning 模式: 全阵列裁剪 + 缩减因子 >1 */
+    if (fmt->reduction_x > 1 || fmt->reduction_y > 1)
+        fmt->reduction_mode = ISC_REDUCE_BIN_SUM;
 
     /* ── 6. 帧率默认 ── */
     if (fmt->frame_rate_num == 0 || fmt->frame_rate_den == 0) {
@@ -614,7 +615,6 @@ static int imx296_set_fmt(isc_dev_t *dev, const isc_fmt_t *fmt)
     {
         int hold_err = 0;
         imx296_write(dev, IMX296_CTRL08, 0, &hold_err);
-        /* 若 REGHOLD 退出本身失败则优先报告, 否则报告之前的错误              */
         if (hold_err) return ISC_ERR_IO;
     }
     if (err) return ISC_ERR_IO;
@@ -728,8 +728,9 @@ static int imx296_query_ctrl(isc_dev_t *dev, isc_ctrl_desc_t *desc)
         desc->type     = ISC_CTRL_TYPE_FLOAT;
         desc->unit     = "°C";
         strncpy(desc->name, "Temperature", ISC_MAX_CTRL_NAME - 1);
-        desc->min.f    = -65.0f;    /* raw=1023 → 246.312−311.0 = −64.7°C     */
-        desc->max.f    = 246.3f;    /* raw=0    → 246.312°C                   */
+        /* T = 246.312 − 0.304 × raw; raw∈[0,1023], max raw→−64.7°C      */
+        desc->min.f    = -65.0f;
+        desc->max.f    = 246.3f;
         desc->step.f   = 0.0f;
         desc->def.f    = 25.0f;
         desc->flags    = ISC_CTRL_FLAG_READ_ONLY | ISC_CTRL_FLAG_VOLATILE;
@@ -868,6 +869,29 @@ static int imx296_get_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t *val)
     return err;
 }
 
+/**
+ * @brief H/V 翻转后同步 Bayer 顺序到 pixel_format
+ *
+ * IMX296 原生 Bayer = BGGR (ISC_PIX_FMT_SBGGR10)。
+ * HFLIP 交换列 (BGGR→GBRG), VFLIP 交换行 (BGGR→GRBG)。
+ */
+/**
+ * @brief 根据 CTRL0E 寄存器值更新 current_fmt 的 pixel_format
+ * @param ctrl0e  即将写入 CTRL0E 的新值 (免去重新 I2C 读取)
+ */
+static void imx296_sync_bayer_order(isc_dev_t *dev, uint8_t ctrl0e)
+{
+    /* Bayer 顺序查找表: [vflip][hflip] */
+    static const uint32_t bayer_map[2][2] = {
+        { ISC_PIX_FMT_SBGGR10, ISC_PIX_FMT_SGBRG10 },  /* V=0 */
+        { ISC_PIX_FMT_SGRBG10, ISC_PIX_FMT_SRGGB10 },  /* V=1 */
+    };
+
+    int h = (ctrl0e & IMX296_CTRL0E_HREVERSE) ? 1 : 0;
+    int v = (ctrl0e & IMX296_CTRL0E_VREVERSE) ? 1 : 0;
+    dev->current_fmt.pixel_format = bayer_map[v][h];
+}
+
 static int imx296_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t val)
 {
     int err = 0;
@@ -920,6 +944,7 @@ static int imx296_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t val)
         if (val.b) ctrl0e |=  IMX296_CTRL0E_HREVERSE;
         else       ctrl0e &= ~IMX296_CTRL0E_HREVERSE;
         imx296_write(dev, IMX296_CTRL0E, ctrl0e, &err);
+        if (!err) imx296_sync_bayer_order(dev, ctrl0e);
         break;
     }
 
@@ -928,6 +953,7 @@ static int imx296_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t val)
         if (val.b) ctrl0e |=  IMX296_CTRL0E_VREVERSE;
         else       ctrl0e &= ~IMX296_CTRL0E_VREVERSE;
         imx296_write(dev, IMX296_CTRL0E, ctrl0e, &err);
+        if (!err) imx296_sync_bayer_order(dev, ctrl0e);
         break;
     }
 
@@ -1008,18 +1034,18 @@ static int imx296_query_menu(isc_dev_t *dev, uint32_t cid, uint32_t index,
 static int imx296_stream_on(isc_dev_t *dev)
 {
     int err = 0;
-    /* 退出待机 + 启动主时钟输出 (XMSTA)                                     */
+    /* 退出待机 + 启动主时钟输出 (XMSTA=1)                                  */
     imx296_write(dev, IMX296_CTRL00, 0, &err);
     dev->port->delay_ms(2);
-    imx296_write(dev, IMX296_CTRL0A, 0, &err);
+    imx296_write(dev, IMX296_CTRL0A, IMX296_CTRL0A_XMSTA, &err);
     return err;
 }
 
 static int imx296_stream_off(isc_dev_t *dev)
 {
     int err = 0;
-    /* 停止 XMSTA + 进入待机                                                 */
-    imx296_write(dev, IMX296_CTRL0A, IMX296_CTRL0A_XMSTA, &err);
+    /* 停止主时钟输出 (XMSTA=0) + 进入待机                                  */
+    imx296_write(dev, IMX296_CTRL0A, 0, &err);
     imx296_write(dev, IMX296_CTRL00, IMX296_CTRL00_STANDBY, &err);
     return err;
 }
@@ -1108,10 +1134,13 @@ static int imx296_try_timing(isc_dev_t *dev, const isc_fmt_t *fmt,
     }
     timing->frame_length_lines = vmax;
 
-    /* ── 曝光: 假设最大可用 (VMAX − readout_lines, 保守估计) ── */
-    if (vmax > readout) {
-        timing->exposure_lines     = vmax - readout;
-        timing->exposure_max_lines = vmax - readout;
+    /* ── 曝光: VMAX − readout, SHS1 需 ≥1 行, 保守预留 1 行余量 ── */
+    if (vmax > readout + 1u) {
+        timing->exposure_lines     = vmax - readout - 1u;
+        timing->exposure_max_lines = vmax - readout - 1u;
+    } else if (vmax > readout) {
+        timing->exposure_lines     = 1u;
+        timing->exposure_max_lines = 1u;
     } else {
         timing->exposure_lines     = 0;
         timing->exposure_max_lines = 0;
@@ -1123,15 +1152,15 @@ static int imx296_try_timing(isc_dev_t *dev, const isc_fmt_t *fmt,
 /* ═══════════════════════════════════════════════════════════════════════════
  * 驱动注册
  * ═══════════════════════════════════════════════════════════════════════════ */
-
+extern isc_port_t g_i2c_port;
 const isc_sensor_ops_t isc_sensor_imx296 = {
     /* ── 标识 ── */
     .model        = "sony_imx296",
     .vendor       = "Sony",
-    .i2c_addr     = 0x1A,
     .capabilities = ISC_CAP_TIMING_QUERY
                   | ISC_CAP_ROI
                   | ISC_CAP_BINNING,  /* Binning 仅在 crop=全阵列时可用       */
+    .port         = &g_i2c_port,
 
     /* ── 生命周期 ── */
     .probe          = imx296_probe,

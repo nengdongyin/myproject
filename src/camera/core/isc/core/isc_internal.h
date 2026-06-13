@@ -17,7 +17,6 @@ typedef enum {
     ISC_STATE_STREAMING  = 2,   /**< 传感器正在输出 LVDS 数据                       */
 } isc_state_t;
 
-#define ISC_STATE_INIT    ISC_STATE_FREE  /**< @deprecated 向后兼容; 用 ISC_STATE_FREE */
 
 /* ──── 控制项缓存 ──── */
 typedef struct isc_ctrl_cache {
@@ -39,15 +38,12 @@ struct isc_dev_t {
 
     /* 格式 */
     isc_fmt_t               current_fmt;    /**< 当前生效格式 (含 crop)              */
+    uint32_t                cached_caps;    /**< 能力位图快照 (isc_open 时探测一次)  */
 
     /* 控制 */
     isc_ctrl_cache_t        ctrl_cache[ISC_MAX_CTRLS]; /**< 控制值缓存               */
     uint8_t                 num_ctrls;      /**< 实际控制项数量                      */
-    uint32_t                last_ctrl_cid;  /**< NEXT_CTRL 枚举迭代状态              */
-
-    /* 时序 */
-    isc_timing_t            cached_timing;  /**< 最近一次 query_timing 快照          */
-    uint8_t                 timing_valid;   /**< 缓存是否有效 (0=无效, 1=有效)       */
+    uint32_t                last_ctrl_cid;  /**< isc_query_next_ctrl 枚举游标       */
 
     /* 回调 */
     isc_on_ctrl_change_t    on_ctrl_change; /**< 控制变更通知 (可选)                 */

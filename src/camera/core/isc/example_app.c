@@ -13,110 +13,35 @@
 #include <string.h>
 #include "isc.h"
 
-/* ═══════════════════════════════════════════════════════════════════════════
- * 1. 平台移植 — 实现 isc_port_t 和 isc_fpga_ops_t
- * ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── I2C 私有多路复用上下文 ── */
-typedef struct {
-    void    *i2c_base;     /* I2C 控制器寄存器基址 (平台相关) */
-    uint8_t  dev_addr;     /* 传感器 I2C 7-bit 地址 */
-} my_i2c_ctx_t;
-
-static int my_i2c_read(void *user_data, uint32_t reg_addr,
-                       uint8_t *data, uint16_t len)
-{
-    my_i2c_ctx_t *ctx = (my_i2c_ctx_t *)user_data;
-    /** TODO: 平台 I2C 读实现:
-     *   i2c_start(); i2c_write_byte(ctx->dev_addr << 1);
-     *   i2c_write_byte((reg_addr >> 8) & 0xFF); i2c_write_byte(reg_addr & 0xFF);
-     *   i2c_start(); i2c_write_byte((ctx->dev_addr << 1) | 1);
-     *   for (i=0; i<len; i++) data[i] = i2c_read_byte(i==len-1 ? NAK : ACK);
-     *   i2c_stop();
-     */
-    (void)ctx; (void)reg_addr; (void)data; (void)len;
-    return 0;
-}
-
-static int my_i2c_write(void *user_data, uint32_t reg_addr,
-                        const uint8_t *data, uint16_t len)
-{
-    my_i2c_ctx_t *ctx = (my_i2c_ctx_t *)user_data;
-    /** TODO: 平台 I2C 写实现 */
-    (void)ctx; (void)reg_addr; (void)data; (void)len;
-    return 0;
-}
-
-static void my_delay_ms(uint32_t ms)   { /** TODO: 平台毫秒延时 */ (void)ms; }
-static void my_delay_us(uint32_t us)   { /** TODO: 平台微秒延时 */ (void)us; }
-static int  my_gpio_write(uint8_t pin, uint8_t level) {
-    /** TODO: 平台 GPIO 写 (PWDN/RESET/XCLR) */
-    (void)pin; (void)level; return 0;
-}
-
-/* ── FPGA 同步上下文 ── */
-typedef struct {
-    void *axi_base;     /* AXI-Lite 寄存器基址 */
-} my_fpga_ctx_t;
+/* ── FPGA 同步 (用户实现) ── */
+typedef struct { void *axi_base; } my_fpga_ctx_t;
+static my_fpga_ctx_t fpga_ctx = { .axi_base = (void *)0x43C00000 };
 
 static int my_fpga_ioctl(uint32_t cmd, void *arg, void *user_data)
 {
-    my_fpga_ctx_t *ctx = (my_fpga_ctx_t *)user_data;
+    (void)user_data;
     switch (cmd) {
     case ISC_FPGA_FORMAT_CHANGED: {
         const isc_fmt_t *fmt = (const isc_fmt_t *)arg;
-        /** TODO: 写 FPGA 格式寄存器组:
-         *   axi_write(ctx->axi_base + FPGA_REG_WIDTH,       fmt->width);
-         *   axi_write(ctx->axi_base + FPGA_REG_HEIGHT,      fmt->height);
-         *   axi_write(ctx->axi_base + FPGA_REG_PIX_FMT,     fmt->pixel_format);
-         *   axi_write(ctx->axi_base + FPGA_REG_CROP_LEFT,   fmt->crop_left);
-         *   axi_write(ctx->axi_base + FPGA_REG_CROP_TOP,    fmt->crop_top);
-         *   axi_write(ctx->axi_base + FPGA_REG_CROP_WIDTH,  fmt->crop_width);
-         *   axi_write(ctx->axi_base + FPGA_REG_CROP_HEIGHT, fmt->crop_height);
-         *   axi_write(ctx->axi_base + FPGA_REG_REDUCTION,   fmt->reduction);
-         */
-        (void)fmt;
-        break;
+        (void)fmt; break;
     }
     case ISC_FPGA_STREAM_STATE: {
         uint8_t streaming = *(uint8_t *)arg;
-        /** TODO: 写 FPGA 流控制寄存器:
-         *   axi_write(ctx->axi_base + FPGA_REG_STREAM_EN, streaming);
-         */
-        (void)streaming;
-        break;
+        (void)streaming; break;
     }
     case ISC_FPGA_TRIGGER_SET: {
         uint8_t enable = *(uint8_t *)arg;
-        /** TODO: 写 FPGA 触发控制寄存器 */
-        (void)enable;
-        break;
+        (void)enable; break;
     }
-    default:
-        return -1;
+    default: return -1;
     }
-    (void)ctx;
     return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * 2. 全局设备和接口实例
  * ═══════════════════════════════════════════════════════════════════════════ */
-
-static my_i2c_ctx_t  i2c_ctx  = { .i2c_base = (void *)0x40001000, .dev_addr = 0x1A };
-static my_fpga_ctx_t fpga_ctx = { .axi_base = (void *)0x43C00000 };
-
-static isc_port_t port = {
-    .bus_type    = ISC_BUS_I2C,
-    .read        = my_i2c_read,
-    .write       = my_i2c_write,
-    .delay_ms    = my_delay_ms,
-    .delay_us    = my_delay_us,
-    .gpio_write  = my_gpio_write,
-    .cs_assert   = NULL,
-    .cs_deassert = NULL,
-    .user_data   = &i2c_ctx,
-};
 
 static isc_fpga_ops_t fpga_ops = {
     .ioctl     = my_fpga_ioctl,
@@ -148,7 +73,7 @@ void app_sensor_demo(void)
     isc_timing_t   timing;
 
     /* ── 4.1 初始化 ISC 框架 ── */
-    rc = isc_init(&port, &fpga_ops, sensors,
+    rc = isc_init(NULL, &fpga_ops, sensors,
                   sizeof(sensors) / sizeof(sensors[0]));
     if (rc != ISC_OK) {
         printf("isc_init 失败: %d\n", rc);
@@ -199,7 +124,8 @@ void app_sensor_demo(void)
     fmt.crop_height    = 1088;
     fmt.crop_left      = 0;
     fmt.crop_top       = 0;
-    fmt.reduction      = ISC_REDUCTION_NONE;       /* IMX296: ROI 时 binning 自动禁用 */
+    fmt.reduction_x    = 1; fmt.reduction_y = 1;
+    fmt.reduction_mode = ISC_REDUCE_NONE;  /* IMX296: ROI 时 binning 自动禁用 */
     fmt.frame_rate_num = 60;
     fmt.frame_rate_den = 1;
     fmt.bit_depth      = 10;
@@ -208,10 +134,11 @@ void app_sensor_demo(void)
     if (rc != ISC_OK) goto cleanup;
 
     printf("\ntry_fmt 结果: %u×%u, crop=(%u,%u,%u×%u), "
-           "reduction=%u, fps=%u/%u\n",
+           "reduction=(%u,%u,%u), fps=%u/%u\n",
            fmt.width, fmt.height,
            fmt.crop_left, fmt.crop_top, fmt.crop_width, fmt.crop_height,
-           fmt.reduction, fmt.frame_rate_num, fmt.frame_rate_den);
+           fmt.reduction_x, fmt.reduction_y, fmt.reduction_mode,
+           fmt.frame_rate_num, fmt.frame_rate_den);
 
     /* ── 4.6 提交格式 (SET_FMT — 写传感器寄存器 + 通知 FPGA) ── */
     rc = isc_set_fmt(dev, &fmt);
@@ -341,7 +268,7 @@ void app_auto_detect_demo(void)
 {
     isc_dev_t *dev = NULL;
 
-    isc_init(&port, &fpga_ops, sensors,
+    isc_init(NULL, &fpga_ops, sensors,
              sizeof(sensors) / sizeof(sensors[0]));
 
     int rc = isc_open(NULL, &dev);  /* NULL = 自动探测 */

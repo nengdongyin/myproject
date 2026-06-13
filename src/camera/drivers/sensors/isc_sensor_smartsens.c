@@ -102,7 +102,6 @@ static int smartsens_query_timing(isc_dev_t *dev, isc_timing_t *timing)
 const isc_sensor_ops_t isc_sensor_smartsens = {
     .model        = "smartsens_sc031gs",
     .vendor       = "SmartSens",
-    .i2c_addr     = 0,                  /* SPI 传感器, 不用 I2C 地址 */
     .capabilities = 0,  /* TODO: 填充 ISC_CAP_* 位掩码 */
 
     .probe      = smartsens_probe,

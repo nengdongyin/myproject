@@ -129,20 +129,22 @@ typedef struct {
     uint32_t frm_length_default;
     uint8_t  bit_depth;
     uint32_t max_fps_num, max_fps_den;
-    isc_reduction_t reduction;
+    uint8_t  reduction_x;
+    uint8_t  reduction_y;
+    uint8_t  reduction_mode;
 } imx477_mode_t;
 
 static const imx477_mode_t imx477_modes[] = {
     /* 全分辨率 4056×3040, 10fps */
-    { 4056, 3040, 0x0BE0, 10, 10, 1, ISC_REDUCTION_NONE },
+    { 4056, 3040, 0x0BE0, 10, 10, 1, 1, 1, ISC_REDUCE_NONE },
     /* 16:9 裁切 4056×2160, 10fps */
-    { 4056, 2160, 0x0A28, 10, 10, 1, ISC_REDUCTION_NONE },
+    { 4056, 2160, 0x0A28, 10, 10, 1, 1, 1, ISC_REDUCE_NONE },
     /* 2×2 binning 2028×1520, 40fps */
-    { 2028, 1520, 0x0BE0, 10, 40, 1, ISC_REDUCTION_BIN_2 },
+    { 2028, 1520, 0x0BE0, 10, 40, 1, 2, 2, ISC_REDUCE_BIN_SUM },
     /* 4×4 binning 1012×760, 120fps */
-    { 1012,  760, 0x041A, 10, 120, 1, ISC_REDUCTION_BIN_4 },
+    { 1012,  760, 0x041A, 10, 120, 1, 4, 4, ISC_REDUCE_BIN_SUM },
     /* 2×2 binning 16:9 2028×1080, 50fps */
-    { 2028, 1080, 0x0870, 10, 50, 1, ISC_REDUCTION_BIN_2 },
+    { 2028, 1080, 0x0870, 10, 50, 1, 2, 2, ISC_REDUCE_BIN_SUM },
 };
 
 #define IMX477_NUM_MODES (sizeof(imx477_modes) / sizeof(imx477_modes[0]))
@@ -154,7 +156,8 @@ static const imx477_mode_t imx477_modes[] = {
 static int imx477_read16(const isc_dev_t *dev, uint16_t reg, uint16_t *val)
 {
     uint8_t buf[2];
-    int rc = dev->port->read(dev->port->user_data, (uint32_t)reg, buf, 2);
+    uint8_t reg_buf[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
+    int rc = dev->port->read(dev->port->user_data, reg_buf, 2, buf, 2);
     if (rc != 0) return ISC_ERR_IO;
     *val = ((uint16_t)buf[0] << 8) | (uint16_t)buf[1];
     return ISC_OK;
@@ -162,16 +165,16 @@ static int imx477_read16(const isc_dev_t *dev, uint16_t reg, uint16_t *val)
 
 static int imx477_write8(const isc_dev_t *dev, uint16_t reg, uint8_t val)
 {
-    int rc = dev->port->write(dev->port->user_data, (uint32_t)reg, &val, 1);
+    uint8_t reg_buf[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
+    int rc = dev->port->write(dev->port->user_data, reg_buf, 2, &val, 1);
     return (rc == 0) ? ISC_OK : ISC_ERR_IO;
 }
 
 static int imx477_write16(const isc_dev_t *dev, uint16_t reg, uint16_t val)
 {
-    uint8_t buf[2];
-    buf[0] = (uint8_t)(val >> 8);
-    buf[1] = (uint8_t)(val & 0xFF);
-    int rc = dev->port->write(dev->port->user_data, (uint32_t)reg, buf, 2);
+    uint8_t reg_buf[2] = { (uint8_t)(reg >> 8), (uint8_t)(reg & 0xFF) };
+    uint8_t buf[2] = { (uint8_t)(val >> 8), (uint8_t)(val & 0xFF) };
+    int rc = dev->port->write(dev->port->user_data, reg_buf, 2, buf, 2);
     return (rc == 0) ? ISC_OK : ISC_ERR_IO;
 }
 
@@ -364,7 +367,9 @@ static int imx477_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
     fmt->crop_top     = IMX477_PIXEL_ARRAY_TOP;
     fmt->crop_width   = mode->width;
     fmt->crop_height  = mode->height;
-    fmt->reduction    = mode->reduction;
+    fmt->reduction_x    = mode->reduction_x;
+    fmt->reduction_y    = mode->reduction_y;
+    fmt->reduction_mode = mode->reduction_mode;
     fmt->bit_depth    = mode->bit_depth;
     fmt->pixel_format = (mode->bit_depth == 12)
         ? ISC_PIX_FMT_SRGGB12 : ISC_PIX_FMT_SRGGB10;
@@ -810,7 +815,6 @@ static int imx477_try_timing(isc_dev_t *dev, const isc_fmt_t *fmt,
 const isc_sensor_ops_t isc_sensor_imx477 = {
     .model        = "sony_imx477",
     .vendor       = "Sony",
-    .i2c_addr     = 0x1A,
     .capabilities = ISC_CAP_TIMING_QUERY
                   | ISC_CAP_ROI
                   | ISC_CAP_BINNING

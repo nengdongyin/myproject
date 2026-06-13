@@ -29,7 +29,8 @@ target_include_directories(app PRIVATE
     src/lib/lwevt/user_config
     src/platform/bsp/rp2350
     src/camera/modules/auto_exp
-    src/camera/core/isc
+    src/camera/core/isc/core
+    src/camera/core/isc/port
     src/camera/drivers/sensors
     src/camera/drivers/bridge
     src/camera/drivers/ip/binning
@@ -97,7 +98,9 @@ if(TEST_MODE)
       src/camera/drivers/ip/histogram/histogram_vsc.c
       src/camera/drivers/bridge/sensor_vsc.c
       src/camera/drivers/bridge/isc_bridge.c
-      src/camera/core/isc/isc_core.c
+      src/camera/core/isc/core/isc_core.c
+      src/camera/core/isc/port/isc_port_common.c
+      src/camera/core/isc/port/isc_port_i2c.c
       src/camera/drivers/sensors/isc_sensor_imx477.c
   )
 
@@ -161,7 +164,9 @@ else()
       src/camera/modules/auto_exp/auto_exp_control.c
       src/camera/drivers/bridge/sensor_module.c
       src/camera/core/isc/example_app.c
-      src/camera/core/isc/isc_core.c
+      src/camera/core/isc/core/isc_core.c
+      src/camera/core/isc/port/isc_port_common.c
+      src/camera/core/isc/port/isc_port_i2c.c
       src/camera/drivers/sensors/isc_sensor_imx296.c
   )
 

@@ -27,8 +27,24 @@ typedef struct isc_sensor_ops {
     /* ── 标识 ── */
     const char *model;              /**< 型号名, 与 isc_open() 的 model 参数匹配  */
     const char *vendor;             /**< 厂商名                                  */
-    uint16_t    i2c_addr;           /**< I2C 7-bit 地址 (SPI/AXI 驱动填 0)       */
     uint32_t    capabilities;       /**< ISC_CAP_* 位掩码 (传感器主动声明)        */
+
+    /**
+     * @brief 本传感器使用的通信接口 (可选)
+     *
+     * 非 NULL 时覆盖 isc_init() 传入的全局 port。
+     * 允许不同传感器使用不同总线 (I2C/SPI) 或不同 I2C 地址。
+     * NULL 时回退到全局 port (向后兼容单传感器系统)。
+     */
+    const isc_port_t *port;
+
+    /**
+     * @brief 本传感器使用的 FPGA 同步接口 (可选)
+     *
+     * 非 NULL 时覆盖 isc_init() 传入的全局 fpga_ops。
+     * NULL 时回退到全局 fpga_ops (向后兼容)。
+     */
+    const isc_fpga_ops_t *fpga_ops;
 
     /* ── 生命周期 ── */
     /** @brief 读 CHIP_ID 寄存器确认传感器型号 (必须)
@@ -66,8 +82,8 @@ typedef struct isc_sensor_ops {
 
     /* ── 控制 ── */
     /** @brief 查询控制项属性 (必须)
-     *  @note 不应在驱动层处理 ISC_CTRL_FLAG_NEXT_CTRL — 该位由框架层
-     *        isc_query_ctrl() 拦截处理。驱动仅处理标准 CID 或私有 CID。
+     *  @note 驱动仅处理标准 CID 或私有 CID,
+     *        枚举由框架层 isc_query_next_ctrl() 负责。
      */
     int (*query_ctrl)(isc_dev_t *dev, isc_ctrl_desc_t *desc);
 

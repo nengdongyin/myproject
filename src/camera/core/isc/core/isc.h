@@ -38,7 +38,7 @@ typedef struct isc_dev_t isc_dev_t;
 #define ISC_ERR_ALREADY_OPEN     -3    /**< 设备已 open (多开保护)                   */
 #define ISC_ERR_NOT_SUPPORTED    -4    /**< 传感器/驱动不支持该操作                  */
 #define ISC_ERR_TIMEOUT          -5    /**< 通信超时                                */
-#define ISC_ERR_NO_MORE          -6    /**< 枚举结束 (非致命)                         */
+#define ISC_ERR_NO_MORE          -6    /* @deprecated 用 ISC_ENUM_END */
 #define ISC_ERR_NO_MEM           -7    /**< 内存不足 (S0 策略下保留)                 */
 #define ISC_ERR_BUSY             -8    /**< 设备忙 (流中调 set_fmt 等)               */
 #define ISC_ERR_NOT_FOUND        -9    /**< 未匹配到传感器                           */
@@ -64,13 +64,12 @@ typedef struct isc_dev_t isc_dev_t;
 
 /** @brief 传感器能力描述 */
 typedef struct isc_cap {
-    char     model[ISC_MAX_MODEL_NAME];      /**< 传感器型号                           */
-    char     vendor[ISC_MAX_VENDOR_NAME];    /**< 厂商名                               */
-    uint32_t capabilities;                   /**< ISC_CAP_* 位掩码                     */
-    uint8_t  num_formats;                    /**< 像素格式数量                         */
-    uint8_t  num_ctrls;                      /**< 控制项数量                           */
-    uint8_t  bus_type;                       /**< 总线类型 (isc_bus_type_t)             */
-    uint8_t  reserved[3];
+    const char *model;                       /**< 传感器型号 (指向 ops->model)          */
+    const char *vendor;                      /**< 厂商名 (指向 ops->vendor)             */
+    uint32_t    capabilities;                /**< ISC_CAP_* 位掩码                     */
+    uint8_t     num_formats;                 /**< 像素格式数量                         */
+    uint8_t     num_ctrls;                   /**< 控制项数量                           */
+    uint8_t     reserved[2];
 } isc_cap_t;
 
 /** @brief 格式描述 (枚举用，per-format 约束) */
@@ -89,26 +88,23 @@ typedef struct isc_fmt_desc {
     uint16_t min_crop_width;                 /**< 最小裁剪窗口宽度                      */
     uint16_t min_crop_height;                /**< 最小裁剪窗口高度                      */
 
-    /* ── 输出分辨率范围 (1×1 无缩减基准) ──
-     * 实际: output = crop / reduction_factor, 本描述符固定 1×1.
-     */
+    /* ── 输出分辨率范围 (缩减前, 调用者根据 reduction 自行折算) ── */
     uint16_t min_width;                      /**< 最小输出宽度 (无缩减)                  */
-    uint16_t max_width;                      /**< 最大输出宽度 (无缩减, 等于 sensor_width) */
+    uint16_t max_width;                      /**< 最大输出宽度 (无缩减)                  */
     uint16_t min_height;                     /**< 最小输出高度 (无缩减)                  */
-    uint16_t max_height;                     /**< 最大输出高度 = sensor_height           */
+    uint16_t max_height;                     /**< 最大输出高度 (无缩减)                  */
 
     uint32_t max_frame_rate_num;             /**< 该格式下最高帧率分子 (全分辨率)        */
     uint32_t max_frame_rate_den;             /**< 该格式下最高帧率分母                   */
 } isc_fmt_desc_t;
 
-/** @brief 缩减方式 */
+/** @brief 缩减模式 */
 typedef enum {
-    ISC_REDUCTION_NONE   = 0,   /**< 1×1 无缩减 (默认, 兼容零初始化)                 */
-    ISC_REDUCTION_BIN_2  = 1,   /**< 2×2 binning (电荷合并, 提升 SNR)                */
-    ISC_REDUCTION_BIN_4  = 2,   /**< 4×4 binning                                    */
-    ISC_REDUCTION_SKIP_2 = 3,   /**< 2×2 subsampling (跳像素, 无电荷叠加)             */
-    ISC_REDUCTION_SKIP_4 = 4,   /**< 4×4 subsampling                                */
-} isc_reduction_t;
+    ISC_REDUCE_NONE    = 0,  /**< 1×1 无缩减                               */
+    ISC_REDUCE_BIN_SUM = 1,  /**< 模拟域电荷叠加 (SNR↑)                     */
+    ISC_REDUCE_BIN_AVG = 2,  /**< 数字域平均合并 (噪声特性不同于 SUM)        */
+    ISC_REDUCE_SKIP    = 3,  /**< 跳像素/抽点 (SNR 不变, 功耗↓)             */
+} isc_reduce_mode_t;
 
 /** @brief 当前格式 (含裁剪窗口) */
 typedef struct isc_fmt {
@@ -119,8 +115,9 @@ typedef struct isc_fmt {
     uint32_t frame_rate_num;                 /**< 帧率分子                              */
     uint32_t frame_rate_den;                 /**< 帧率分母                              */
     uint8_t  bit_depth;                      /**< 像素位深                              */
-    isc_reduction_t reduction;               /**< 缩减方式                              */
-    uint8_t  reserved[3];
+    uint8_t  reduction_x;                    /**< X 缩减因子 (1=无, 2=1/2, 4=1/4)      */
+    uint8_t  reduction_y;                    /**< Y 缩减因子 (1=无, 2=1/2, 4=1/4)      */
+    uint8_t  reduction_mode;                 /**< isc_reduce_mode_t                      */
 
     /* ── 裁剪窗口 (传感器像素阵列坐标系, 缩减前) ── */
     /**
@@ -166,7 +163,7 @@ typedef union isc_ctrl_value {
 
 /** @brief 控制项描述符 */
 typedef struct isc_ctrl_desc {
-    uint32_t          cid;                    /**< 控制 ID (含 ISC_CTRL_FLAG_NEXT_CTRL) */
+    uint32_t          cid;                    /**< 控制 ID                              */
     isc_ctrl_type_t   type;                   /**< 控制类型                              */
     const char       *unit;                   /**< 单位 ("ns"/"×"/"dB"/"fps"/NULL)      */
     char              name[ISC_MAX_CTRL_NAME];/**< 可读名称                              */
@@ -206,10 +203,14 @@ typedef void (*isc_on_error_t)(isc_dev_t *dev, int error_code, void *user_data);
 /**
  * @brief 初始化 ISC 框架
  *
- * @param[in] port          平台传感器通信原语 (必须非 NULL)
+ * @param[in] port          全局默认通信接口 (可为 NULL, 见说明)
  * @param[in] fpga_ops      FPGA 同步/控制接口 (必须非 NULL)
  * @param[in] sensors       传感器驱动 ops 表数组 (必须非 NULL)
  * @param[in] sensor_count  传感器驱动数量 (必须 >0)
+ *
+ * port 为全局回退默认值。若传感器在 ops->port 中自带总线接口,
+ * 该传感器将忽略全局 port。若所有传感器均自带 port, 全局可为 NULL。
+ *
  * @return ISC_OK / ISC_ERR_INVALID_ARG / ISC_ERR_NO_MEM
  */
 int isc_init(const isc_port_t *port,
@@ -232,6 +233,37 @@ int isc_open(const char *model, isc_dev_t **dev);
 /** @brief 关闭传感器设备 (幂等) */
 int isc_close(isc_dev_t *dev);
 
+/**
+ * @brief 查询 ISC 框架是否已完成初始化
+ * @return 1=已初始化, 0=未初始化或已 deinit
+ */
+int isc_is_initialized(void);
+
+/**
+ * @brief 注册控制值变更回调
+ *
+ * 每次 set_ctrl 成功后触发。同一设备仅支持一个回调;
+ * 重复调用会覆盖旧回调。传 NULL 取消注册。
+ *
+ * @param[in] dev       设备句柄
+ * @param[in] cb        回调函数 (NULL=取消)
+ * @param[in] user_data 回调透传数据
+ * @return ISC_OK / ISC_ERR_*
+ */
+int isc_register_ctrl_callback(isc_dev_t *dev, isc_on_ctrl_change_t cb,
+                               void *user_data);
+
+/**
+ * @brief 注册传感器异常回调 (预留 — 需硬件中断+轮询线程配合)
+ *
+ * @param[in] dev       设备句柄
+ * @param[in] cb        回调函数 (NULL=取消)
+ * @param[in] user_data 回调透传数据
+ * @return ISC_OK / ISC_ERR_*
+ */
+int isc_register_error_callback(isc_dev_t *dev, isc_on_error_t cb,
+                                void *user_data);
+
 /* ── 能力与格式 ── */
 int isc_query_cap(isc_dev_t *dev, isc_cap_t *cap);
 int isc_enum_fmt(isc_dev_t *dev, uint8_t index, isc_fmt_desc_t *desc);
@@ -249,7 +281,7 @@ int isc_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt);
 int isc_query_ctrl(isc_dev_t *dev, isc_ctrl_desc_t *desc);
 
 /**
- * @brief 枚举下一个有效控制项 (替代 ISC_CTRL_FLAG_NEXT_CTRL)
+ * @brief 枚举下一个有效控制项
  *
  * 每次调用返回当前枚举位置之后的下一个控制项描述符,
  * 并推进内部迭代器。枚举穷尽时返回 ISC_ENUM_END。

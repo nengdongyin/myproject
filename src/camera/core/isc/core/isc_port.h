@@ -31,21 +31,27 @@ typedef struct isc_port {
 
     /** @brief 传感器寄存器读
      *  @param[in]  user_data  平台私有数据
-     *  @param[in]  reg_addr   寄存器地址 (语义由 bus_type 决定)
+     *  @param[in]  reg_addr   寄存器地址字节流 (大端序)
+     *  @param[in]  reg_len    寄存器地址字节数
      *  @param[out] data       读取缓冲区
-     *  @param[in]  len        读取字节数
+     *  @param[in]  data_len   读取字节数
      *  @return 0=成功, <0=平台错误码
      */
-    int (*read)(void *user_data, uint32_t reg_addr, uint8_t *data, uint16_t len);
+    int (*read)(void *user_data,
+                const uint8_t *reg_addr, uint16_t reg_len,
+                uint8_t *data, uint16_t data_len);
 
     /** @brief 传感器寄存器写
      *  @param[in] user_data  平台私有数据
-     *  @param[in] reg_addr   寄存器地址
+     *  @param[in] reg_addr   寄存器地址字节流 (大端序)
+     *  @param[in] reg_len    寄存器地址字节数
      *  @param[in] data       写入数据
-     *  @param[in] len        写入字节数
+     *  @param[in] data_len   写入字节数
      *  @return 0=成功, <0=平台错误码
      */
-    int (*write)(void *user_data, uint32_t reg_addr, const uint8_t *data, uint16_t len);
+    int (*write)(void *user_data,
+                 const uint8_t *reg_addr, uint16_t reg_len,
+                 const uint8_t *data, uint16_t data_len);
 
     /* ── SPI 专用 (ISC_BUS_SPI 时由框架/驱动调用, 其它填 NULL) ── */
     /** @brief 拉低 SPI 片选 */
@@ -56,8 +62,6 @@ typedef struct isc_port {
     /* ── 时序 ── */
     /** @brief 毫秒级阻塞延时 */
     void (*delay_ms)(uint32_t ms);
-    /** @brief 微秒级阻塞延时 */
-    void (*delay_us)(uint32_t us);
 
     /* ── GPIO ── */
     /** @brief GPIO 电平设置 (PWDN / RESET / XCLR 等)

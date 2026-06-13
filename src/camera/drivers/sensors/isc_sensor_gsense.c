@@ -137,7 +137,6 @@ static int gsense_query_constraint(isc_dev_t *dev, uint32_t type,
 const isc_sensor_ops_t isc_sensor_gsense = {
     .model        = "gsense_2020",
     .vendor       = "Gsense",
-    .i2c_addr     = 0x30,
     .capabilities = 0,  /* TODO: 填充 ISC_CAP_* 位掩码 */
 
     .probe      = gsense_probe,

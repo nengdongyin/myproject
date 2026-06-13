@@ -29,7 +29,7 @@
 /* ── 裁剪 ── */
 /**
  * 以下宏用于极端 RAM 裁剪 (如 32KB BRAM)，在工作区内定义即生效:
- *   ISC_CTRL_NO_ENUM    — 跳过 NEXT_CTRL 枚举缓存, 每次线性扫描
+ *   ISC_CTRL_NO_ENUM    — 跳过枚举缓存, 每次线性扫描
  *   ISC_CTRL_NO_NAME    — 不存储控制项可读名称, Flash 省 ~700B (驱动 query_ctrl 不填 name)
  */
 
