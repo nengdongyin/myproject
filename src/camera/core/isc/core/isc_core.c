@@ -4,6 +4,7 @@
  */
 
 #include "isc_internal.h"
+#include "port.h"
 #include <string.h>
 
 /* ──── 全局状态 (S0 全静态分配) ──── */
@@ -187,14 +188,20 @@ int isc_init(const isc_port_t *port,
              const isc_sensor_ops_t *const sensors[],
              uint8_t sensor_count)
 {
+    system_lock();
+
     /* port 可为 NULL — 若所有传感器在 ops->port 中自带总线接口,
      * 全局 port 只作为回退默认值。fpga_ops / sensors 仍为必须。 */
     if (fpga_ops == NULL || sensors == NULL || sensor_count == 0
         || sensor_count > ISC_MAX_SENSORS) {
+        system_unlock();
         return ISC_ERR_INVALID_ARG;
     }
 
-    if (g_initialized) return ISC_OK;
+    if (g_initialized) {
+        system_unlock();
+        return ISC_OK;
+    }
 
     g_port         = port;
     g_fpga_ops     = fpga_ops;
@@ -211,16 +218,82 @@ int isc_init(const isc_port_t *port,
     }
 
     g_initialized = 1;
+    system_unlock();
+    return ISC_OK;
+}
+
+/**
+ * @brief 关闭设备 — 内部实现 (调用者持锁, callee 负责解锁)
+ */
+static int isc_close_impl(isc_dev_t *d)
+{
+    int rc;
+
+    if (d->state == ISC_STATE_FREE) {
+        system_unlock();
+        return ISC_OK;
+    }
+
+    if (d->state == ISC_STATE_STREAMING) {
+        rc = ISC_OK;
+        if (d->ops->stream_off != NULL) rc = d->ops->stream_off(d);
+        notify_fpga_stream(d, 0);
+        if (rc != ISC_OK) {
+            system_unlock();
+            return rc;
+        }
+    }
+
+    if (d->ops->deinit != NULL) {
+        rc = d->ops->deinit(d);
+        if (rc != ISC_OK) {
+            system_unlock();
+            return rc;
+        }
+    }
+
+    dev_slot_reset(d);
+    system_unlock();
+    return ISC_OK;
+}
+
+/**
+ * @brief 关闭设备 — deinit 专用 (无锁, 调用者已持锁)
+ */
+static int isc_close_nolock(isc_dev_t *d)
+{
+    int rc;
+
+    if (d->state == ISC_STATE_FREE) return ISC_OK;
+
+    if (d->state == ISC_STATE_STREAMING) {
+        rc = ISC_OK;
+        if (d->ops->stream_off != NULL) rc = d->ops->stream_off(d);
+        notify_fpga_stream(d, 0);
+        if (rc != ISC_OK) return rc;
+    }
+
+    if (d->ops->deinit != NULL) {
+        rc = d->ops->deinit(d);
+        if (rc != ISC_OK) return rc;
+    }
+
+    dev_slot_reset(d);
     return ISC_OK;
 }
 
 int isc_deinit(void)
 {
-    if (!g_initialized) return ISC_OK;
+    system_lock();
+
+    if (!g_initialized) {
+        system_unlock();
+        return ISC_OK;
+    }
 
     for (uint8_t i = 0; i < ISC_MAX_DEVS; i++) {
         if (g_devs[i].state != ISC_STATE_FREE) {
-            isc_close(&g_devs[i]);  /* 内部调 dev_slot_reset */
+            isc_close_nolock(&g_devs[i]);
         }
     }
 
@@ -228,6 +301,8 @@ int isc_deinit(void)
     g_fpga_ops     = NULL;
     g_sensor_count = 0;
     g_initialized  = 0;
+
+    system_unlock();
     return ISC_OK;
 }
 
@@ -269,44 +344,58 @@ static int dev_try_open(isc_dev_t *d, const isc_sensor_ops_t *ops, uint8_t s_idx
 int isc_open(const char *model, isc_dev_t **dev)
 {
     uint8_t s_idx, d_idx;
+    int rc;
 
-    if (dev == NULL || !g_initialized) return ISC_ERR_INVALID_ARG;
+    system_lock();
+
+    if (dev == NULL || !g_initialized) {
+        system_unlock();
+        return ISC_ERR_INVALID_ARG;
+    }
 
     d_idx = alloc_dev();
-    if (d_idx >= ISC_MAX_DEVS) return ISC_ERR_NO_MEM;
+    if (d_idx >= ISC_MAX_DEVS) {
+        system_unlock();
+        return ISC_ERR_NO_MEM;
+    }
 
     isc_dev_t *d = &g_devs[d_idx];
 
     if (model != NULL) {
-        /* ── 精确匹配 ── */
         s_idx = find_sensor(model);
-        if (s_idx >= ISC_MAX_SENSORS) return ISC_ERR_NOT_FOUND;
+        if (s_idx >= ISC_MAX_SENSORS) {
+            system_unlock();
+            return ISC_ERR_NOT_FOUND;
+        }
 
-        int rc = dev_try_open(d, g_sensors[s_idx], s_idx);
-        if (rc != ISC_OK) return rc;
+        rc = dev_try_open(d, g_sensors[s_idx], s_idx);
+        if (rc != ISC_OK) {
+            system_unlock();
+            return rc;
+        }
     } else {
-        /* ── 自动探测 ── */
         for (s_idx = 0; s_idx < g_sensor_count; s_idx++) {
             const isc_sensor_ops_t *ops = g_sensors[s_idx];
             if (ops == NULL) continue;
 
-            int rc = dev_try_open(d, ops, s_idx);
+            rc = dev_try_open(d, ops, s_idx);
             if (rc == ISC_OK) break;
         }
-        if (s_idx >= g_sensor_count) return ISC_ERR_NOT_FOUND;
+        if (s_idx >= g_sensor_count) {
+            system_unlock();
+            return ISC_ERR_NOT_FOUND;
+        }
     }
 
     d->num_ctrls     = 0;
     d->last_ctrl_cid = 0;
 
-    /* 一次性探测传感器能力 */
     probe_capabilities(d);
 
-    /* 获取默认格式并同步 current_fmt, 通知 FPGA */
     if (d->ops->get_fmt) {
         isc_fmt_t init_fmt;
         memset(&init_fmt, 0, sizeof(init_fmt));
-        int rc = d->ops->get_fmt(d, &init_fmt);
+        rc = d->ops->get_fmt(d, &init_fmt);
         if (rc == ISC_OK) {
             d->current_fmt = init_fmt;
             notify_fpga_format(d);
@@ -314,6 +403,8 @@ int isc_open(const char *model, isc_dev_t **dev)
     }
 
     *dev = d;
+
+    system_unlock();
     return ISC_OK;
 }
 
@@ -325,55 +416,47 @@ int isc_is_initialized(void)
 int isc_register_ctrl_callback(isc_dev_t *dev, isc_on_ctrl_change_t cb,
                                void *user_data)
 {
-    if (dev == NULL) return ISC_ERR_INVALID_ARG;
-    if (dev->state < ISC_STATE_OPEN) return ISC_ERR_NOT_OPEN;
+    system_lock();
+
+    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
 
     dev->on_ctrl_change = cb;
     dev->cb_user_data   = user_data;
+
+    system_unlock();
     return ISC_OK;
 }
 
 int isc_register_error_callback(isc_dev_t *dev, isc_on_error_t cb,
                                 void *user_data)
 {
-    if (dev == NULL) return ISC_ERR_INVALID_ARG;
-    if (dev->state < ISC_STATE_OPEN) return ISC_ERR_NOT_OPEN;
+    system_lock();
+
+    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
 
     dev->on_error      = cb;
     dev->err_user_data = user_data;
+
+    system_unlock();
     return ISC_OK;
 }
 
 int isc_close(isc_dev_t *dev)
 {
-    int8_t idx = dev_index(dev);
-    if (idx < 0) return ISC_ERR_INVALID_ARG;
+    int8_t idx;
+    isc_dev_t *d;
 
-    isc_dev_t *d = &g_devs[(uint8_t)idx];
-    if (d->state == ISC_STATE_FREE) return ISC_OK;
+    system_lock();
 
-    if (d->state == ISC_STATE_STREAMING) {
-        int rc = ISC_OK;
-        if (d->ops->stream_off != NULL) {
-            rc = d->ops->stream_off(d);
-        }
-        notify_fpga_stream(d, 0);
-        if (rc != ISC_OK) {
-            /* 流停止失败 — 透传驱动错误码, 保留设备状态 */
-            return rc;
-        }
-    }
+    idx = dev_index(dev);
+    if (idx < 0) { system_unlock(); return ISC_ERR_INVALID_ARG; }
 
-    if (d->ops->deinit != NULL) {
-        int drc = d->ops->deinit(d);
-        if (drc != ISC_OK) {
-            /* deinit 失败 — 保留状态不释放 */
-            return drc;
-        }
-    }
+    d = &g_devs[(uint8_t)idx];
 
-    dev_slot_reset(d);
-    return ISC_OK;
+    /* 持锁委托内部实现 — 与 param_manager 约定一致: 驱动回调可重入 */
+    return isc_close_impl(d);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -473,17 +556,21 @@ int isc_get_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
 
 int isc_set_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
 {
-    if (dev == NULL || fmt == NULL) return ISC_ERR_INVALID_ARG;
-    if (dev->state < ISC_STATE_OPEN) return ISC_ERR_NOT_OPEN;
-    if (dev->ops->set_fmt == NULL) return ISC_ERR_NOT_SUPPORTED;
-    /* 流中修改格式委托驱动判断 — 全局快门传感器可能支持 */
+    int rc;
 
-    /* crop 全零时由驱动填充实际值 (驱动 set_fmt 负责处理) */
-    int rc = dev->ops->set_fmt(dev, fmt);
-    if (rc != ISC_OK) return rc;
+    system_lock();
+
+    if (dev == NULL || fmt == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
+    if (dev->ops->set_fmt == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+
+    rc = dev->ops->set_fmt(dev, fmt);
+    if (rc != ISC_OK) { system_unlock(); return rc; }
 
     dev->current_fmt = *fmt;
     notify_fpga_format(dev);
+
+    system_unlock();
     return ISC_OK;
 }
 
@@ -628,57 +715,57 @@ int isc_get_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t *value)
 
 int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value)
 {
-    if (dev == NULL) return ISC_ERR_INVALID_ARG;
-    if (dev->state < ISC_STATE_OPEN) return ISC_ERR_NOT_OPEN;
-    if (dev->ops->set_ctrl == NULL) return ISC_ERR_NOT_SUPPORTED;
-    if (dev->ops->query_ctrl == NULL) return ISC_ERR_NOT_SUPPORTED;
-
-    /* 查询控制项属性以校验和钳位 */
+    int rc;
     isc_ctrl_desc_t desc;
+    uint8_t ci;
+
+    system_lock();
+
+    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
+    if (dev->ops->set_ctrl == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+    if (dev->ops->query_ctrl == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+
     memset(&desc, 0, sizeof(desc));
     desc.cid = cid;
-    int rc = dev->ops->query_ctrl(dev, &desc);
-    if (rc != ISC_OK) return rc;  /* 透传驱动错误码 */
+    rc = dev->ops->query_ctrl(dev, &desc);
+    if (rc != ISC_OK) { system_unlock(); return rc; }
 
-    /* 检查流中修改权限 */
     if (dev->state == ISC_STATE_STREAMING) {
         if (!(desc.flags & ISC_CTRL_FLAG_STREAMABLE)) {
+            system_unlock();
             return ISC_ERR_BUSY;
         }
     }
 
-    /* 检查只读 */
     if (desc.flags & ISC_CTRL_FLAG_READ_ONLY) {
+        system_unlock();
         return ISC_ERR_NOT_SUPPORTED;
     }
 
-    /* 钳位 */
     clamp_value(&value, &desc);
 
     rc = dev->ops->set_ctrl(dev, cid, value);
-    if (rc != ISC_OK) return rc;
+    if (rc != ISC_OK) { system_unlock(); return rc; }
 
-    /* 更新缓存 */
-    uint8_t ci = find_cache(dev, cid);
+    ci = find_cache(dev, cid);
     if (ci >= ISC_MAX_CTRLS) {
-        /* 新控制项, 分配槽位 */
         if (dev->num_ctrls < ISC_MAX_CTRLS) {
             ci = dev->num_ctrls++;
             dev->ctrl_cache[ci].cid = cid;
         } else {
-            /* 缓存已满 — 写硬件已成功但无法缓存。下次 get 将穿透读硬件
-             * (find_cache 未命中 → 调用驱动 get_ctrl), 功能正确仅性能降级 */
+            system_unlock();
             return ISC_OK;
         }
     }
     dev->ctrl_cache[ci].value = value;
     dev->ctrl_cache[ci].flags = desc.flags;
 
-    /* 触发回调 */
     if (dev->on_ctrl_change) {
         dev->on_ctrl_change(dev, cid, value, dev->cb_user_data);
     }
 
+    system_unlock();
     return ISC_OK;
 }
 
@@ -722,29 +809,41 @@ int isc_set_ext_ctrls(isc_dev_t *dev, isc_ext_ctrls_t *ctrls)
 
 int isc_stream_on(isc_dev_t *dev)
 {
-    if (dev == NULL) return ISC_ERR_INVALID_ARG;
-    if (dev->state != ISC_STATE_OPEN) return ISC_ERR_STATE;
-    if (dev->ops->stream_on == NULL) return ISC_ERR_NOT_SUPPORTED;
+    int rc;
 
-    int rc = dev->ops->stream_on(dev);
-    if (rc != ISC_OK) return rc;
+    system_lock();
+
+    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
+    if (dev->state != ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_STATE; }
+    if (dev->ops->stream_on == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+
+    rc = dev->ops->stream_on(dev);
+    if (rc != ISC_OK) { system_unlock(); return rc; }
 
     dev->state = ISC_STATE_STREAMING;
     notify_fpga_stream(dev, 1);
+
+    system_unlock();
     return ISC_OK;
 }
 
 int isc_stream_off(isc_dev_t *dev)
 {
-    if (dev == NULL) return ISC_ERR_INVALID_ARG;
-    if (dev->state != ISC_STATE_STREAMING) return ISC_ERR_STATE;
-    if (dev->ops->stream_off == NULL) return ISC_ERR_NOT_SUPPORTED;
+    int rc;
 
-    int rc = dev->ops->stream_off(dev);
-    if (rc != ISC_OK) return rc;
+    system_lock();
+
+    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
+    if (dev->state != ISC_STATE_STREAMING) { system_unlock(); return ISC_ERR_STATE; }
+    if (dev->ops->stream_off == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+
+    rc = dev->ops->stream_off(dev);
+    if (rc != ISC_OK) { system_unlock(); return rc; }
 
     dev->state = ISC_STATE_OPEN;
     notify_fpga_stream(dev, 0);
+
+    system_unlock();
     return ISC_OK;
 }
 
