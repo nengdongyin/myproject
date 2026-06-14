@@ -75,7 +75,7 @@ void file_io_fs_init(void)
  */
 static int fd_alloc(void)
 {
-    system_lock();
+    system_lock(SYS_LOCK_FILE);
 
     /* 线性扫描空闲槽位 */
     for (int i = 0; i < FS_MAX_OPEN; i++)
@@ -86,13 +86,13 @@ static int fd_alloc(void)
             g_fs_io.fds[i].allocated = 1;
             g_fs_io.fds[i].idx = i;
             fs_file_t_init(&g_fs_io.fds[i].fd);
-            system_unlock();
+            system_unlock(SYS_LOCK_FILE);
             return i;
         }
     }
 
     /* 池已满：无可用 fd */
-    system_unlock();
+    system_unlock(SYS_LOCK_FILE);
     return -1;
 }
 
@@ -107,7 +107,7 @@ static int fd_alloc(void)
  */
 static void fd_free(int idx)
 {
-    system_lock();
+    system_lock(SYS_LOCK_FILE);
 
     /* 边界校验后清零 */
     if (idx >= 0 && (uint32_t)idx < FS_MAX_OPEN)
@@ -115,7 +115,7 @@ static void fd_free(int idx)
         memset(&g_fs_io.fds[idx], 0, sizeof(g_fs_io.fds[idx]));
     }
 
-    system_unlock();
+    system_unlock(SYS_LOCK_FILE);
 }
 
 /**

@@ -358,7 +358,8 @@ int isc_get_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t *value);
  * @param[in] cid   控制 ID
  * @param[in] value 目标值 (超出范围自动钳位)
  * @return ISC_OK / ISC_ERR_*
- * @note 成功后触发 isc_on_ctrl_change_t 回调 (如已注册)
+ * @note 成功后触发 isc_on_ctrl_change_t 回调 (如已注册)。
+ *       回调在释放全局锁后执行, 回调内可安全调用 ISC API。
  */
 int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value);
 

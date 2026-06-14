@@ -63,11 +63,21 @@ extern "C" {
 #endif
 
 /* ================================================================
+ *  子系统锁 ID — 每个 ID 对应一个独立 mutex (RTOS) 或空操作 (bare-metal)
+ * ================================================================ */
+typedef enum {
+    SYS_LOCK_PARAM = 0,   /**< param_manager  参数管理框架              */
+    SYS_LOCK_ISC   = 1,   /**< ISC           图像传感器控制框架          */
+    SYS_LOCK_FILE  = 2,   /**< file_io_fs    文件 I/O 子系统             */
+    SYS_LOCK_COUNT         /**< 锁总数 (非锁 ID)                        */
+} sys_lock_id_t;
+
+/* ================================================================
  *  统一接口 (全部为函数声明, 无宏)
  * ================================================================ */
 
-void     system_lock(void);
-void     system_unlock(void);
+void     system_lock(sys_lock_id_t id);
+void     system_unlock(sys_lock_id_t id);
 void     system_mutex_init(void);
 void    *system_malloc(size_t size);
 void     system_free(void *ptr);

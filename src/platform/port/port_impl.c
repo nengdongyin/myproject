@@ -18,23 +18,24 @@
 #include "FreeRTOS.h"
 #include "semphr.h"
 
-static SemaphoreHandle_t g_mutex;
+static SemaphoreHandle_t g_mutex[SYS_LOCK_COUNT];
 
-void system_lock(void)
+void system_lock(sys_lock_id_t id)
 {
-    if (g_mutex)
-        xSemaphoreTake(g_mutex, portMAX_DELAY);
+    if (id < SYS_LOCK_COUNT && g_mutex[id])
+        xSemaphoreTake(g_mutex[id], portMAX_DELAY);
 }
 
-void system_unlock(void)
+void system_unlock(sys_lock_id_t id)
 {
-    if (g_mutex)
-        xSemaphoreGive(g_mutex);
+    if (id < SYS_LOCK_COUNT && g_mutex[id])
+        xSemaphoreGive(g_mutex[id]);
 }
 
 void system_mutex_init(void)
 {
-    g_mutex = xSemaphoreCreateMutex();
+    for (int i = 0; i < SYS_LOCK_COUNT; i++)
+        g_mutex[i] = xSemaphoreCreateMutex();
 }
 
 void *system_malloc(size_t size)
@@ -55,21 +56,29 @@ void system_free(void *ptr)
 
 #include <zephyr/kernel.h>
 
-static K_MUTEX_DEFINE(g_mutex);
+K_MUTEX_DEFINE(g_mutex_isc);
+K_MUTEX_DEFINE(g_mutex_param);
+K_MUTEX_DEFINE(g_mutex_file);
 
-void system_lock(void)
+static struct k_mutex *g_mutex[SYS_LOCK_COUNT];
+
+void system_lock(sys_lock_id_t id)
 {
-    k_mutex_lock(&g_mutex, K_FOREVER);
+    if (id < SYS_LOCK_COUNT && g_mutex[id])
+        k_mutex_lock(g_mutex[id], K_FOREVER);
 }
 
-void system_unlock(void)
+void system_unlock(sys_lock_id_t id)
 {
-    k_mutex_unlock(&g_mutex);
+    if (id < SYS_LOCK_COUNT && g_mutex[id])
+        k_mutex_unlock(g_mutex[id]);
 }
 
 void system_mutex_init(void)
 {
-    /* Zephyr K_MUTEX_DEFINE 静态初始化, 无需动态 init */
+    g_mutex[SYS_LOCK_PARAM] = &g_mutex_param;
+    g_mutex[SYS_LOCK_ISC]   = &g_mutex_isc;
+    g_mutex[SYS_LOCK_FILE]  = &g_mutex_file;
 }
 
 void *system_malloc(size_t size)
@@ -90,23 +99,25 @@ void system_free(void *ptr)
 
 #include <rtthread.h>
 
-static rt_mutex_t g_mutex = RT_NULL;
+static rt_mutex_t g_mutex[SYS_LOCK_COUNT];
 
-void system_lock(void)
+void system_lock(sys_lock_id_t id)
 {
-    if (g_mutex)
-        rt_mutex_take(g_mutex, RT_WAITING_FOREVER);
+    if (id < SYS_LOCK_COUNT && g_mutex[id])
+        rt_mutex_take(g_mutex[id], RT_WAITING_FOREVER);
 }
 
-void system_unlock(void)
+void system_unlock(sys_lock_id_t id)
 {
-    if (g_mutex)
-        rt_mutex_release(g_mutex);
+    if (id < SYS_LOCK_COUNT && g_mutex[id])
+        rt_mutex_release(g_mutex[id]);
 }
 
 void system_mutex_init(void)
 {
-    g_mutex = rt_mutex_create("pm", RT_IPC_FLAG_PRIO);
+    g_mutex[SYS_LOCK_PARAM] = rt_mutex_create("pm", RT_IPC_FLAG_PRIO);
+    g_mutex[SYS_LOCK_ISC]   = rt_mutex_create("isc", RT_IPC_FLAG_PRIO);
+    g_mutex[SYS_LOCK_FILE]  = rt_mutex_create("file", RT_IPC_FLAG_PRIO);
 }
 
 void *system_malloc(size_t size)
@@ -131,15 +142,17 @@ void system_free(void *ptr)
 
 static uint32_t g_critical_nest;
 
-void system_lock(void)
+void system_lock(sys_lock_id_t id)
 {
+    (void)id;
     if (!g_critical_nest)
         __disable_irq();
     g_critical_nest++;
 }
 
-void system_unlock(void)
+void system_unlock(sys_lock_id_t id)
 {
+    (void)id;
     if (!g_critical_nest)
         return;
     if (!--g_critical_nest)
@@ -148,9 +161,9 @@ void system_unlock(void)
 
 #else
 
-void system_lock(void)   { }
+void system_lock(sys_lock_id_t id)   { (void)id; }
 
-void system_unlock(void) { }
+void system_unlock(sys_lock_id_t id) { (void)id; }
 
 #endif /* PORT_LOCK_IRQ */
 

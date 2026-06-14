@@ -8,12 +8,14 @@
 #include <string.h>
 
 /* ──── 全局状态 (S0 全静态分配) ──── */
-static uint8_t                g_sensor_count;
-static const isc_sensor_ops_t *g_sensors[ISC_MAX_SENSORS];
-static const isc_port_t       *g_port;
-static const isc_fpga_ops_t   *g_fpga_ops;
-static isc_dev_t              g_devs[ISC_MAX_DEVS];
-static uint8_t                g_initialized;
+static struct {
+    uint8_t                sensor_count;
+    const isc_sensor_ops_t *sensors[ISC_MAX_SENSORS];
+    const isc_port_t       *port;
+    const isc_fpga_ops_t   *fpga_ops;
+    isc_dev_t              devs[ISC_MAX_DEVS];
+    uint8_t                initialized;
+} g_isc;
 
 /* ──── 内部辅助 ──── */
 
@@ -32,9 +34,9 @@ static void dev_slot_reset(isc_dev_t *d)
  */
 static uint8_t find_sensor(const char *model)
 {
-    for (uint8_t i = 0; i < g_sensor_count; i++) {
-        if (g_sensors[i] != NULL && g_sensors[i]->model != NULL
-            && strcmp(g_sensors[i]->model, model) == 0) {
+    for (uint8_t i = 0; i < g_isc.sensor_count; i++) {
+        if (g_isc.sensors[i] != NULL && g_isc.sensors[i]->model != NULL
+            && strcmp(g_isc.sensors[i]->model, model) == 0) {
             return i;
         }
     }
@@ -48,7 +50,7 @@ static uint8_t find_sensor(const char *model)
 static uint8_t alloc_dev(void)
 {
     for (uint8_t i = 0; i < ISC_MAX_DEVS; i++) {
-        if (g_devs[i].state == ISC_STATE_FREE) {
+        if (g_isc.devs[i].state == ISC_STATE_FREE) {
             return i;
         }
     }
@@ -62,7 +64,7 @@ static int8_t dev_index(const isc_dev_t *dev)
 {
     if (dev == NULL) return -1;
     for (uint8_t i = 0; i < ISC_MAX_DEVS; i++) {
-        if (&g_devs[i] == dev) return (int8_t)i;
+        if (&g_isc.devs[i] == dev) return (int8_t)i;
     }
     return -1;
 }
@@ -191,37 +193,37 @@ int isc_init(const isc_port_t *port,
              const isc_sensor_ops_t *const sensors[],
              uint8_t sensor_count)
 {
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
     /* port 可为 NULL — 若所有传感器在 ops->port 中自带总线接口,
      * 全局 port 只作为回退默认值。fpga_ops / sensors 仍为必须。 */
     if (fpga_ops == NULL || sensors == NULL || sensor_count == 0
         || sensor_count > ISC_MAX_SENSORS) {
-        system_unlock();
+        system_unlock(SYS_LOCK_ISC);
         return ISC_ERR_INVALID_ARG;
     }
 
-    if (g_initialized) {
-        system_unlock();
+    if (g_isc.initialized) {
+        system_unlock(SYS_LOCK_ISC);
         return ISC_OK;
     }
 
-    g_port         = port;
-    g_fpga_ops     = fpga_ops;
-    g_sensor_count = sensor_count;
+    g_isc.port         = port;
+    g_isc.fpga_ops     = fpga_ops;
+    g_isc.sensor_count = sensor_count;
     for (uint8_t i = 0; i < sensor_count; i++) {
-        g_sensors[i] = sensors[i];
+        g_isc.sensors[i] = sensors[i];
     }
     for (uint8_t i = sensor_count; i < ISC_MAX_SENSORS; i++) {
-        g_sensors[i] = NULL;
+        g_isc.sensors[i] = NULL;
     }
 
     for (uint8_t i = 0; i < ISC_MAX_DEVS; i++) {
-        dev_slot_reset(&g_devs[i]);
+        dev_slot_reset(&g_isc.devs[i]);
     }
 
-    g_initialized = 1;
-    system_unlock();
+    g_isc.initialized = 1;
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
@@ -233,7 +235,7 @@ static int isc_close_impl(isc_dev_t *d)
     int rc;
 
     if (d->state == ISC_STATE_FREE) {
-        system_unlock();
+        system_unlock(SYS_LOCK_ISC);
         return ISC_OK;
     }
 
@@ -242,7 +244,7 @@ static int isc_close_impl(isc_dev_t *d)
         if (d->ops->stream_off != NULL) rc = d->ops->stream_off(d);
         notify_fpga_stream(d, 0);
         if (rc != ISC_OK) {
-            system_unlock();
+            system_unlock(SYS_LOCK_ISC);
             return rc;
         }
     }
@@ -250,13 +252,13 @@ static int isc_close_impl(isc_dev_t *d)
     if (d->ops->deinit != NULL) {
         rc = d->ops->deinit(d);
         if (rc != ISC_OK) {
-            system_unlock();
+            system_unlock(SYS_LOCK_ISC);
             return rc;
         }
     }
 
     dev_slot_reset(d);
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
@@ -287,25 +289,22 @@ static int isc_close_nolock(isc_dev_t *d)
 
 int isc_deinit(void)
 {
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (!g_initialized) {
-        system_unlock();
+    if (!g_isc.initialized) {
+        system_unlock(SYS_LOCK_ISC);
         return ISC_OK;
     }
 
     for (uint8_t i = 0; i < ISC_MAX_DEVS; i++) {
-        if (g_devs[i].state != ISC_STATE_FREE) {
-            isc_close_nolock(&g_devs[i]);
+        if (g_isc.devs[i].state != ISC_STATE_FREE) {
+            isc_close_nolock(&g_isc.devs[i]);
         }
     }
 
-    g_port         = NULL;
-    g_fpga_ops     = NULL;
-    g_sensor_count = 0;
-    g_initialized  = 0;
+    memset(&g_isc, 0, sizeof(g_isc));
 
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
@@ -318,8 +317,8 @@ static int dev_try_open(isc_dev_t *d, const isc_sensor_ops_t *ops, uint8_t s_idx
     dev_slot_reset(d);
     d->ops        = ops;
     d->sensor_idx = s_idx;
-    d->port       = (ops->port != NULL) ? ops->port : g_port;
-    d->fpga_ops   = (ops->fpga_ops != NULL) ? ops->fpga_ops : g_fpga_ops;
+    d->port       = (ops->port != NULL) ? ops->port : g_isc.port;
+    d->fpga_ops   = (ops->fpga_ops != NULL) ? ops->fpga_ops : g_isc.fpga_ops;
 
     /* 若传感器未自带 port 且全局 port 也为 NULL → 无法通信 */
     if (d->port == NULL) return ISC_ERR_INVALID_ARG;
@@ -349,43 +348,43 @@ int isc_open(const char *model, isc_dev_t **dev)
     uint8_t s_idx, d_idx;
     int rc;
 
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (dev == NULL || !g_initialized) {
-        system_unlock();
+    if (dev == NULL || !g_isc.initialized) {
+        system_unlock(SYS_LOCK_ISC);
         return ISC_ERR_INVALID_ARG;
     }
 
     d_idx = alloc_dev();
     if (d_idx >= ISC_MAX_DEVS) {
-        system_unlock();
+        system_unlock(SYS_LOCK_ISC);
         return ISC_ERR_NO_MEM;
     }
 
-    isc_dev_t *d = &g_devs[d_idx];
+    isc_dev_t *d = &g_isc.devs[d_idx];
 
     if (model != NULL) {
         s_idx = find_sensor(model);
         if (s_idx >= ISC_MAX_SENSORS) {
-            system_unlock();
+            system_unlock(SYS_LOCK_ISC);
             return ISC_ERR_NOT_FOUND;
         }
 
-        rc = dev_try_open(d, g_sensors[s_idx], s_idx);
+        rc = dev_try_open(d, g_isc.sensors[s_idx], s_idx);
         if (rc != ISC_OK) {
-            system_unlock();
+            system_unlock(SYS_LOCK_ISC);
             return rc;
         }
     } else {
-        for (s_idx = 0; s_idx < g_sensor_count; s_idx++) {
-            const isc_sensor_ops_t *ops = g_sensors[s_idx];
+        for (s_idx = 0; s_idx < g_isc.sensor_count; s_idx++) {
+            const isc_sensor_ops_t *ops = g_isc.sensors[s_idx];
             if (ops == NULL) continue;
 
             rc = dev_try_open(d, ops, s_idx);
             if (rc == ISC_OK) break;
         }
-        if (s_idx >= g_sensor_count) {
-            system_unlock();
+        if (s_idx >= g_isc.sensor_count) {
+            system_unlock(SYS_LOCK_ISC);
             return ISC_ERR_NOT_FOUND;
         }
     }
@@ -407,42 +406,42 @@ int isc_open(const char *model, isc_dev_t **dev)
 
     *dev = d;
 
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
 int isc_is_initialized(void)
 {
-    return (int)g_initialized;
+    return (int)g_isc.initialized;
 }
 
 int isc_register_ctrl_callback(isc_dev_t *dev, isc_on_ctrl_change_t cb,
                                void *user_data)
 {
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
-    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
+    if (dev == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_OPEN; }
 
     dev->on_ctrl_change = cb;
     dev->cb_user_data   = user_data;
 
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
 int isc_register_error_callback(isc_dev_t *dev, isc_on_error_t cb,
                                 void *user_data)
 {
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
-    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
+    if (dev == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_OPEN; }
 
     dev->on_error      = cb;
     dev->err_user_data = user_data;
 
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
@@ -451,12 +450,12 @@ int isc_close(isc_dev_t *dev)
     int8_t idx;
     isc_dev_t *d;
 
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
     idx = dev_index(dev);
-    if (idx < 0) { system_unlock(); return ISC_ERR_INVALID_ARG; }
+    if (idx < 0) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_INVALID_ARG; }
 
-    d = &g_devs[(uint8_t)idx];
+    d = &g_isc.devs[(uint8_t)idx];
 
     /* 持锁委托内部实现 — 与 param_manager 约定一致: 驱动回调可重入 */
     return isc_close_impl(d);
@@ -561,19 +560,19 @@ int isc_set_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
 {
     int rc;
 
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (dev == NULL || fmt == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
-    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
-    if (dev->ops->set_fmt == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+    if (dev == NULL || fmt == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_OPEN; }
+    if (dev->ops->set_fmt == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_SUPPORTED; }
 
     rc = dev->ops->set_fmt(dev, fmt);
-    if (rc != ISC_OK) { system_unlock(); return rc; }
+    if (rc != ISC_OK) { system_unlock(SYS_LOCK_ISC); return rc; }
 
     dev->current_fmt = *fmt;
     notify_fpga_format(dev);
 
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
@@ -727,34 +726,34 @@ int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value)
     isc_ctrl_desc_t desc;
     uint8_t ci;
 
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
-    if (dev->state < ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_NOT_OPEN; }
-    if (dev->ops->set_ctrl == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
-    if (dev->ops->query_ctrl == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+    if (dev == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_INVALID_ARG; }
+    if (dev->state < ISC_STATE_OPEN) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_OPEN; }
+    if (dev->ops->set_ctrl == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_SUPPORTED; }
+    if (dev->ops->query_ctrl == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_SUPPORTED; }
 
     memset(&desc, 0, sizeof(desc));
     desc.cid = cid;
     rc = dev->ops->query_ctrl(dev, &desc);
-    if (rc != ISC_OK) { system_unlock(); return rc; }
+    if (rc != ISC_OK) { system_unlock(SYS_LOCK_ISC); return rc; }
 
     if (dev->state == ISC_STATE_STREAMING) {
         if (!(desc.flags & ISC_CTRL_FLAG_STREAMABLE)) {
-            system_unlock();
+            system_unlock(SYS_LOCK_ISC);
             return ISC_ERR_BUSY;
         }
     }
 
     if (desc.flags & ISC_CTRL_FLAG_READ_ONLY) {
-        system_unlock();
+        system_unlock(SYS_LOCK_ISC);
         return ISC_ERR_NOT_SUPPORTED;
     }
 
     clamp_value(&value, &desc);
 
     rc = dev->ops->set_ctrl(dev, cid, value);
-    if (rc != ISC_OK) { system_unlock(); return rc; }
+    if (rc != ISC_OK) { system_unlock(SYS_LOCK_ISC); return rc; }
 
     ci = find_cache(dev, cid);
     if (ci >= ISC_MAX_CTRLS) {
@@ -762,18 +761,25 @@ int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value)
             ci = dev->num_ctrls++;
             dev->ctrl_cache[ci].cid = cid;
         } else {
-            system_unlock();
+            system_unlock(SYS_LOCK_ISC);
             return ISC_OK;
         }
     }
     dev->ctrl_cache[ci].value = value;
     dev->ctrl_cache[ci].flags = desc.flags;
 
-    if (dev->on_ctrl_change) {
-        dev->on_ctrl_change(dev, cid, value, dev->cb_user_data);
+    /* 记录回调指针, 在锁外触发 — 回调可安全调用 ISC API */
+    {
+        isc_on_ctrl_change_t cb   = dev->on_ctrl_change;
+        void                *cb_ud = dev->cb_user_data;
+
+        system_unlock(SYS_LOCK_ISC);
+
+        if (cb) {
+            cb(dev, cid, value, cb_ud);
+        }
     }
 
-    system_unlock();
     return ISC_OK;
 }
 
@@ -819,19 +825,19 @@ int isc_stream_on(isc_dev_t *dev)
 {
     int rc;
 
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
-    if (dev->state != ISC_STATE_OPEN) { system_unlock(); return ISC_ERR_STATE; }
-    if (dev->ops->stream_on == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+    if (dev == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_INVALID_ARG; }
+    if (dev->state != ISC_STATE_OPEN) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_STATE; }
+    if (dev->ops->stream_on == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_SUPPORTED; }
 
     rc = dev->ops->stream_on(dev);
-    if (rc != ISC_OK) { system_unlock(); return rc; }
+    if (rc != ISC_OK) { system_unlock(SYS_LOCK_ISC); return rc; }
 
     dev->state = ISC_STATE_STREAMING;
     notify_fpga_stream(dev, 1);
 
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 
@@ -839,19 +845,19 @@ int isc_stream_off(isc_dev_t *dev)
 {
     int rc;
 
-    system_lock();
+    system_lock(SYS_LOCK_ISC);
 
-    if (dev == NULL) { system_unlock(); return ISC_ERR_INVALID_ARG; }
-    if (dev->state != ISC_STATE_STREAMING) { system_unlock(); return ISC_ERR_STATE; }
-    if (dev->ops->stream_off == NULL) { system_unlock(); return ISC_ERR_NOT_SUPPORTED; }
+    if (dev == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_INVALID_ARG; }
+    if (dev->state != ISC_STATE_STREAMING) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_STATE; }
+    if (dev->ops->stream_off == NULL) { system_unlock(SYS_LOCK_ISC); return ISC_ERR_NOT_SUPPORTED; }
 
     rc = dev->ops->stream_off(dev);
-    if (rc != ISC_OK) { system_unlock(); return rc; }
+    if (rc != ISC_OK) { system_unlock(SYS_LOCK_ISC); return rc; }
 
     dev->state = ISC_STATE_OPEN;
     notify_fpga_stream(dev, 0);
 
-    system_unlock();
+    system_unlock(SYS_LOCK_ISC);
     return ISC_OK;
 }
 

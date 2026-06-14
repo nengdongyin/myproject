@@ -7,7 +7,25 @@
  *          未实现的可选操作填 NULL, ISC 核心返回 ISC_ERR_NOT_SUPPORTED。
  *          所有函数指针指向静态函数, 无动态分配 (S0 内存策略)。
  *
- * @see isc_dev_t, isc_init()
+ * @section lock_model 锁与回调模型
+ *
+ *          ISC 使用 system_lock() / system_unlock() 保护全局状态的互斥访问,
+ *          保护对象为 g_isc 和 dev 内部字段。I2C/SPI 外设的并发保护
+ *          应由 isc_port_t 的实现层自行负责, 不在 ISC 框架职责范围内。
+ *
+ *          <b>所有驱动回调均在持锁状态下被调用</b>, 包括:
+ *          probe, init, deinit, enum_fmts, get_fmt, set_fmt, try_fmt,
+ *          query_ctrl, get_ctrl, set_ctrl, stream_on, stream_off,
+ *          query_timing, try_timing, query_constraint。
+ *
+ *          驱动回调的约束:
+ *          - 不得调用任何 ISC 公共 API (会二次加锁导致死锁)
+ *          - 不得长时间阻塞 (会阻塞其他 ISC 操作)
+ *          - I2C/SPI 通信通常 < 1ms, 是安全的; 禁止在回调中做 ms 级轮询
+ *
+ *          on_ctrl_change 回调在锁外执行, 可以安全地调用 ISC API。
+ *
+ * @see isc_dev_t, isc_init(), isc_register_ctrl_callback()
  */
 
 #ifndef ISC_SENSOR_OPS_H
