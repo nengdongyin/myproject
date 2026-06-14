@@ -62,7 +62,11 @@ typedef struct isc_dev_t isc_dev_t;
 
 /* ──── 公共类型 ──── */
 
-/** @brief 传感器能力描述 */
+/**
+ * @brief 传感器能力描述 — isc_query_cap() 返回的结构体
+ * @details model/vendor 为指针，指向 isc_sensor_ops_t 中的常量字符串，零拷贝。
+ *          capabilities 位掩码由 isc_open 时一次性探测并缓存于 isc_dev_t 中。
+ */
 typedef struct isc_cap {
     const char *model;                       /**< 传感器型号 (指向 ops->model)          */
     const char *vendor;                      /**< 厂商名 (指向 ops->vendor)             */
@@ -265,7 +269,21 @@ int isc_register_error_callback(isc_dev_t *dev, isc_on_error_t cb,
                                 void *user_data);
 
 /* ── 能力与格式 ── */
+/**
+ * @brief 查询传感器能力 (模型名、厂商、格式/控制项数量、ISC_CAP_* 位掩码)
+ * @param[in]  dev  设备句柄
+ * @param[out] cap  能力描述 (model/vendor 为指针，生命周期同 ops 表)
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_query_cap(isc_dev_t *dev, isc_cap_t *cap);
+
+/**
+ * @brief 枚举传感器支持的像素格式
+ * @param[in]  dev   设备句柄
+ * @param[in]  index 格式索引 (0-based, 递增至 ISC_ENUM_END)
+ * @param[out] desc  格式描述 (含分辨率约束、裁剪步进、帧率上限)
+ * @return ISC_OK / ISC_ENUM_END / ISC_ERR_*
+ */
 int isc_enum_fmt(isc_dev_t *dev, uint8_t index, isc_fmt_desc_t *desc);
 /**
  * @brief 获取当前生效格式 (纯查询, 不写 dev 内部状态)
@@ -274,10 +292,32 @@ int isc_enum_fmt(isc_dev_t *dev, uint8_t index, isc_fmt_desc_t *desc);
  * current_fmt 缓存仅由 isc_set_fmt() / isc_open() 更新。
  */
 int isc_get_fmt(isc_dev_t *dev, isc_fmt_t *fmt);
+/**
+ * @brief 提交新格式 — 写传感器寄存器 + 通知 FPGA (有副作用)
+ * @param[in]     dev  设备句柄
+ * @param[in,out] fmt  目标格式; crop=0 由驱动填充全阵列值
+ * @return ISC_OK / ISC_ERR_*
+ * @note 成功后 dev->current_fmt 被更新, FPGA 收到 ISC_FPGA_FORMAT_CHANGED
+ */
 int isc_set_fmt(isc_dev_t *dev, isc_fmt_t *fmt);
+
+/**
+ * @brief 试探格式合法性 — 仅校验约束, 不写硬件 (无副作用)
+ * @param[in]     dev  设备句柄
+ * @param[in,out] fmt  目标格式; 驱动会对其做对齐/钳位修正
+ * @return ISC_OK / ISC_ERR_*
+ * @note 与 isc_set_fmt 配对: 先 try 验约束, 再 set 提交
+ */
 int isc_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt);
 
 /* ── 控制框架 ── */
+/**
+ * @brief 查询指定 CID 的控制项属性 (类型/范围/步进/默认值/标志位)
+ * @param[in]     dev  设备句柄
+ * @param[in,out] desc 输入: desc->cid = 目标 CID; 输出: 完整属性描述
+ * @return ISC_OK / ISC_ERR_*
+ * @note 调用后会重置 isc_query_next_ctrl 的枚举游标
+ */
 int isc_query_ctrl(isc_dev_t *dev, isc_ctrl_desc_t *desc);
 
 /**
@@ -293,17 +333,73 @@ int isc_query_ctrl(isc_dev_t *dev, isc_ctrl_desc_t *desc);
  */
 int isc_query_next_ctrl(isc_dev_t *dev, isc_ctrl_desc_t *desc);
 
+/**
+ * @brief 查询 ENUM 型控制项的菜单名称
+ * @param[in]  dev   设备句柄
+ * @param[in]  cid   控制 ID (必须为 ENUM 类型)
+ * @param[in]  index 菜单索引 (0..max-1, 超出范围返回 ISC_ERR_CTRL_RANGE)
+ * @param[out] name  菜单名称缓冲区 (调用者提供, ≥ISC_MAX_MENU_NAME 字节)
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_query_menu(isc_dev_t *dev, uint32_t cid, uint32_t index, char *name);
+
+/**
+ * @brief 读取控制值 — 非 VOLATILE 项优先读缓存, 减少 I2C 通信
+ * @param[in]  dev   设备句柄
+ * @param[in]  cid   控制 ID
+ * @param[out] value 当前值
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_get_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t *value);
+
+/**
+ * @brief 设置控制值 — 钳位到 [min,max] + 步进对齐 + 写硬件 + 更新缓存
+ * @param[in] dev   设备句柄
+ * @param[in] cid   控制 ID
+ * @param[in] value 目标值 (超出范围自动钳位)
+ * @return ISC_OK / ISC_ERR_*
+ * @note 成功后触发 isc_on_ctrl_change_t 回调 (如已注册)
+ */
 int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value);
+
+/**
+ * @brief 批量读取多个控制值
+ * @param[in]     dev    设备句柄
+ * @param[in,out] ctrls  输入: count + items[].cid; 输出: items[].value
+ * @return ISC_OK / ISC_ERR_*; 失败时 ctrls->error_idx 指示第一个失败项索引
+ */
 int isc_get_ext_ctrls(isc_dev_t *dev, isc_ext_ctrls_t *ctrls);
+
+/**
+ * @brief 批量设置多个控制值
+ * @param[in]     dev    设备句柄
+ * @param[in,out] ctrls  输入: count + items[].cid + items[].value
+ * @return ISC_OK / ISC_ERR_*; 失败时 ctrls->error_idx 指示第一个失败项索引, 成功时清零
+ */
 int isc_set_ext_ctrls(isc_dev_t *dev, isc_ext_ctrls_t *ctrls);
 
 /* ── 流控制 ── */
+/**
+ * @brief 启动传感器数据输出 — 通知 FPGA 流状态, 设备转入 STREAMING 态
+ * @param[in] dev  设备句柄 (状态必须为 ISC_STATE_OPEN)
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_stream_on(isc_dev_t *dev);
+
+/**
+ * @brief 停止传感器数据输出 — 通知 FPGA 流状态, 设备转回 OPEN 态
+ * @param[in] dev  设备句柄 (状态必须为 ISC_STATE_STREAMING)
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_stream_off(isc_dev_t *dev);
 
 /* ── 物理状态与约束 ── */
+/**
+ * @brief 查询传感器当前物理时序 — 读寄存器原始值 + ISC 核心计算派生 ns 值
+ * @param[in]  dev    设备句柄
+ * @param[out] timing 时序快照 (原始值 + 派生 ns: line_period/readout/exposure)
+ * @return ISC_OK / ISC_ERR_*
+ */
 int isc_query_timing(isc_dev_t *dev, isc_timing_t *timing);
 
 /**

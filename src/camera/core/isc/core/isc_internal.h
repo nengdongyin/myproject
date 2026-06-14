@@ -1,8 +1,11 @@
 /**
  * @file    isc_internal.h
  * @brief   ISC 模块内部定义 (仅 isc_core.c 及传感器驱动 .c 引用)
+ * @details 包含 isc_dev_t 完整结构体、状态枚举、控制缓存。
  *
- * 包含 isc_dev_t 完整结构体、状态枚举、控制缓存、时序缓存。
+ *          传感器驱动通过 `dev->port` / `dev->fpga_ops` 访问平台接口,
+ *          这是刻意的架构权衡 — 在不透明指针封装与嵌入式零开销之间取平衡。
+ *          驱动不可直接访问 isc_core.c 中的全局设备表 (g_devs[] 等)。
  */
 
 #ifndef ISC_INTERNAL_H

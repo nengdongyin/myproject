@@ -1,9 +1,13 @@
 /**
  * @file    isc_sensor_ops.h
  * @brief   传感器驱动操作表 (Sensor Ops — 多态虚表)
+ * @details 采用策略模式 (Strategy Pattern) + 编译期多态。
  *
- * 每个传感器型号提供一个该结构体的静态常量实例，通过 isc_init() 注册。
- * 未实现的可选操作填 NULL，ISC 核心返回 ISC_ERR_NOT_SUPPORTED。
+ *          每个传感器型号提供一个该结构体的静态常量实例，通过 isc_init() 注册。
+ *          未实现的可选操作填 NULL, ISC 核心返回 ISC_ERR_NOT_SUPPORTED。
+ *          所有函数指针指向静态函数, 无动态分配 (S0 内存策略)。
+ *
+ * @see isc_dev_t, isc_init()
  */
 
 #ifndef ISC_SENSOR_OPS_H

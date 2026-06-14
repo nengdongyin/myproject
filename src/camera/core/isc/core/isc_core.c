@@ -81,6 +81,9 @@ static uint8_t find_cache(const isc_dev_t *dev, uint32_t cid)
 
 /**
  * @brief 将控制值钳位到 [min,max] 并对齐 step
+ * @details 根据控制类型分发: INT/ENUM 做整数钳位+步进对齐, BOOL 钳到 0/1,
+ *          FLOAT 做浮点钳位+步进对齐 (纯 float 运算, 无 double 依赖, 嵌入式 FPU 友好)。
+ *          step≤0 表示无步进约束, 跳过对齐。
  */
 static void clamp_value(isc_ctrl_value_t *val, const isc_ctrl_desc_t *desc)
 {
@@ -604,7 +607,12 @@ int isc_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * @brief 枚举下一个控制项 (isc_query_next_ctrl 实现)
+ * @brief 枚举下一个控制项 — isc_query_next_ctrl 的实现
+ * @details 采用两阶段线性扫描:
+ *          1. 标准 CID 空间 (ISC_CID_STANDARD_BASE+1 .. +COUNT)
+ *          2. 厂商私有 CID 空间 (ISC_CID_PRIVATE_BASE .. +SCAN_COUNT)
+ *          游标 dev->last_ctrl_cid 在扫描完成后更新, 穷尽时归零。
+ *          每个候选 CID 都通过驱动 query_ctrl 回调验证是否支持。
  */
 static int query_next_ctrl_impl(isc_dev_t *dev, isc_ctrl_desc_t *desc)
 {
