@@ -9,6 +9,7 @@ target_include_directories(app PRIVATE
     src/test/core/unity
     src/test/core/param_manager
     src/camera/core/vsc
+    src/camera/core/vsc_lite
     gen/vsc
     src/test/protocols/camyu
     src/core/protocol_parser
@@ -38,95 +39,11 @@ target_include_directories(app PRIVATE
     src/camera/drivers/ip/crop
     src/camera/drivers/ip/decoder
     src/camera/drivers/ip/histogram
-    src/test/core
-    src/test/camera
-    src/test/protocols
-    src/camera/drivers/bridge
 )
 
-if(TEST_MODE)
+target_compile_definitions(app PRIVATE USE_FLASHDB)
 
-  target_sources(app PRIVATE
-      src/test/core/unified_test_main.c
-      src/test/core/test_suite.c
-      src/test/core/unity/unity.c
-  )
-
-  target_sources(app PRIVATE
-      src/test/core/param_manager/test_main.c
-      src/test/core/param_manager/test_common.c
-      src/test/core/param_manager/test_read_write.c
-      src/test/core/param_manager/test_boundary.c
-      src/test/core/param_manager/test_init_order.c
-      src/test/core/param_manager/test_error_handling.c
-      src/test/core/param_manager/test_load_save.c
-      src/test/core/param_manager/test_flush.c
-      src/test/core/param_manager/test_reset.c
-      src/test/core/param_manager/test_other.c
-      src/test/core/param_manager/test_multi_bank.c
-  )
-
-  target_sources(app PRIVATE
-      src/test/core/protocol_chain/test_chain.c
-  )
-
-  target_sources(app PRIVATE
-      src/test/protocols/imperx/test_imperx.c
-  )
-
-  target_sources(app PRIVATE
-      src/test/protocols/ymodem/unit/test_common.c
-      src/test/protocols/ymodem/unit/test_sender.c
-      src/test/protocols/ymodem/unit/test_receiver.c
-  )
-
-  target_sources(app PRIVATE
-      src/test/protocols/camyu/test_camyu.c
-  )
-
-  target_sources(app PRIVATE
-      src/test/camera/vsc/test_vsc_resolver.c
-      src/camera/core/vsc/vsc_resolver.c
-      src/camera/core/vsc/vsc_feature.c
-      src/camera/core/vsc/vsc_loader.c
-      src/camera/drivers/ip/crop/crop_driver.c
-      src/camera/drivers/ip/crop/crop_vsc.c
-      src/camera/drivers/ip/binning/binning_driver.c
-      src/camera/drivers/ip/binning/binning_vsc.c
-      src/camera/drivers/ip/decoder/decoder_driver.c
-      src/camera/drivers/ip/decoder/decoder_vsc.c
-      src/camera/drivers/ip/histogram/histogram_driver.c
-      src/camera/drivers/ip/histogram/histogram_vsc.c
-      src/camera/drivers/bridge/sensor_vsc.c
-      src/camera/drivers/bridge/isc_bridge.c
-      src/camera/core/isc/core/isc_core.c
-      src/camera/core/isc/port/isc_port_common.c
-      src/camera/core/isc/port/isc_port_i2c.c
-      src/camera/drivers/sensors/isc_sensor_imx477.c
-  )
-
-  target_sources(app PRIVATE
-      src/core/protocol_parser/protocol_parser.c
-      src/core/protocol_parser/protocol_chain.c
-      src/core/param_manager/core/param_manager.c
-      src/core/param_manager/core/app_param_manager.c
-      src/core/param_manager/core/ip_param_manager.c
-      src/core/param_manager/core/param_data_ops.c
-      src/core/param_manager/core/param_dump.c
-      src/platform/port_impl.c
-      src/protocols/ymodem/src/ymodem_common.c
-      src/protocols/ymodem/src/ymodem_receiver.c
-      src/protocols/ymodem/src/ymodem_sender.c
-      src/protocols/imperx/protocol_parser_imperx.c
-      src/protocols/imperx/imperx_cmd_map.c
-      src/protocols/camyu/protocol_parser_camyu.c
-  )
-
-else()
-
-  target_compile_definitions(app PRIVATE USE_FLASHDB)
-
-  target_sources(app PRIVATE
+target_sources(app PRIVATE
       src/app/main.c
       src/app/init/init_thread.c
       src/app/init/protocol_chain_init.c
@@ -171,6 +88,17 @@ else()
       src/camera/core/isc/port/isc_port_common.c
       src/camera/core/isc/port/isc_port_i2c.c
       src/camera/drivers/sensors/isc_sensor_imx296.c
+      src/camera/core/vsc_lite/vsc_lite.c
+      src/camera/drivers/bridge/sensor_vsc.c
+      src/camera/drivers/bridge/sensor_imx296_vsc.c
+      src/camera/drivers/bridge/isc_bridge.c
+      src/camera/drivers/ip/crop/crop_vsc.c
+      src/camera/drivers/ip/crop/crop_driver.c
+      src/camera/drivers/ip/binning/binning_vsc.c
+      src/camera/drivers/ip/binning/binning_driver.c
+      src/camera/drivers/ip/decoder/decoder_vsc.c
+      src/camera/drivers/ip/decoder/decoder_driver.c
+      src/camera/drivers/ip/histogram/histogram_vsc.c
+      src/camera/drivers/ip/histogram/histogram_driver.c
+      src/camera/drivers/sensors/isc_sensor_imx477.c
   )
-
-endif()

@@ -11,13 +11,8 @@ extern const test_suite_t _ts_protocol_chain;
 extern const test_suite_t _ts_imperx;
 extern const test_suite_t _ts_camyu;
 extern const test_suite_t _ts_isc;
-
-//uint32_t mock_time_ms;
-
-// uint32_t system_get_time_ms(void)
-// {
-//     return mock_time_ms;
-// }
+extern const test_suite_t _ts_vsc_lite;
+extern const test_suite_t _ts_vsc_resolver;
 
 int main(void)
 {
@@ -31,6 +26,8 @@ int main(void)
     test_suite_add(&_ts_imperx);
     test_suite_add(&_ts_camyu);
     test_suite_add(&_ts_isc);
+    test_suite_add(&_ts_vsc_lite);
+    test_suite_add(&_ts_vsc_resolver);
 
     int failures = test_suite_run_all();
     (void)failures;

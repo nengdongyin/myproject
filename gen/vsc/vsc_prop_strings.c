@@ -7,6 +7,7 @@
  *  Generated: 2026-06-07T10:23:13Z
  * ═══════════════════════════════════════════════════════════ */
 
+#include <stdint.h>
 #include "vsc_prop_ids.h"
 
 /* name → Property ID lookup (sorted by name) */

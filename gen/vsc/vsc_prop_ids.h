@@ -12,6 +12,7 @@
 
 /* ── Driver ID constants ── */
 #define VSC_DRIVER_ID_SENSOR_IMX477  0x01
+#define VSC_DRIVER_ID_SENSOR_IMX296  0x02
 #define VSC_DRIVER_ID_CROP  0x03
 #define VSC_DRIVER_ID_BINNING  0x04
 #define VSC_DRIVER_ID_DECODER  0x05
