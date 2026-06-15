@@ -23,6 +23,7 @@ target_include_directories(app PRIVATE
     src/protocols/camyu
     src/core/file_process
     src/lib/flashdb/inc
+    src/lib/mkv
     src/lib/flashdb/port/fal/inc
     src/lib/flashdb/config
     src/lib/lwevt/src/include
@@ -142,6 +143,8 @@ else()
       src/core/param_manager/core/param_dump.c
       src/platform/port/port_impl.c
       src/core/param_manager/storage/param_storage_flashdb.c
+      src/core/param_manager/storage/param_storage_mkv.c
+      src/lib/mkv/mkv.c
       src/platform/bsp/rp2350/fal_flash_rp2350.c
       src/protocols/camyu/protocol_parser_camyu.c
       src/protocols/imperx/protocol_parser_imperx.c
