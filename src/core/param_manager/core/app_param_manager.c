@@ -191,13 +191,6 @@ static int app_flush(param_entry_t *e)
     return PARAM_OK;
 }
 
-static int app_save(param_entry_t *e)
-{
-    param_type_t t = entry_type(e);
-    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
-    return g_param_data_ops[t].save(e);
-}
-
 static int app_load(param_entry_t *e)
 {
     param_type_t t = entry_type(e);
@@ -223,7 +216,7 @@ const param_vtable_t app_vtable = {
     .write_immediate  = app_write_immediate,
     .write_raw        = app_write_raw,
     .flush            = app_flush,
-    .save             = app_save,
+    .save             = param_vtable_save,
     .load             = app_load,
     .reset            = app_reset,
 };

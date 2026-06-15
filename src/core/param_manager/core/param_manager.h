@@ -146,8 +146,6 @@ extern "C"
      */
     typedef int (*param_write_fn)(void *ctx, uint32_t param_id, param_value_t value);
 
-
-
     /**
      * @brief App 模块 flush 回调 — 将缓存的参数批量写入硬件
      * @param ctx 模块注册时提供的上下文指针
@@ -262,7 +260,7 @@ extern "C"
  * 展开为 param_entry_t base + type (1B) + flags (2B) + dirty (1B)
  *         + param_value_t cache + param_value_t default_val
  *         (平台相关: 32-bit 约 20B, 64-bit 约 36B, 不含对齐填充)。
- * 启用 PARAM_DEBUG_NAME 后额外增加 const char *name 字段。
+ * 启用 PARAM_DEBUG_NAME_ENABLE 后额外增加 const char *name 字段。
  *
  * 此宏是 6 个派生结构体 (param_range_entry_t / param_enum_entry_t /
  * param_bool_entry_t / param_exec_entry_t / param_blob_entry_t /
@@ -281,7 +279,7 @@ extern "C"
     param_value_t default_val; \
     IF_PARAM_DEBUG_NAME(const char *name)
 
-#if PARAM_DEBUG_NAME
+#if PARAM_DEBUG_NAME_ENABLE
 #define IF_PARAM_DEBUG_NAME(x) x
 #define PARAM_DEBUG_NAME_INIT(nm) .name = #nm,
 #else
@@ -750,32 +748,33 @@ extern "C"
 /** 当前存储格式版本号。破坏性变更时递增 (极少发生)。 */
 #define PARAM_SCHEMA_VERSION 1
 
-/**
- * @brief 迁移转换回调
- *
- * 框架已从 FlashDB 读旧数据到 old_data[old_len]。
- * 回调负责填充 new_id / new_data / new_len。
- *
- * @param old_data  旧值原始字节
- * @param old_len   旧值字节数
- * @param new_id    [out] 新参数 ID
- * @param new_data  [out] 转换后数据 (框架提供 256 字节缓冲区)
- * @param new_len   [out] 转换后数据长度
- * @param ctx       迁移条目上下文
- * @return PARAM_OK 成功; -1 跳过本条; 其他 <0 中断迁移
- */
-typedef int (*param_migrate_fn)(const uint8_t *old_data, uint16_t old_len,
-                                uint32_t *new_id,
-                                uint8_t *new_data, uint16_t *new_len,
-                                void *ctx);
+    /**
+     * @brief 迁移转换回调
+     *
+     * 框架已从 FlashDB 读旧数据到 old_data[old_len]。
+     * 回调负责填充 new_id / new_data / new_len。
+     *
+     * @param old_data  旧值原始字节
+     * @param old_len   旧值字节数
+     * @param new_id    [out] 新参数 ID
+     * @param new_data  [out] 转换后数据 (框架提供 256 字节缓冲区)
+     * @param new_len   [out] 转换后数据长度
+     * @param ctx       迁移条目上下文
+     * @return PARAM_OK 成功; -1 跳过本条; 其他 <0 中断迁移
+     */
+    typedef int (*param_migrate_fn)(const uint8_t *old_data, uint16_t old_len,
+                                    uint32_t *new_id,
+                                    uint8_t *new_data, uint16_t *new_len,
+                                    void *ctx);
 
-/** 迁移条目 */
-typedef struct {
-    uint32_t           old_id;   /**< 旧参数 ID */
-    param_migrate_fn   convert;  /**< NULL = 简单 rename 到 new_id */
-    uint32_t           new_id;   /**< convert==NULL 时作为目标 ID */
-    void              *ctx;      /**< 回调上下文 */
-} param_migrate_entry_t;
+    /** 迁移条目 */
+    typedef struct
+    {
+        uint32_t old_id;          /**< 旧参数 ID */
+        param_migrate_fn convert; /**< NULL = 简单 rename 到 new_id */
+        uint32_t new_id;          /**< convert==NULL 时作为目标 ID */
+        void *ctx;                /**< 回调上下文 */
+    } param_migrate_entry_t;
 
 /** 定义迁移表 (ROM) */
 #define PARAM_MIGRATE_TABLE(_name, ...) \
@@ -783,6 +782,10 @@ typedef struct {
 
 /**
  * @brief 执行存储层参数迁移
+ *
+ * 受 param_manager_config.h 中的 PARAM_MIGRATE_ENABLE 宏控制:
+ *   - 启用时: 完整迁移逻辑（版本检查 + 迁移表遍历）
+ *   - 禁用时: 空操作宏，直接求值为 PARAM_OK
  *
  * 在 param_init 之后、param_load_all 之前调用。
  * 所有操作直接走 storage 驱动，不依赖内存哈希表。
@@ -798,9 +801,19 @@ typedef struct {
  * @param count    表长度
  * @return PARAM_OK 成功
  */
-int param_migrate_storage(const param_storage_drv_t *storage,
-                          const param_migrate_entry_t *table,
-                          uint16_t count);
+#if PARAM_MIGRATE_ENABLE
+    int param_migrate_storage(const param_storage_drv_t *storage,
+                              const param_migrate_entry_t *table,
+                              uint16_t count);
+#else
+#define param_migrate_storage(s, t, c) \
+    do                                 \
+    {                                  \
+        (void)(s);                     \
+        (void)(t);                     \
+        (void)(c);                     \
+    } while (0)
+#endif
 
 /** @} */ /* migration */
 

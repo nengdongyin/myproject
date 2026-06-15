@@ -21,8 +21,8 @@ extern "C"
      * ================================================================
      *
      * 全局互斥锁通过 system_lock() / system_unlock() 函数操作，
- * 底层由 port/port.h 声明、port_impl.c 提供实现
- * (RTOS 互斥锁 / 裸机关中断 / 空操作)。
+     * 底层由 port/port.h 声明、port_impl.c 提供实现
+     * (RTOS 互斥锁 / 裸机关中断 / 空操作)。
      *
      * 原则:
      *   1. 所有对 g_pm 全局状态的读写 (哈希表、模块链表、统计计数)
@@ -204,7 +204,7 @@ extern "C"
         return &((const param_entry_head_t *)e)->default_val;
     }
 
-#if PARAM_DEBUG_NAME
+#if PARAM_DEBUG_NAME_ENABLE
     /** @brief 获取参数调试名称 */
     static inline const char *param_entry_name(const param_entry_t *e)
     {

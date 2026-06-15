@@ -9,23 +9,23 @@ extern "C"
 #endif
 
     /**
- * @file ip_param_manager.h
- * @brief IP (FPGA IP 可配置属性) 参数子系统 — 基于 driver 回调的参数管理
- *
- * IP 参数不直接操作硬件地址。硬件细节 (基址、偏移、位宽、FIFO 协议) 全部由
- * driver 封装。框架通过 read / write / init 回调与 driver 通信。
- *
- * 支持类型: UINT / INT / FLOAT / BOOL / BLOB / STRING / EXEC
- *
- * 参数条目结构体与 App 完全一致 (param_range_entry_t / param_bool_entry_t /
- * param_blob_entry_t / param_string_entry_t / param_exec_entry_t)，
- * 唯一区别是 vtable 指向 &ip_vtable。行为由 vtable 决定，不由结构体决定。
- *
- * 关键约束:
- *   - 参数条目前 sizeof(param_entry_head_t) 字节与 param_entry_head_t 布局一致，可使用统一访问器
- *   - 最多支持 64 个参数 (IP_DIRTY_MAP_BITS = 64)
- *   - dirty 追踪使用 64-bit 位图 (ip_instance_t::dirty_map)
- */
+     * @file ip_param_manager.h
+     * @brief IP (FPGA IP 可配置属性) 参数子系统 — 基于 driver 回调的参数管理
+     *
+     * IP 参数不直接操作硬件地址。硬件细节 (基址、偏移、位宽、FIFO 协议) 全部由
+     * driver 封装。框架通过 read / write / init 回调与 driver 通信。
+     *
+     * 支持类型: UINT / INT / FLOAT / BOOL / BLOB / STRING / EXEC
+     *
+     * 参数条目结构体与 App 完全一致 (param_range_entry_t / param_bool_entry_t /
+     * param_blob_entry_t / param_string_entry_t / param_exec_entry_t)，
+     * 唯一区别是 vtable 指向 &ip_vtable。行为由 vtable 决定，不由结构体决定。
+     *
+     * 关键约束:
+     *   - 参数条目前 sizeof(param_entry_head_t) 字节与 param_entry_head_t 布局一致，可使用统一访问器
+     *   - 最多支持 64 个参数 (IP_DIRTY_MAP_BITS = 64)
+     *   - dirty 追踪使用 64-bit 位图 (ip_instance_t::dirty_map)
+     */
 
     typedef struct ip_instance ip_instance_t;
 
@@ -48,16 +48,16 @@ extern "C"
     typedef int (*ip_write_fn)(void *driver, uint32_t param_id, param_value_t value);
 
     /**
- * @brief IP Driver 批量 flush 回调 (可选)
- *
- * 在逐参数 write 全部调用之后触发。
- * 驱动可在此执行批量操作 (如 I2C burst write)。
- * 置 NULL 时仅走 write 逐参数路径。
- *
- * @param driver    driver 私有数据指针
- * @param dirty_map 脏参数位图
- * @return PARAM_OK 成功
- */
+     * @brief IP Driver 批量 flush 回调 (可选)
+     *
+     * 在逐参数 write 全部调用之后触发。
+     * 驱动可在此执行批量操作 (如 I2C burst write)。
+     * 置 NULL 时仅走 write 逐参数路径。
+     *
+     * @param driver    driver 私有数据指针
+     * @param dirty_map 脏参数位图
+     * @return PARAM_OK 成功
+     */
     typedef int (*ip_flush_fn)(void *driver, uint64_t dirty_map);
 
     /**
@@ -85,11 +85,11 @@ extern "C"
     {
         param_module_node_t node; /**< 基类链表节点 */
         void *driver;             /**< driver 私有数据 */
-        ip_read_fn read;       /**< 读硬件回调 */
-        ip_write_fn write;     /**< 写硬件回调 */
-        ip_flush_fn flush;     /**< 批量 flush 回调 (NULL 回退 write) */
-        ip_init_fn init;       /**< 初始化回调 */
-        ip_exec_fn exec;       /**< 命令执行回调 */
+        ip_read_fn read;          /**< 读硬件回调 */
+        ip_write_fn write;        /**< 写硬件回调 */
+        ip_flush_fn flush;        /**< 批量 flush 回调 (NULL 回退 write) */
+        ip_init_fn init;          /**< 初始化回调 */
+        ip_exec_fn exec;          /**< 命令执行回调 */
         uint64_t dirty_map;       /**< 64-bit 脏位图: bit[i]=1 表示第 i 个参数 dirty */
     };
 
@@ -157,55 +157,55 @@ extern "C"
 
 /** @brief 定义 IP UINT 类型参数 */
 #define PARAM_IP_UINT(_name, _id, _flags, _def, _min, _max) \
-    static param_range_entry_t _name = {                      \
-        .base = {(_id), &ip_vtable},                          \
-        .type = PARAM_TYPE_UINT,                              \
-        .flags = (_flags),                                    \
-        .dirty = 0,                                           \
-        .has_range = ((_min) < (_max)),                       \
-        .cache       = {.u32 = (_def)},                       \
-        .default_val = {.u32 = (_def)},                       \
-        .min         = {.u32 = (_min)},                       \
-        .max         = {.u32 = (_max)},                       \
+    static param_range_entry_t _name = {                    \
+        .base = {(_id), &ip_vtable},                        \
+        .type = PARAM_TYPE_UINT,                            \
+        .flags = (_flags),                                  \
+        .dirty = 0,                                         \
+        .has_range = ((_min) < (_max)),                     \
+        .cache = {.u32 = (_def)},                           \
+        .default_val = {.u32 = (_def)},                     \
+        .min = {.u32 = (_min)},                             \
+        .max = {.u32 = (_max)},                             \
         PARAM_DEBUG_NAME_INIT(_name)}
 
 /** @brief 定义 IP INT 类型参数 */
 #define PARAM_IP_INT(_name, _id, _flags, _def, _min, _max) \
-    static param_range_entry_t _name = {                     \
-        .base = {(_id), &ip_vtable},                         \
-        .type = PARAM_TYPE_INT,                              \
-        .flags = (_flags),                                   \
-        .dirty = 0,                                          \
-        .has_range = ((_min) < (_max)),                      \
-        .cache       = {.i32 = (_def)},                      \
-        .default_val = {.i32 = (_def)},                      \
-        .min         = {.i32 = (_min)},                      \
-        .max         = {.i32 = (_max)},                      \
+    static param_range_entry_t _name = {                   \
+        .base = {(_id), &ip_vtable},                       \
+        .type = PARAM_TYPE_INT,                            \
+        .flags = (_flags),                                 \
+        .dirty = 0,                                        \
+        .has_range = ((_min) < (_max)),                    \
+        .cache = {.i32 = (_def)},                          \
+        .default_val = {.i32 = (_def)},                    \
+        .min = {.i32 = (_min)},                            \
+        .max = {.i32 = (_max)},                            \
         PARAM_DEBUG_NAME_INIT(_name)}
 
 /** @brief 定义 IP FLOAT 类型参数 */
 #define PARAM_IP_FLOAT(_name, _id, _flags, _def, _min, _max) \
-    static param_range_entry_t _name = {                       \
-        .base = {(_id), &ip_vtable},                           \
-        .type = PARAM_TYPE_FLOAT,                              \
-        .flags = (_flags),                                     \
-        .dirty = 0,                                            \
-        .has_range = ((_min) < (_max)),                        \
-        .cache       = {.f32 = (_def)},                        \
-        .default_val = {.f32 = (_def)},                        \
-        .min         = {.f32 = (_min)},                        \
-        .max         = {.f32 = (_max)},                        \
+    static param_range_entry_t _name = {                     \
+        .base = {(_id), &ip_vtable},                         \
+        .type = PARAM_TYPE_FLOAT,                            \
+        .flags = (_flags),                                   \
+        .dirty = 0,                                          \
+        .has_range = ((_min) < (_max)),                      \
+        .cache = {.f32 = (_def)},                            \
+        .default_val = {.f32 = (_def)},                      \
+        .min = {.f32 = (_min)},                              \
+        .max = {.f32 = (_max)},                              \
         PARAM_DEBUG_NAME_INIT(_name)}
 
 /** @brief 定义 IP BOOL 类型参数 */
 #define PARAM_IP_BOOL(_name, _id, _flags, _def) \
-    static param_bool_entry_t _name = {           \
-        .base = {(_id), &ip_vtable},              \
-        .type = PARAM_TYPE_BOOL,                  \
-        .flags = (_flags),                        \
-        .dirty = 0,                               \
-        .cache       = {.b = (_def)},             \
-        .default_val = {.b = (_def)},             \
+    static param_bool_entry_t _name = {         \
+        .base = {(_id), &ip_vtable},            \
+        .type = PARAM_TYPE_BOOL,                \
+        .flags = (_flags),                      \
+        .dirty = 0,                             \
+        .cache = {.b = (_def)},                 \
+        .default_val = {.b = (_def)},           \
         PARAM_DEBUG_NAME_INIT(_name)}
 
 /**
@@ -219,14 +219,15 @@ extern "C"
  * @param _cnt   列表中值的数量
  */
 #define PARAM_IP_ENUM(_name, _id, _flags, _def, _vals, _cnt) \
-    static param_enum_entry_t _name = {                        \
-        .base = {(_id), &ip_vtable},                           \
-        .type = PARAM_TYPE_ENUM,                               \
-        .flags = (_flags),                                     \
-        .dirty = 0,                                            \
-        .cache       = {.i32 = (_def)},                        \
-        .default_val = {.i32 = (_def)},                        \
-        .enum_values = (_vals), .enum_count = (_cnt),          \
+    static param_enum_entry_t _name = {                      \
+        .base = {(_id), &ip_vtable},                         \
+        .type = PARAM_TYPE_ENUM,                             \
+        .flags = (_flags),                                   \
+        .dirty = 0,                                          \
+        .cache = {.i32 = (_def)},                            \
+        .default_val = {.i32 = (_def)},                      \
+        .enum_values = (_vals),                              \
+        .enum_count = (_cnt),                                \
         PARAM_DEBUG_NAME_INIT(_name)}
 
 /** @brief 定义 IP BLOB 类型参数
@@ -240,17 +241,16 @@ extern "C"
  * @param _def_ptr 默认值缓冲区 (静态分配)
  * @param _size    blob 大小
  */
-#define PARAM_IP_BLOB(_name, _id, _flags, _def_ptr, _size)            \
-    static param_blob_entry_t _name = {                                 \
-        .base        = { (_id), &ip_vtable },                           \
-        .type        = PARAM_TYPE_BLOB,                                 \
-        .flags       = (_flags),                                        \
-        .dirty       = 0,                                               \
-        .cache       = { .ptr = (_def_ptr) },                           \
-        .default_val = { .ptr = (_def_ptr) },                           \
-        .blob_size   = (_size),                                         \
-        PARAM_DEBUG_NAME_INIT(_name)                                    \
-    }
+#define PARAM_IP_BLOB(_name, _id, _flags, _def_ptr, _size) \
+    static param_blob_entry_t _name = {                    \
+        .base = {(_id), &ip_vtable},                       \
+        .type = PARAM_TYPE_BLOB,                           \
+        .flags = (_flags),                                 \
+        .dirty = 0,                                        \
+        .cache = {.ptr = (_def_ptr)},                      \
+        .default_val = {.ptr = (_def_ptr)},                \
+        .blob_size = (_size),                              \
+        PARAM_DEBUG_NAME_INIT(_name)}
 
 /**
  * @brief 定义 IP STRING 类型参数
@@ -264,17 +264,16 @@ extern "C"
  * @param _def_ptr 默认值缓冲区 (静态分配, 长 (max_len + 1))
  * @param _len     最大字符数 (不含结尾 '\\0')
  */
-#define PARAM_IP_STRING(_name, _id, _flags, _def_ptr, _len)           \
-    static param_string_entry_t _name = {                               \
-        .base        = { (_id), &ip_vtable },                           \
-        .type        = PARAM_TYPE_STRING,                               \
-        .flags       = (_flags),                                        \
-        .dirty       = 0,                                               \
-        .cache       = { .ptr = (_def_ptr) },                           \
-        .default_val = { .ptr = (_def_ptr) },                           \
-        .max_len     = (_len),                                          \
-        PARAM_DEBUG_NAME_INIT(_name)                                    \
-    }
+#define PARAM_IP_STRING(_name, _id, _flags, _def_ptr, _len) \
+    static param_string_entry_t _name = {                   \
+        .base = {(_id), &ip_vtable},                        \
+        .type = PARAM_TYPE_STRING,                          \
+        .flags = (_flags),                                  \
+        .dirty = 0,                                         \
+        .cache = {.ptr = (_def_ptr)},                       \
+        .default_val = {.ptr = (_def_ptr)},                 \
+        .max_len = (_len),                                  \
+        PARAM_DEBUG_NAME_INIT(_name)}
 
 /**
  * @brief 定义 IP EXEC 命令
@@ -288,13 +287,13 @@ extern "C"
  * @param _id   命令 ID (MAKE_PARAM_ID 风格)
  */
 #define PARAM_IP_EXEC(_name, _id)       \
-    static param_exec_entry_t _name = {  \
-        .base = {(_id), &ip_vtable},     \
-        .type = PARAM_TYPE_EXEC,         \
-        .flags = PARAM_FLAG_EXEC,        \
-        .dirty = 0,                      \
-        .cache       = {.u32 = 0},       \
-        .default_val = {.u32 = 0},       \
+    static param_exec_entry_t _name = { \
+        .base = {(_id), &ip_vtable},    \
+        .type = PARAM_TYPE_EXEC,        \
+        .flags = PARAM_FLAG_EXEC,       \
+        .dirty = 0,                     \
+        .cache = {.u32 = 0},            \
+        .default_val = {.u32 = 0},      \
         PARAM_DEBUG_NAME_INIT(_name)}
 
 /** @} */
@@ -322,18 +321,18 @@ extern "C"
  * @param _fl      flush 回调 (可 NULL, 回退逐参数 write)
  */
 #define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, _drv, _init, _rd, _wr, _exec, _fl) \
-    static ip_instance_t _ip_name##_instance = {                        \
-        .node = {                                                       \
-            .module_id = (_ip_id),                                      \
-            .name = (_label),                                           \
-            .vtable = &ip_module_vtable,                                \
-        },                                                              \
-        .driver = (_drv),                                               \
-        .read = (_rd),                                               \
-        .write = (_wr),                                              \
-        .exec = (_exec),                                             \
-        .flush = (_fl),                                              \
-        .init = (_init),                                             \
+    static ip_instance_t _ip_name##_instance = {                                      \
+        .node = {                                                                     \
+            .module_id = (_ip_id),                                                    \
+            .name = (_label),                                                         \
+            .vtable = &ip_module_vtable,                                              \
+        },                                                                            \
+        .driver = (_drv),                                                             \
+        .read = (_rd),                                                                \
+        .write = (_wr),                                                               \
+        .exec = (_exec),                                                              \
+        .flush = (_fl),                                                               \
+        .init = (_init),                                                              \
     }
 
 /**

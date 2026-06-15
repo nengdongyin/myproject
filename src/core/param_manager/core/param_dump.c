@@ -7,9 +7,14 @@
  *
  * 支持 6 种 App 类型 (UINT/INT/FLOAT/BOOL/ENUM/BLOB) 及 IP 类型的格式化，
  * 通过 g_dump_formatters[PARAM_TYPE_COUNT] 分派表查表调度。
+ *
+ * 受 PARAM_DUMP_ENABLE 宏控制: 禁用时整个文件为空（仅含 #include）。
  */
 
 #include "param_dump.h"
+
+#if PARAM_DUMP_ENABLE
+
 #include "param_manager.h"
 #include "param_manager_internal.h"
 #include "port.h"
@@ -377,3 +382,5 @@ void param_dump(uint16_t module_id, param_dump_fn cb, void *user_data)
     dump_ctx_t ctx = { module_id, cb, user_data };
     param_module_foreach(dump_module_iter, &ctx);
 }
+
+#endif /* PARAM_DUMP_ENABLE */

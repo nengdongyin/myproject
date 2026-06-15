@@ -2,7 +2,7 @@
 #define PARAM_DUMP_H
 
 #include <stdint.h>
-
+#include "param_manager_config.h"
 struct param_entry;
 
 #ifdef __cplusplus
@@ -12,7 +12,13 @@ extern "C" {
 /**
  * @file param_dump.h
  * @brief 参数格式化输出 — 将参数状态转为可读文本
+ *
+ * 受 param_manager_config.h 中的 PARAM_DUMP_ENABLE 宏控制:
+ *   - 启用时: 编译完整实现，提供 param_dump() / param_dump_entry()
+ *   - 禁用时: 函数变为空操作宏，param_dump.c 不参与编译
  */
+
+#if PARAM_DUMP_ENABLE
 
 /**
  * @brief dump 输出回调 — 每行文本调用一次
@@ -43,6 +49,15 @@ void param_dump(uint16_t module_id, param_dump_fn cb, void *user_data);
  * @param size 缓冲区大小
  */
 void param_dump_entry(struct param_entry *e, char *line, uint16_t size);
+
+#else  /* !PARAM_DUMP_ENABLE */
+
+typedef void (*param_dump_fn)(const char *line, void *user_data);
+
+#define param_dump(id, cb, ud)       ((void)0)
+#define param_dump_entry(e, l, s)    ((void)(l), (void)(s), (void)0)
+
+#endif /* PARAM_DUMP_ENABLE */
 
 #ifdef __cplusplus
 }

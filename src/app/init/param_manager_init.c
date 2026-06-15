@@ -124,7 +124,7 @@ static void on_param_changed(uint32_t param_id, param_value_t new_value)
  *      注册存储驱动和参数变化通知回调
  *   4. **版本迁移**: param_migrate_storage(storage, NULL, 0)
  *      当前 V1 无迁移，保留接口用于未来固件升级
- *   5. **模块注册**: 根据 PARAM_MODULE_AUTO_REGISTER 选择:
+ *   5. **模块注册**: 根据 PARAM_MODULE_AUTO_REGISTER_ENABLE 选择:
  *      - 自动模式: param_modules_register_all() 遍历链接器段
  *      - 手动模式: sensor_module_init() + auto_exp_module_init()
  *   6. **参数加载**: param_load_all()
@@ -157,7 +157,7 @@ void param_manager_init(void)
     param_migrate_storage(storage, NULL, 0);
 
     /* 步骤 5: 模块注册 */
-#if PARAM_MODULE_AUTO_REGISTER
+#if PARAM_MODULE_AUTO_REGISTER_ENABLE
     param_modules_register_all();
 #else
     sensor_module_init();

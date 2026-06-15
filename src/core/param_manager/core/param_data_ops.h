@@ -43,6 +43,17 @@ extern "C"
     extern const param_data_ops_t g_param_data_ops[PARAM_TYPE_COUNT];
 
     /**
+     * @brief 共享 vtable save 函数 — App 和 IP 共用
+     *
+     * 消除 app_save / ip_param_save 的代码重复。
+     * 直接可赋值给 vtable 的 .save 字段。
+     *
+     * @param e 参数条目
+     * @return PARAM_OK 成功，PARAM_ERR_TYPE_MISMATCH 类型越界
+     */
+    int param_vtable_save(param_entry_t *e);
+
+    /**
      * @brief pre_write 校验函数签名 — 写入前校验/裁剪
      *
      * 返回 false 表示拒绝写入 (枚举值非法)；返回 true 表示通过。

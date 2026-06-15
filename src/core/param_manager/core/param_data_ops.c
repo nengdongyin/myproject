@@ -289,48 +289,40 @@ static int string_reset(param_entry_t *e)
 }
 
 /* ================================================================
+ *  共享 vtable save — App 和 IP 共用，消除重复
+ * ================================================================ */
+
+int param_vtable_save(param_entry_t *e)
+{
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+    return g_param_data_ops[t].save(e);
+}
+
+/* ================================================================
  *  编译期常量分派表
  *
  *  用 C99 指定初始化器按 PARAM_TYPE_xxx 索引。
  *  存入 .rodata，不占 RAM。
+ *
+ *  值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) 共用同一组函数指针，
+ *  通过 VALUE_DATA_OPS 宏消除源级重复；链接器在 .rodata 中
+ *  可能合并相同常量段。
  * ================================================================ */
 
+#define VALUE_DATA_OPS \
+    .cache_update = cache_update_value, \
+    .read         = value_type_read,    \
+    .save         = value_type_save,    \
+    .load         = value_type_load,    \
+    .reset        = value_type_reset
+
 const param_data_ops_t g_param_data_ops[PARAM_TYPE_COUNT] = {
-    [PARAM_TYPE_UINT] = {
-        .cache_update = cache_update_value,
-        .read         = value_type_read,
-        .save         = value_type_save,
-        .load         = value_type_load,
-        .reset        = value_type_reset,
-    },
-    [PARAM_TYPE_INT] = {
-        .cache_update = cache_update_value,
-        .read         = value_type_read,
-        .save         = value_type_save,
-        .load         = value_type_load,
-        .reset        = value_type_reset,
-    },
-    [PARAM_TYPE_FLOAT] = {
-        .cache_update = cache_update_value,
-        .read         = value_type_read,
-        .save         = value_type_save,
-        .load         = value_type_load,
-        .reset        = value_type_reset,
-    },
-    [PARAM_TYPE_BOOL] = {
-        .cache_update = cache_update_value,
-        .read         = value_type_read,
-        .save         = value_type_save,
-        .load         = value_type_load,
-        .reset        = value_type_reset,
-    },
-    [PARAM_TYPE_ENUM] = {
-        .cache_update = cache_update_value,
-        .read         = value_type_read,
-        .save         = value_type_save,
-        .load         = value_type_load,
-        .reset        = value_type_reset,
-    },
+    [PARAM_TYPE_UINT]   = { VALUE_DATA_OPS },
+    [PARAM_TYPE_INT]    = { VALUE_DATA_OPS },
+    [PARAM_TYPE_FLOAT]  = { VALUE_DATA_OPS },
+    [PARAM_TYPE_BOOL]   = { VALUE_DATA_OPS },
+    [PARAM_TYPE_ENUM]   = { VALUE_DATA_OPS },
     [PARAM_TYPE_BLOB] = {
         .cache_update = cache_update_blob,
         .read         = blob_read,
@@ -345,11 +337,7 @@ const param_data_ops_t g_param_data_ops[PARAM_TYPE_COUNT] = {
         .load         = string_load,
         .reset        = string_reset,
     },
-    [PARAM_TYPE_EXEC] = {
+    [PARAM_TYPE_EXEC] = { VALUE_DATA_OPS,
         .cache_update = cache_update_nop,
-        .read         = value_type_read,
-        .save         = value_type_save,
-        .load         = value_type_load,
-        .reset        = value_type_reset,
     },
 };

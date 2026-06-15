@@ -29,7 +29,7 @@ extern "C"
     /**
      * @brief 编译器段自动注册
      *
-     * 启用 PARAM_MODULE_AUTO_REGISTER 后，所有模块的 init 函数指针收集到
+     * 启用 PARAM_MODULE_AUTO_REGISTER_ENABLE 后，所有模块的 init 函数指针收集到
      * .rodata.param_modules 段。param_modules_register_all() 遍历该段并逐个调用。
      */
 
@@ -42,11 +42,11 @@ extern "C"
 /**
  * @brief 将一个模块的 init 函数放入指定链接器段 (.rodata.param_modules)
  *
- * 启用 PARAM_MODULE_AUTO_REGISTER 后，param_modules_register_all() 遍历该段并逐个调用 init。
+ * 启用 PARAM_MODULE_AUTO_REGISTER_ENABLE 后，param_modules_register_all() 遍历该段并逐个调用 init。
  * @param _name 模块名 (用于段符号名唯一性)
  * @param _init 模块 register 函数
  */
-#if PARAM_MODULE_AUTO_REGISTER
+#if PARAM_MODULE_AUTO_REGISTER_ENABLE
 
 /** 将模块 init 函数放入 .rodata.param_modules 段 */
 #define PARAM_MODULE_REGISTER(_name, _init)                                                                          \
@@ -57,7 +57,7 @@ extern "C"
 #else
 
 #define PARAM_MODULE_REGISTER(_name, _init)
-    /* auto-register disabled, call xxx_module_init() manually */
+/* auto-register disabled, call xxx_module_init() manually */
 
 #endif
 
@@ -88,18 +88,18 @@ extern "C"
  * @param _flush_fn   flush 回调函数
  */
 #define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, _ctx, _init_fn, _read_fn, _write_fn, _exec_fn, _flush_fn) \
-    static param_module_t _mod_name##_module = {                              \
-        .node = {                                                             \
-            .module_id = (_mod_id),                                           \
-            .name = (_label),                                                 \
-            .vtable = &app_module_vtable,                                     \
-        },                                                                    \
-        .init  = (_init_fn),                                                  \
-        .read  = (_read_fn),                                                  \
-        .write = (_write_fn),                                                 \
-        .exec  = (_exec_fn),                                                  \
-        .flush = (_flush_fn),                                                 \
-        .ctx   = (_ctx),                                                      \
+    static param_module_t _mod_name##_module = {                                                                  \
+        .node = {                                                                                                 \
+            .module_id = (_mod_id),                                                                               \
+            .name = (_label),                                                                                     \
+            .vtable = &app_module_vtable,                                                                         \
+        },                                                                                                        \
+        .init = (_init_fn),                                                                                       \
+        .read = (_read_fn),                                                                                       \
+        .write = (_write_fn),                                                                                     \
+        .exec = (_exec_fn),                                                                                       \
+        .flush = (_flush_fn),                                                                                     \
+        .ctx = (_ctx),                                                                                            \
     }
 
 /**

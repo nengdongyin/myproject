@@ -22,26 +22,49 @@ extern "C" {
 
 /** @brief 启用参数调试名称 (每条参数额外存储 const char *name)
  *  关闭可省 4B/条 (32-bit)。1=开, 0=关 */
-#ifndef PARAM_DEBUG_NAME
-#define PARAM_DEBUG_NAME 1
+#ifndef PARAM_DEBUG_NAME_ENABLE
+#define PARAM_DEBUG_NAME_ENABLE 1
+#endif
+
+/** @brief 启用参数 dump 格式化输出
+ *  1=开 0=关。关闭时 param_dump()/param_dump_entry() 为空操作宏，
+ *  整个 param_dump.c 不参与编译，避免拉入 stdio 库。 */
+#ifndef PARAM_DUMP_ENABLE
+#define PARAM_DUMP_ENABLE 1
 #endif
 
 /** @brief 启用 linker-section 自动模块注册
  *  1=开 0=关。开启后 param_modules_register_all() 遍历 .rodata.param_modules 段 */
-#ifndef PARAM_MODULE_AUTO_REGISTER
-#define PARAM_MODULE_AUTO_REGISTER 0
+#ifndef PARAM_MODULE_AUTO_REGISTER_ENABLE
+#define PARAM_MODULE_AUTO_REGISTER_ENABLE 0
+#endif
+
+/** @brief 启用参数版本迁移
+ *  1=开 0=关。关闭时 param_migrate_storage() 为空操作直接返回 PARAM_OK。
+ *  固件升级需要迁移旧参数时设为 1，并定义迁移表。 */
+#ifndef PARAM_MIGRATE_ENABLE
+#define PARAM_MIGRATE_ENABLE 0
 #endif
 
 /** @brief 启用 FlashDB 存储后端 (需链接 flashdb 库)
- *  1=开 0=关。0 时使用空操作 stub */
+ *  1=开 0=关。0 时使用空操作 stub
+ *  @note 历史遗留命名（缺少 PARAM_ 前缀和 _ENABLE 后缀），
+ *        新代码如需引用请使用 PARAM_FLASHDB_ENABLE（别名） */
 #ifndef USE_FLASHDB
 #define USE_FLASHDB 0
 #endif
+#ifndef PARAM_FLASHDB_ENABLE
+#define PARAM_FLASHDB_ENABLE USE_FLASHDB
+#endif
 
 /** @brief 启用 iniparser 存储后端 (需链接 iniparser 库)
- *  1=开 0=关。与 USE_FLASHDB 互斥，同时为 1 时编译报错 */
+ *  1=开 0=关。与 USE_FLASHDB 互斥，同时为 1 时编译报错
+ *  @note 历史遗留命名，新代码如需引用请使用 PARAM_INIPARSER_ENABLE（别名） */
 #ifndef USE_INIPARSER
 #define USE_INIPARSER 0
+#endif
+#ifndef PARAM_INIPARSER_ENABLE
+#define PARAM_INIPARSER_ENABLE USE_INIPARSER
 #endif
 
 /* 存储后端互斥检查 */

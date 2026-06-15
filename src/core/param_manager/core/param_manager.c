@@ -991,19 +991,34 @@ int param_storage_set_active_partition(uint8_t index)
  *
  * @details
  * 封装 `g_pm.storage->get_partition(ctx, index)` 虚函数调用。
- * 这是一个轻量级的只读查询，不修改 g_pm.storage 指针，
- * 不触发 save/load。调用者可随后用 param_set_storage() 切换。
+ * 调用者通常随后用 param_set_storage() 切换并 param_load_all()。
+ *
+ * @note 持 SYS_LOCK_PARAM 锁调用 get_partition，防御性保护
+ *       g_pm.storage 指针在调用期间不被并发修改。
  *
  * @param index 分区索引 (PARAM_PARTITION_FACTORY=factory, PARAM_PARTITION_USER_MIN~MAX=用户)
  * @return 驱动指针，存储未初始化或不支持 get_partition 时返回 NULL
  */
 const param_storage_drv_t *param_get_storage_partition(uint8_t index)
 {
+    system_lock(SYS_LOCK_PARAM);
+
     if (!g_pm.initialized || !g_pm.storage)
+    {
+        system_unlock(SYS_LOCK_PARAM);
         return NULL;
+    }
     if (!g_pm.storage->get_partition)
+    {
+        system_unlock(SYS_LOCK_PARAM);
         return NULL;
-    return g_pm.storage->get_partition(g_pm.storage->ctx, index);
+    }
+
+    const param_storage_drv_t *drv =
+        g_pm.storage->get_partition(g_pm.storage->ctx, index);
+
+    system_unlock(SYS_LOCK_PARAM);
+    return drv;
 }
 
 /* ================================================================
@@ -1044,6 +1059,7 @@ const param_storage_drv_t *param_get_storage_partition(uint8_t index)
  * @return PARAM_OK 成功, PARAM_ERR_FLASH_FAIL Flash 操作失败,
  *         其他 <0 表示迁移回调返回的致命错误
  */
+#if PARAM_MIGRATE_ENABLE
 int param_migrate_storage(const param_storage_drv_t *storage,
                           const param_migrate_entry_t *table,
                           uint16_t count)
@@ -1113,6 +1129,7 @@ int param_migrate_storage(const param_storage_drv_t *storage,
 
     return PARAM_OK;
 }
+#endif /* PARAM_MIGRATE_ENABLE */
 
 /**
  * @brief 从持久化存储加载所有参数
@@ -1442,7 +1459,7 @@ void param_module_foreach(param_module_iter_fn cb, void *ctx)
     system_unlock(SYS_LOCK_PARAM);
 }
 
-#if PARAM_MODULE_AUTO_REGISTER
+#if PARAM_MODULE_AUTO_REGISTER_ENABLE
 
 /**
  * @brief 编译器段自动注册 —

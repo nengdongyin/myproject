@@ -207,13 +207,6 @@ static int ip_flush_one(param_entry_t *e)
     return ret;
 }
 
-static int ip_param_save(param_entry_t *e)
-{
-    param_type_t t = entry_type(e);
-    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
-    return g_param_data_ops[t].save(e);
-}
-
 static int ip_param_load(param_entry_t *e)
 {
     param_type_t t = entry_type(e);
@@ -258,7 +251,7 @@ const param_vtable_t ip_vtable = {
     .write_immediate  = ip_write_immediate,
     .write_raw        = ip_param_write_raw,
     .flush            = ip_flush_one,
-    .save             = ip_param_save,
+    .save             = param_vtable_save,
     .load             = ip_param_load,
     .reset            = ip_param_reset,
 };
