@@ -53,6 +53,11 @@
 /** @brief Sector Header 大小 */
 #define MKV_SEC_HDR_SIZE    8
 
+/** @brief CRC16 实现: 1=查表(512B rodata), 0=运行时计算 */
+#ifndef MKV_CRC16_TABLE
+#define MKV_CRC16_TABLE 1
+#endif     
+
 /** @brief 记录有效魔数 */
 #define MKV_REC_MAGIC       0xA5C3
 

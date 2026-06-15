@@ -8,6 +8,7 @@
 
 #include "ymodem_common.h"
 
+#if YMODEM_CRC16_TABLE
 /**
  * @brief CRC16 XMODEM CCITT 查找表（256 项）
  *
@@ -57,7 +58,7 @@ static const uint16_t ccitt_table[256] =
  * 算法: crc = (crc << 8) ^ table[((crc >> 8) ^ byte) & 0xFF]
  * 每字节仅需一次 XOR 和一次查表，适用于嵌入式实时场景。
  *
- * @param data 数据区起始指针，可为 NULL（此时返回 0）
+ * @param data 数据区起始指针
  * @param size 数据区长度（字节）
  * @return uint16_t CRC16 校验值
  */
@@ -68,3 +69,15 @@ uint16_t ymodem_calculate_crc16(const uint8_t* data, uint32_t size)
         crc = (crc << 8) ^ ccitt_table[((crc >> 8) ^ *data++) & 0xff];
     return crc;
 }
+#else  /* !YMODEM_CRC16_TABLE: 运行时计算 */
+uint16_t ymodem_calculate_crc16(const uint8_t* data, uint32_t size)
+{
+    uint16_t crc = 0;
+    while (size-- > 0) {
+        crc ^= (uint16_t)(*data++) << 8;
+        for (int i = 8; i > 0; i--)
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+#endif /* YMODEM_CRC16_TABLE */

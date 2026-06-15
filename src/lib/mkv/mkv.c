@@ -13,6 +13,7 @@
 
 /* ═══════════════════════════════════════════════ CRC16 (CCITT-FALSE) ═══ */
 
+#if MKV_CRC16_TABLE
 static const uint16_t crc16_table[256] = {
     0x0000,0x1021,0x2042,0x3063,0x4084,0x50A5,0x60C6,0x70E7,
     0x8108,0x9129,0xA14A,0xB16B,0xC18C,0xD1AD,0xE1CE,0xF1EF,
@@ -54,6 +55,17 @@ static uint16_t crc16_update(uint16_t crc, const uint8_t *data, uint32_t len)
         crc = (uint16_t)((crc << 8) ^ crc16_table[((crc >> 8) ^ data[i]) & 0xFF]);
     return crc;
 }
+#else  /* !MKV_CRC16_TABLE: 运行时计算 */
+static uint16_t crc16_update(uint16_t crc, const uint8_t *data, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)(data[i]) << 8;
+        for (int j = 8; j > 0; j--)
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+#endif /* MKV_CRC16_TABLE */
 
 /* ═══════════════════════════════════════════════ 内部辅助 ═══════════ */
 

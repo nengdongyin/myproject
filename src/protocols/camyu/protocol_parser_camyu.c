@@ -127,7 +127,8 @@ static void frame_info_update(protocol_parser_t* parser) {
 
 /* ==================== BCC 计算 ====================================== */
 
-/** @brief CRC-8/MAXIM 查表 */
+#if CAMYU_CRC8_TABLE      
+/** @brief CRC-8/MAXIM 查表 (256 B) */
 static const uint8_t CRC8Table[] = {
     0, 94, 188, 226, 97, 63, 221, 131, 194, 156, 126, 32, 163, 253, 31, 65,
     157, 195, 33, 127, 252, 162, 64, 30, 95, 1, 227, 189, 62, 96, 130, 220,
@@ -164,6 +165,18 @@ static uint8_t camyu_calculate_bcc(const uint8_t* data, uint32_t len) {
     }
     return crc;
 }
+#else  /* CAMYU_CRC8_RUNTIME */
+/** @brief 运行时计算 CRC-8/MAXIM (多项式 0x31) */
+static uint8_t camyu_calculate_bcc(const uint8_t* data, uint32_t len) {
+    uint8_t crc = 0;
+    for (; len > 0; len--, data++) {
+        crc ^= *data;
+        for (int i = 0; i < 8; i++)
+            crc = (crc & 0x80) ? (uint8_t)((crc << 1) ^ 0x31) : (uint8_t)(crc << 1);
+    }
+    return crc;
+}
+#endif /* !CAMYU_CRC8_RUNTIME */
 
 /* ==================== 内部解析(单字节) ============================== */
 

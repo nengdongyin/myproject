@@ -14,6 +14,12 @@
  */
 
 #pragma once
+
+/** @brief CRC16 实现: 1=查表(512B rodata), 0=运行时计算 */
+#ifndef YMODEM_CRC16_TABLE
+#define YMODEM_CRC16_TABLE 1
+#endif
+
 #include <stdint.h>
 #include <stdbool.h>
 #include "port.h"

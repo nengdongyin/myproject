@@ -15,6 +15,12 @@
  * @date   2024
  */
 #pragma once
+
+/** @brief CRC8 实现: 0=查表(256B rodata), 1=运行时计算 */
+#ifndef CAMYU_CRC8_TABLE
+#define CAMYU_CRC8_TABLE 1
+#endif
+
 #include "protocol_parser.h"
 #include "protocol_parser_internal.h"
 
