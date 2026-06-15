@@ -47,29 +47,21 @@ extern "C" {
 #endif
 
 /** @brief 启用 FlashDB 存储后端 (需链接 flashdb 库)
- *  1=开 0=关。0 时使用空操作 stub
- *  @note 历史遗留命名（缺少 PARAM_ 前缀和 _ENABLE 后缀），
- *        新代码如需引用请使用 PARAM_FLASHDB_ENABLE（别名） */
-#ifndef USE_FLASHDB
-#define USE_FLASHDB 0
-#endif
+ *  1=开 0=关。0 时使用空操作 stub */
 #ifndef PARAM_FLASHDB_ENABLE
-#define PARAM_FLASHDB_ENABLE USE_FLASHDB
+#define PARAM_FLASHDB_ENABLE 1
 #endif
 
 /** @brief 启用 iniparser 存储后端 (需链接 iniparser 库)
- *  1=开 0=关。与 USE_FLASHDB 互斥，同时为 1 时编译报错
- *  @note 历史遗留命名，新代码如需引用请使用 PARAM_INIPARSER_ENABLE（别名） */
-#ifndef USE_INIPARSER
-#define USE_INIPARSER 0
-#endif
+ *  1=开 0=关。与 USE_FLASHDB 互斥，同时为 1 时编译报错*/
+
 #ifndef PARAM_INIPARSER_ENABLE
-#define PARAM_INIPARSER_ENABLE USE_INIPARSER
+#define PARAM_INIPARSER_ENABLE 0
 #endif
 
 /* 存储后端互斥检查 */
-#if (USE_FLASHDB + USE_INIPARSER) > 1
-#error "USE_FLASHDB and USE_INIPARSER are mutually exclusive"
+#if (PARAM_FLASHDB_ENABLE + PARAM_INIPARSER_ENABLE) > 1
+#error "PARAM_FLASHDB_ENABLE and PARAM_INIPARSER_ENABLE are mutually exclusive"
 #endif
 
 /* OS 移植选择已迁移至 port/port.h (PORT_OS_* 宏系列) */
