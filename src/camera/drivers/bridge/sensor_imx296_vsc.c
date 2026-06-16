@@ -8,7 +8,7 @@
 #include "isc_bridge.h"
 #include "isc.h"
 #include "vsc_types.h"
-#include "vsc_prop_ids.h"
+#include "vsc_driver_ids.h"
 #include <string.h>
 
 /* ═══════════════════════════════════════════ 格式转换 ═══════════ */
@@ -136,5 +136,9 @@ const vsc_driver_t sensor_imx296_vsc_driver = {
         .try_fmt_sink   = NULL,
         .try_fmt_source = imx296_vsc_try_fmt_source,
         .commit_fmt     = imx296_vsc_commit_fmt,
+        .get_timing_req = NULL,
+        .query_cap      = NULL,
+        .set_ctrl       = NULL,
+        .get_ctrl       = NULL,
     },
 };

@@ -7,7 +7,7 @@
 
 #include "histogram_vsc.h"
 #include "histogram_driver.h"
-#include "vsc_prop_ids.h"
+#include "vsc_driver_ids.h"
 #include <string.h>
 
 #define HIST_MAX_INSTANCES 4
@@ -45,5 +45,14 @@ static int hist_vsc_sink(void *drv_ctx, const vsc_mbus_fmt_t *proposed, vsc_mbus
 const vsc_driver_t histogram_vsc_driver = {
     .name = "histogram", .driver_id = VSC_DRIVER_ID_HISTOGRAM,
     .capabilities = VSC_CAP_STATISTICS,
-    .ops = { hist_vsc_init, hist_vsc_sink, NULL, NULL },
+    .ops = {
+        .init           = hist_vsc_init,
+        .try_fmt_sink   = hist_vsc_sink,
+        .try_fmt_source = NULL,
+        .commit_fmt     = NULL,
+        .get_timing_req = NULL,
+        .query_cap      = NULL,
+        .set_ctrl       = NULL,
+        .get_ctrl       = NULL,
+    },
 };

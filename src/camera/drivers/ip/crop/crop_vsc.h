@@ -9,7 +9,7 @@
 #ifndef CROP_VSC_H
 #define CROP_VSC_H
 
-#include "vsc_types.h"
+#include "vsc_core_types.h"
 
 #ifdef __cplusplus
 extern "C" {

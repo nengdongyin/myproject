@@ -20,7 +20,8 @@
 #ifndef VSC_LITE_H
 #define VSC_LITE_H
 
-#include "vsc_types.h"
+#include "vsc_core_types.h"
+#include "vsc_ctrl_ids.h"
 
 #define VSC_LITE_MAX_STAGES 6
 
@@ -65,5 +66,40 @@ int vsc_lite_try_fmt(vsc_lite_pipeline_t *pipe,
  */
 int vsc_lite_commit_fmt(vsc_lite_pipeline_t *pipe,
                         const vsc_mbus_fmt_t *final_fmt);
+
+/**
+ * @brief 按 pipeline 顺序查询能力，返回第一个可用提供者
+ * @param pipe     已初始化的管线
+ * @param cap_id   能力 ID（VSC_CAP_BINNING / VSC_CAP_CROP / …）
+ * @param out      能力描述符缓冲区（类型取决于 cap_id）
+ * @param out_len  [in/out] 输入=缓冲区大小，输出=实际写入字节数
+ * @return VSC_OK 成功（out 已填充且 available==true）；
+ *         VSC_ERR_NOT_SUPPORTED 所有 stage 均不提供；
+ *         VSC_ERR_PARAM 无效参数
+ */
+int vsc_lite_query_cap(vsc_lite_pipeline_t *pipe, uint32_t cap_id,
+                       void *out, uint8_t *out_len);
+
+/**
+ * @brief 设置控制值 — 自动路由到提供该能力的 stage
+ * @param pipe    已初始化的管线
+ * @param cap_id  能力 ID（用于定位目标 stage）
+ * @param ctrl_id 控制 ID（VSC_CTRL_*）
+ * @param value   目标值
+ * @return VSC_OK 成功；VSC_ERR_NOT_SUPPORTED 所有 stage 均不识别
+ */
+int vsc_lite_set_ctrl(vsc_lite_pipeline_t *pipe, uint32_t cap_id,
+                      uint32_t ctrl_id, uint32_t value);
+
+/**
+ * @brief 读取控制值 — 从提供该能力的 stage 读取
+ * @param pipe    已初始化的管线
+ * @param cap_id  能力 ID
+ * @param ctrl_id 控制 ID（VSC_CTRL_*）
+ * @param value  [out] 当前值
+ * @return VSC_OK 成功；VSC_ERR_NOT_SUPPORTED 所有 stage 均不识别
+ */
+int vsc_lite_get_ctrl(vsc_lite_pipeline_t *pipe, uint32_t cap_id,
+                      uint32_t ctrl_id, uint32_t *value);
 
 #endif /* VSC_LITE_H */

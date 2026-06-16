@@ -9,7 +9,7 @@
 #ifndef SENSOR_VSC_H
 #define SENSOR_VSC_H
 
-#include "vsc_types.h"
+#include "vsc_core_types.h"
 
 extern const vsc_driver_t sensor_imx477_vsc_driver;
 void sensor_vsc_reset(void);

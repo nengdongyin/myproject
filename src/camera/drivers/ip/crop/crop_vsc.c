@@ -18,7 +18,7 @@
 
 #include "crop_vsc.h"
 #include "crop_driver.h"
-#include "vsc_prop_ids.h"
+#include "vsc_driver_ids.h"
 #include <string.h>
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -169,5 +169,9 @@ const vsc_driver_t crop_vsc_driver = {
         .try_fmt_sink   = crop_vsc_try_fmt_sink,
         .try_fmt_source = crop_vsc_try_fmt_source,
         .commit_fmt     = crop_vsc_commit_fmt,
+        .get_timing_req = NULL,
+        .query_cap      = NULL,
+        .set_ctrl       = NULL,
+        .get_ctrl       = NULL,
     },
 };

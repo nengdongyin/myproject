@@ -8,7 +8,7 @@
 
 #include "decoder_vsc.h"
 #include "decoder_driver.h"
-#include "vsc_prop_ids.h"
+#include "vsc_driver_ids.h"
 #include <string.h>
 
 #define DEC_MAX_INSTANCES 4
@@ -67,5 +67,14 @@ const vsc_driver_t decoder_vsc_driver = {
     .name = "decoder", .driver_id = VSC_DRIVER_ID_DECODER,
     .capabilities = VSC_CAP_FORMAT_CONV,
     .transform_template = &s_dec_template,
-    .ops = { dec_vsc_init, dec_vsc_sink, dec_vsc_source, dec_vsc_commit },
+    .ops = {
+        .init           = dec_vsc_init,
+        .try_fmt_sink   = dec_vsc_sink,
+        .try_fmt_source = dec_vsc_source,
+        .commit_fmt     = dec_vsc_commit,
+        .get_timing_req = NULL,
+        .query_cap      = NULL,
+        .set_ctrl       = NULL,
+        .get_ctrl       = NULL,
+    },
 };

@@ -30,7 +30,7 @@ const vsc_driver_t _vsc_drivers[] = {
         .schema             = _sensor_imx477_schema,
         .prop_count         = _SENSOR_IMX477_PROP_COUNT,
         .transform_template = &_sensor_imx477_transform,
-        .ops                = { NULL, NULL, NULL, NULL },
+        .ops                = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
     },
     {
         .name               = "crop",
@@ -39,7 +39,7 @@ const vsc_driver_t _vsc_drivers[] = {
         .schema             = _crop_schema,
         .prop_count         = _CROP_PROP_COUNT,
         .transform_template = &_crop_transform,
-        .ops                = { NULL, NULL, NULL, NULL },
+        .ops                = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
     },
     {
         .name               = "binning",
@@ -48,7 +48,7 @@ const vsc_driver_t _vsc_drivers[] = {
         .schema             = _binning_schema,
         .prop_count         = _BINNING_PROP_COUNT,
         .transform_template = &_binning_transform,
-        .ops                = { NULL, NULL, NULL, NULL },
+        .ops                = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
     },
     {
         .name               = "decoder",
@@ -57,7 +57,7 @@ const vsc_driver_t _vsc_drivers[] = {
         .schema             = _decoder_schema,
         .prop_count         = _DECODER_PROP_COUNT,
         .transform_template = &_decoder_transform,
-        .ops                = { NULL, NULL, NULL, NULL },
+        .ops                = { NULL, NULL, NULL, NULL, NULL },
     },
     {
         .name               = "histogram",
@@ -66,8 +66,8 @@ const vsc_driver_t _vsc_drivers[] = {
         .schema             = _histogram_schema,
         .prop_count         = _HISTOGRAM_PROP_COUNT,
         .transform_template = NULL,
-        .ops                = { NULL, NULL, NULL, NULL },
+        .ops                = { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL },
     },
-    { NULL, 0, 0, NULL, 0, NULL, { NULL, NULL, NULL, NULL } },
+    { NULL, 0, 0, NULL, 0, NULL, { NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL } },
 };
 
