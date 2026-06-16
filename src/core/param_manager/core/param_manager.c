@@ -1059,7 +1059,6 @@ const param_storage_drv_t *param_get_storage_partition(uint8_t index)
  * @return PARAM_OK 成功, PARAM_ERR_FLASH_FAIL Flash 操作失败,
  *         其他 <0 表示迁移回调返回的致命错误
  */
-#if PARAM_MIGRATE_ENABLE
 int param_migrate_storage(const param_storage_drv_t *storage,
                           const param_migrate_entry_t *table,
                           uint16_t count)
@@ -1129,7 +1128,6 @@ int param_migrate_storage(const param_storage_drv_t *storage,
 
     return PARAM_OK;
 }
-#endif /* PARAM_MIGRATE_ENABLE */
 
 /**
  * @brief 从持久化存储加载所有参数

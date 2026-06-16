@@ -782,11 +782,6 @@ extern "C"
 
 /**
  * @brief 执行存储层参数迁移
- *
- * 受 param_manager_config.h 中的 PARAM_MIGRATE_ENABLE 宏控制:
- *   - 启用时: 完整迁移逻辑（版本检查 + 迁移表遍历）
- *   - 禁用时: 空操作宏，直接求值为 PARAM_OK
- *
  * 在 param_init 之后、param_load_all 之前调用。
  * 所有操作直接走 storage 驱动，不依赖内存哈希表。
  *
@@ -801,20 +796,9 @@ extern "C"
  * @param count    表长度
  * @return PARAM_OK 成功
  */
-#if PARAM_MIGRATE_ENABLE
-    int param_migrate_storage(const param_storage_drv_t *storage,
+int param_migrate_storage(const param_storage_drv_t *storage,
                               const param_migrate_entry_t *table,
                               uint16_t count);
-#else
-#define param_migrate_storage(s, t, c) \
-    do                                 \
-    {                                  \
-        (void)(s);                     \
-        (void)(t);                     \
-        (void)(c);                     \
-    } while (0)
-#endif
-
 /** @} */ /* migration */
 
 /**

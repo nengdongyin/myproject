@@ -39,13 +39,6 @@ extern "C" {
 #define PARAM_MODULE_AUTO_REGISTER_ENABLE 0
 #endif
 
-/** @brief 启用参数版本迁移
- *  1=开 0=关。关闭时 param_migrate_storage() 为空操作直接返回 PARAM_OK。
- *  固件升级需要迁移旧参数时设为 1，并定义迁移表。 */
-#ifndef PARAM_MIGRATE_ENABLE
-#define PARAM_MIGRATE_ENABLE 0
-#endif
-
 /** @brief 启用 FlashDB 存储后端 (需链接 flashdb 库)
  *  1=开 0=关。0 时使用空操作 stub */
 #ifndef PARAM_FLASHDB_ENABLE

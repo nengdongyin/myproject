@@ -341,6 +341,20 @@ static void ip_module_reset(param_module_node_t *m)
 static int ip_module_init(param_module_node_t *m)
 {
     ip_instance_t *inst = (ip_instance_t *)m;
+
+    /* 将所有参数标记为 dirty，确保默认值可被 flush 下发硬件。
+     * 即使不调用 param_load_all()，param_flush() 也能生效。 */
+    inst->dirty_map = 0;
+    for (uint16_t i = 0; i < m->param_count; i++) {
+        if (m->table[i]) {
+            param_entry_mark_dirty(m->table[i]);
+            if (i < IP_DIRTY_MAP_BITS)
+                inst->dirty_map |= (1ULL << i);
+        }
+    }
+    if (inst->dirty_map != 0)
+        m->dirty = 1;
+
     if (inst->init)
         return inst->init(inst->driver);
     return PARAM_OK;
