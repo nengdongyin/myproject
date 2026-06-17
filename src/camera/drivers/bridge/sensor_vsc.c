@@ -15,85 +15,83 @@
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  格式转换 helper: vsc_mbus_fmt_t ↔ isc_fmt_t
+ *
+ *  ISC 使用 Bayer 顺序编码 (e.g. SRGGB10 = 'RG10'),
+ *  VSC 使用通用 RAW 编码 (e.g. RAW10).
+ *  转换时需在两套格式空间之间映射。
  * ═══════════════════════════════════════════════════════════════════════ */
+
+static uint32_t vsc_pixfmt_to_isc(uint32_t vsc_fmt)
+{
+    switch (vsc_fmt) {
+    case VSC_FMT_RAW8:  return ISC_PIX_FMT_SRGGB8;
+    case VSC_FMT_RAW10: return ISC_PIX_FMT_SRGGB10;
+    case VSC_FMT_RAW12: return ISC_PIX_FMT_SRGGB12;
+    default:            return vsc_fmt;  /* RGB888 等非 RAW 格式直接透传 */
+    }
+}
+
+static uint32_t isc_pixfmt_to_vsc(uint32_t isc_fmt)
+{
+    switch (isc_fmt) {
+    case ISC_PIX_FMT_SRGGB8:
+    case ISC_PIX_FMT_SBGGR8:
+    case ISC_PIX_FMT_SGRBG8:
+    case ISC_PIX_FMT_SGBRG8:
+    case ISC_PIX_FMT_GREY8:
+        return VSC_FMT_RAW8;
+    case ISC_PIX_FMT_SRGGB10:
+    case ISC_PIX_FMT_SBGGR10:
+    case ISC_PIX_FMT_SGRBG10:
+    case ISC_PIX_FMT_SGBRG10:
+    case ISC_PIX_FMT_GREY10:
+        return VSC_FMT_RAW10;
+    case ISC_PIX_FMT_SRGGB12:
+    case ISC_PIX_FMT_SBGGR12:
+        return VSC_FMT_RAW12;
+    default:
+        return isc_fmt;  /* RGB888 等非 Bayer 格式直接透传 */
+    }
+}
 
 static void vsc_to_isc(const vsc_mbus_fmt_t *v, isc_fmt_t *i)
 {
     memset(i, 0, sizeof(*i));
-    i->width          = v->width;
-    i->height         = v->height;
-    i->pixel_format   = v->pixel_format;
-    i->frame_rate_num = v->frame_rate_num;
-    i->frame_rate_den = v->frame_rate_den;
-    i->bit_depth      = v->bit_depth;
+    i->width          = v->spatial.width;
+    i->height         = v->spatial.height;
+    i->pixel_format   = vsc_pixfmt_to_isc(v->spatial.pixel_format);
+    i->frame_rate_num = v->spatial.frame_rate_num;
+    i->frame_rate_den = v->spatial.frame_rate_den;
+    i->bit_depth      = v->spatial.bit_depth;
 }
 
 static void isc_to_vsc(const isc_fmt_t *i, vsc_mbus_fmt_t *v)
 {
-    v->width          = i->width;
-    v->height         = i->height;
-    v->pixel_format   = i->pixel_format;
-    v->frame_rate_num = i->frame_rate_num;
-    v->frame_rate_den = i->frame_rate_den;
-    v->bit_depth      = i->bit_depth;
+    v->spatial.width          = i->width;
+    v->spatial.height         = i->height;
+    v->spatial.pixel_format   = isc_pixfmt_to_vsc(i->pixel_format);
+    v->spatial.frame_rate_num = i->frame_rate_num;
+    v->spatial.frame_rate_den = i->frame_rate_den;
+    v->spatial.bit_depth      = i->bit_depth;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  私有上下文
  * ═══════════════════════════════════════════════════════════════════════ */
 
-#define SENSOR_MAX_INSTANCES 2
-
-typedef struct {
-    bool       in_use;
-    isc_dev_t *isc_dev;          /* ISC 设备句柄 */
-    char       model[32];
-
-    /* 缓存 sensor 物理能力上限 (在 try_fmt_source 中填充) */
-    uint32_t   max_h_total;      /* 传感器行周期上限 (pclk)   */
-    uint32_t   max_v_total;      /* 传感器帧周期上限 (行数)    */
-
-    /* 缓存的 sensor binning 控制值（set_ctrl 写入，try_fmt 生效） */
-    uint8_t    bin_factor_x;
-    uint8_t    bin_factor_y;
-    bool       bin_enabled;
-} sensor_ctx_t;
-
-static sensor_ctx_t g_pool[SENSOR_MAX_INSTANCES];
-
-void sensor_vsc_reset(void)
-{
-    for (int i = 0; i < SENSOR_MAX_INSTANCES; i++) {
-        if (g_pool[i].in_use && g_pool[i].isc_dev) {
-            isc_close(g_pool[i].isc_dev);
-        }
-    }
-    memset(g_pool, 0, sizeof(g_pool));
-}
-
 /* ═══════════════════════════════════════════════════════════════════════
- *  ops.init()
+ *  ops.init() — 实例由应用层预分配
  * ═══════════════════════════════════════════════════════════════════════ */
 
-static int sensor_vsc_init(void **drv_ctx, uint32_t base_addr,
-                           const vsc_override_t *overrides,
-                           uint8_t num_over)
+static int sensor_vsc_init(void *inst)
 {
-    (void)base_addr;
+    sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)inst;
 
     int rc = isc_bridge_init();
     if (rc != 0) return VSC_ERR_CANNOT_AUTO_BRIDGE;
 
-    sensor_ctx_t *ctx = NULL;
-    for (int i = 0; i < SENSOR_MAX_INSTANCES; i++)
-        if (!g_pool[i].in_use) { ctx = &g_pool[i]; ctx->in_use = true; break; }
-    if (!ctx) return VSC_ERR_TOPOLOGY_BROKEN;
-
-    strcpy(ctx->model, "sensor_imx477");
-    for (uint8_t i = 0; i < num_over; i++) {
-        if (strcmp(overrides[i].key, "model") == 0)
-            strncpy(ctx->model, (const char *)(uintptr_t)overrides[i].value, 31);
-    }
+    if (ctx->model[0] == '\0')
+        strcpy(ctx->model, "sensor_imx477");
 
     rc = isc_open(ctx->model, &ctx->isc_dev);
     if (rc != ISC_OK) {
@@ -101,7 +99,6 @@ static int sensor_vsc_init(void **drv_ctx, uint32_t base_addr,
         rc = VSC_OK;
     }
 
-    *drv_ctx = ctx;
     return VSC_OK;
 }
 
@@ -115,7 +112,7 @@ static int sensor_vsc_try_fmt_source(void *drv_ctx,
                                      const vsc_mbus_fmt_t *intent,
                                      vsc_mbus_fmt_t *source_fmt)
 {
-    sensor_ctx_t *ctx = (sensor_ctx_t *)drv_ctx;
+    sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)drv_ctx;
 
     if (ctx->isc_dev) {
         isc_fmt_t isc_in;
@@ -134,26 +131,26 @@ static int sensor_vsc_try_fmt_source(void *drv_ctx,
         isc_timing_t timing;
         rc = isc_try_timing(ctx->isc_dev, &isc_in, &timing);
         if (rc == ISC_OK) {
-            source_fmt->pixel_clock_hz = timing.pixel_clock_hz;
-            source_fmt->h_active       = source_fmt->width;
-            source_fmt->h_total        = timing.line_length_pclk;
-            source_fmt->h_blank        = source_fmt->h_total - source_fmt->h_active;
-            source_fmt->v_active       = source_fmt->height;
-            source_fmt->v_total        = timing.frame_length_lines;
-            source_fmt->v_blank        = source_fmt->v_total - source_fmt->v_active;
+            source_fmt->timing.pixel_clock_hz = timing.pixel_clock_hz;
+            source_fmt->timing.h_active       = source_fmt->spatial.width;
+            source_fmt->timing.h_total        = timing.line_length_pclk;
+            source_fmt->timing.h_blank        = source_fmt->timing.h_total - source_fmt->timing.h_active;
+            source_fmt->timing.v_active       = source_fmt->spatial.height;
+            source_fmt->timing.v_total        = timing.frame_length_lines;
+            source_fmt->timing.v_blank        = source_fmt->timing.v_total - source_fmt->timing.v_active;
 
             /* 缓存传感器上限（后续聚合阶段检查用） */
             ctx->max_h_total = timing.line_length_pclk * 4;   /* 保守: 4× 基准 */
             ctx->max_v_total = timing.frame_length_lines * 4;
         } else {
             /* 回退: ISC 不支持 try_timing，用默认值 */
-            source_fmt->pixel_clock_hz = 74250000;   /* IMX477 典型值 */
-            source_fmt->h_active       = source_fmt->width;
-            source_fmt->h_total        = source_fmt->width + 128;
-            source_fmt->h_blank        = 128;
-            source_fmt->v_active       = source_fmt->height;
-            source_fmt->v_total        = source_fmt->height + 80;
-            source_fmt->v_blank        = 80;
+            source_fmt->timing.pixel_clock_hz = 74250000;   /* IMX477 典型值 */
+            source_fmt->timing.h_active       = source_fmt->spatial.width;
+            source_fmt->timing.h_total        = source_fmt->spatial.width + 128;
+            source_fmt->timing.h_blank        = 128;
+            source_fmt->timing.v_active       = source_fmt->spatial.height;
+            source_fmt->timing.v_total        = source_fmt->spatial.height + 80;
+            source_fmt->timing.v_blank        = 80;
             ctx->max_h_total = 0xFFFF;
             ctx->max_v_total = 0xFFFF;
         }
@@ -166,19 +163,19 @@ static int sensor_vsc_try_fmt_source(void *drv_ctx,
         uint32_t supported[] = { VSC_FMT_RAW8, VSC_FMT_RAW10, VSC_FMT_RAW12, 0 };
         bool ok = false;
         for (int i = 0; supported[i]; i++)
-            if (supported[i] == intent->pixel_format) { ok = true; break; }
-        if (!ok) source_fmt->pixel_format = supported[0];
-        if (source_fmt->width  > 4056) source_fmt->width  = 4056;
-        if (source_fmt->height > 3040) source_fmt->height = 3040;
+            if (supported[i] == intent->spatial.pixel_format) { ok = true; break; }
+        if (!ok) source_fmt->spatial.pixel_format = supported[0];
+        if (source_fmt->spatial.width  > 4056) source_fmt->spatial.width  = 4056;
+        if (source_fmt->spatial.height > 3040) source_fmt->spatial.height = 3040;
 
         /* 回退时序 */
-        source_fmt->pixel_clock_hz = 74250000;
-        source_fmt->h_active       = source_fmt->width;
-        source_fmt->h_total        = source_fmt->width + 128;
-        source_fmt->h_blank        = 128;
-        source_fmt->v_active       = source_fmt->height;
-        source_fmt->v_total        = source_fmt->height + 80;
-        source_fmt->v_blank        = 80;
+        source_fmt->timing.pixel_clock_hz = 74250000;
+        source_fmt->timing.h_active       = source_fmt->spatial.width;
+        source_fmt->timing.h_total        = source_fmt->spatial.width + 128;
+        source_fmt->timing.h_blank        = 128;
+        source_fmt->timing.v_active       = source_fmt->spatial.height;
+        source_fmt->timing.v_total        = source_fmt->spatial.height + 80;
+        source_fmt->timing.v_blank        = 80;
         ctx->max_h_total = 0xFFFF;
         ctx->max_v_total = 0xFFFF;
     }
@@ -197,7 +194,7 @@ static int sensor_get_timing_req(void *drv_ctx,
                                  const vsc_mbus_fmt_t *source_fmt,
                                  vsc_timing_req_t *req)
 {
-    sensor_ctx_t *ctx = (sensor_ctx_t *)drv_ctx;
+    sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)drv_ctx;
     (void)sink_fmt;
     (void)source_fmt;
 
@@ -217,7 +214,7 @@ static int sensor_get_timing_req(void *drv_ctx,
 static int sensor_query_cap(void *drv_ctx, uint32_t cap_id,
                              void *out, uint8_t *out_len)
 {
-    sensor_ctx_t *ctx = (sensor_ctx_t *)drv_ctx;
+    sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)drv_ctx;
 
     switch (cap_id) {
     case VSC_CAP_BINNING: {
@@ -259,7 +256,7 @@ static int sensor_query_cap(void *drv_ctx, uint32_t cap_id,
 
 static int sensor_set_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t value)
 {
-    sensor_ctx_t *ctx = (sensor_ctx_t *)drv_ctx;
+    sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)drv_ctx;
     if (!ctx->isc_dev) return VSC_ERR_NOT_SUPPORTED;
 
     switch (ctrl_id) {
@@ -285,7 +282,7 @@ static int sensor_set_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t value)
 
 static int sensor_get_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t *value)
 {
-    sensor_ctx_t *ctx = (sensor_ctx_t *)drv_ctx;
+    sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)drv_ctx;
     if (!ctx->isc_dev) return VSC_ERR_NOT_SUPPORTED;
 
     switch (ctrl_id) {
@@ -320,7 +317,7 @@ static int sensor_get_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t *value)
 static int sensor_vsc_commit_fmt(void *drv_ctx,
                                  const vsc_mbus_fmt_t *final_fmt)
 {
-    sensor_ctx_t *ctx = (sensor_ctx_t *)drv_ctx;
+    sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)drv_ctx;
     if (ctx->isc_dev) {
         isc_fmt_t isc_fmt;
         vsc_to_isc(final_fmt, &isc_fmt);

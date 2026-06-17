@@ -7,51 +7,36 @@
  */
 
 #include "decoder_vsc.h"
-#include "decoder_driver.h"
 #include "vsc_driver_ids.h"
 #include <string.h>
 
-#define DEC_MAX_INSTANCES 4
-
-typedef struct { bool in_use; decoder_dev_t hw; } dec_ctx_t;
-static dec_ctx_t g_pool[DEC_MAX_INSTANCES];
-
-void decoder_vsc_reset(void) { memset(g_pool, 0, sizeof(g_pool)); }
-
-static int dec_vsc_init(void **drv_ctx, uint32_t base_addr,
-                        const vsc_override_t *overrides, uint8_t num_over)
+static int dec_vsc_init(void *inst)
 {
-    dec_ctx_t *ctx = NULL;
-    for (int i = 0; i < DEC_MAX_INSTANCES; i++)
-        if (!g_pool[i].in_use) { ctx = &g_pool[i]; ctx->in_use = true; break; }
-    if (!ctx) return VSC_ERR_TOPOLOGY_BROKEN;
-
-    decoder_init(&ctx->hw, base_addr);
-    (void)overrides; (void)num_over;
-    *drv_ctx = ctx;
+    decoder_vsc_inst_t *ctx = (decoder_vsc_inst_t *)inst;
+    (void)ctx;
     return VSC_OK;
 }
 
 static int dec_vsc_sink(void *drv_ctx, const vsc_mbus_fmt_t *proposed, vsc_mbus_fmt_t *clamped)
 {
-    dec_ctx_t *ctx = (dec_ctx_t *)drv_ctx;
+    decoder_vsc_inst_t *ctx = (decoder_vsc_inst_t *)drv_ctx;
     *clamped = *proposed;
-    if (!decoder_supports_input(&ctx->hw, proposed->pixel_format))
+    if (!decoder_supports_input(&ctx->hw, proposed->spatial.pixel_format))
         return VSC_ERR_PROPAGATION_SINK;
     return VSC_OK;
 }
 
 static int dec_vsc_source(void *drv_ctx, const vsc_mbus_fmt_t *sink, vsc_mbus_fmt_t *src)
 {
-    dec_ctx_t *ctx = (dec_ctx_t *)drv_ctx;
+    decoder_vsc_inst_t *ctx = (decoder_vsc_inst_t *)drv_ctx;
     *src = *sink;
-    src->pixel_format = ctx->hw.fmt_out;  /* RAW → RGB888 */
+    src->spatial.pixel_format = ctx->hw.fmt_out;  /* RAW → RGB888 */
     return VSC_OK;
 }
 
 static int dec_vsc_commit(void *drv_ctx, const vsc_mbus_fmt_t *final_fmt)
 {
-    dec_ctx_t *ctx = (dec_ctx_t *)drv_ctx;
+    decoder_vsc_inst_t *ctx = (decoder_vsc_inst_t *)drv_ctx;
     (void)final_fmt;
     decoder_enable(&ctx->hw);
     decoder_commit(&ctx->hw);

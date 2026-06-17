@@ -10,6 +10,8 @@ target_include_directories(app PRIVATE
     src/test/core/param_manager
     src/camera/core/vsc
     src/camera/core/vsc_lite
+    src/camera/board
+    src/camera/modules/vsc_lite
     gen/vsc
     src/test/protocols/camyu
     src/core/protocol_parser
@@ -89,6 +91,8 @@ target_sources(app PRIVATE
       src/camera/core/isc/port/isc_port_i2c.c
       src/camera/drivers/sensors/isc_sensor_imx296.c
       src/camera/core/vsc_lite/vsc_lite.c
+      src/camera/board/vsc_lite_board_default.c
+      src/camera/modules/vsc_lite/vsc_lite_control.c
       src/camera/drivers/bridge/sensor_vsc.c
       src/camera/drivers/bridge/sensor_imx296_vsc.c
       src/camera/drivers/bridge/isc_bridge.c

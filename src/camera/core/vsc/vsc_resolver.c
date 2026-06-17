@@ -391,13 +391,13 @@ int vsc_pipeline_remove_optional(vsc_pipeline_t *pipeline, uint8_t entity_idx)
 static void constraint_from_intent(vsc_feasibility_constraint_t *c,
                                    const vsc_mbus_fmt_t *intent)
 {
-    c->width_range.lo  = intent->width;
-    c->width_range.hi  = intent->width;
-    c->height_range.lo = intent->height;
-    c->height_range.hi = intent->height;
-    c->required_format = intent->pixel_format;
-    c->frame_rate_num  = intent->frame_rate_num;
-    c->frame_rate_den  = intent->frame_rate_den;
+    c->width_range.lo  = intent->spatial.width;
+    c->width_range.hi  = intent->spatial.width;
+    c->height_range.lo = intent->spatial.height;
+    c->height_range.hi = intent->spatial.height;
+    c->required_format = intent->spatial.pixel_format;
+    c->frame_rate_num  = intent->spatial.frame_rate_num;
+    c->frame_rate_den  = intent->spatial.frame_rate_den;
 }
 
 /* ========================================================================
@@ -482,7 +482,7 @@ int vsc_resolver_feasibility_check(const vsc_pipeline_t *pipeline,
 {
     uint8_t i, ep;
     bool    any_feasible = false;
-    vsc_mbus_fmt_t best_reachable = {0, 0, VSC_FMT_INVALID, 0, 1, 0, 0, {0}};
+    vsc_mbus_fmt_t best_reachable = { {0, 0, VSC_FMT_INVALID, 0, 1, 0, 0, {0}} };
 
     memset(result, 0, sizeof(*result));
 
@@ -529,10 +529,10 @@ int vsc_resolver_feasibility_check(const vsc_pipeline_t *pipeline,
                 path_ok = false;
                 /* record reachable bounds from the failing entity */
                 if (e->transform_desc.type == VSC_TRANSFORM_CROP) {
-                    if (e->transform_desc.params.crop.max_w > best_reachable.width)
-                        best_reachable.width  = e->transform_desc.params.crop.max_w;
-                    if (e->transform_desc.params.crop.max_h > best_reachable.height)
-                        best_reachable.height = e->transform_desc.params.crop.max_h;
+                    if (e->transform_desc.params.crop.max_w > best_reachable.spatial.width)
+                        best_reachable.spatial.width  = e->transform_desc.params.crop.max_w;
+                    if (e->transform_desc.params.crop.max_h > best_reachable.spatial.height)
+                        best_reachable.spatial.height = e->transform_desc.params.crop.max_h;
                 }
                 break;
             }
@@ -576,10 +576,10 @@ int vsc_resolver_feasibility_check(const vsc_pipeline_t *pipeline,
 
             if (c.width_range.lo  > smax_w || c.width_range.hi  < smin_w ||
                 c.height_range.lo > smax_h || c.height_range.hi < smin_h) {
-                if (smax_w > best_reachable.width)
-                    best_reachable.width  = smax_w;
-                if (smax_h > best_reachable.height)
-                    best_reachable.height = smax_h;
+                if (smax_w > best_reachable.spatial.width)
+                    best_reachable.spatial.width  = smax_w;
+                if (smax_h > best_reachable.spatial.height)
+                    best_reachable.spatial.height = smax_h;
                 continue;
             }
 
@@ -598,7 +598,7 @@ int vsc_resolver_feasibility_check(const vsc_pipeline_t *pipeline,
 
     if (!any_feasible) {
         result->status = VSC_NEGOTIATE_FAILED;
-        if (best_reachable.width > 0) {
+        if (best_reachable.spatial.width > 0) {
             result->reachable_max = best_reachable;
         }
         return VSC_ERR_UNREACHABLE;
@@ -637,8 +637,8 @@ check_sensor_linear:
             if (c.width_range.lo  > smax_w || c.width_range.hi  < smin_w ||
                 c.height_range.lo > smax_h || c.height_range.hi < smin_h) {
                 result->status = VSC_NEGOTIATE_FAILED;
-                result->reachable_max.width  = smax_w;
-                result->reachable_max.height = smax_h;
+                result->reachable_max.spatial.width  = smax_w;
+                result->reachable_max.spatial.height = smax_h;
                 return VSC_ERR_UNREACHABLE;
             }
             break;
@@ -696,8 +696,8 @@ int vsc_resolver_forward_propagate(vsc_pipeline_t *pipeline,
         vsc_entity_t *e = &pipeline->entities[i];
         memset(&e->prop_state, 0, sizeof(e->prop_state));
         e->prop_state.active  = true;
-        e->prop_state.sink_fmt.pixel_format   = VSC_FMT_INVALID;
-        e->prop_state.source_fmt.pixel_format = VSC_FMT_INVALID;
+        e->prop_state.sink_fmt.spatial.pixel_format   = VSC_FMT_INVALID;
+        e->prop_state.source_fmt.spatial.pixel_format = VSC_FMT_INVALID;
     }
     memset(in_queue, 0, sizeof(in_queue));
 
@@ -809,11 +809,11 @@ int vsc_resolver_forward_propagate(vsc_pipeline_t *pipeline,
 static vsc_fmt_field_t detect_field_change(const vsc_mbus_fmt_t *sink,
                                            const vsc_mbus_fmt_t *source)
 {
-    if (sink->width        != source->width)        return VSC_FMT_FIELD_WIDTH;
-    if (sink->height       != source->height)       return VSC_FMT_FIELD_HEIGHT;
-    if (sink->pixel_format != source->pixel_format) return VSC_FMT_FIELD_FORMAT;
-    if (sink->frame_rate_num != source->frame_rate_num ||
-        sink->frame_rate_den != source->frame_rate_den)
+    if (sink->spatial.width        != source->spatial.width)        return VSC_FMT_FIELD_WIDTH;
+    if (sink->spatial.height       != source->spatial.height)       return VSC_FMT_FIELD_HEIGHT;
+    if (sink->spatial.pixel_format != source->spatial.pixel_format) return VSC_FMT_FIELD_FORMAT;
+    if (sink->spatial.frame_rate_num != source->spatial.frame_rate_num ||
+        sink->spatial.frame_rate_den != source->spatial.frame_rate_den)
         return VSC_FMT_FIELD_FRAMERATE;
     return VSC_FMT_FIELD_NONE;
 }
@@ -1098,8 +1098,8 @@ int vsc_resolver_try_fmt(vsc_pipeline_t *pipeline,
     memset(result, 0, sizeof(*result));
 
     /* ── validate intent ── */
-    if (intent->width == 0 || intent->height == 0 ||
-        intent->pixel_format == VSC_FMT_INVALID) {
+    if (intent->spatial.width == 0 || intent->spatial.height == 0 ||
+        intent->spatial.pixel_format == VSC_FMT_INVALID) {
         result->status = VSC_NEGOTIATE_FAILED;
         return VSC_ERR_INVALID_INTENT;
     }

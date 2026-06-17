@@ -8,43 +8,25 @@
  */
 
 #include "binning_vsc.h"
-#include "binning_driver.h"
 #include "vsc_driver_ids.h"
 #include "vsc_ctrl_ids.h"
 #include <string.h>
 
-#define BIN_MAX_INSTANCES 4
-
-typedef struct { bool in_use; binning_dev_t hw; } bin_ctx_t;
-static bin_ctx_t g_pool[BIN_MAX_INSTANCES];
-
-void binning_vsc_reset(void) { memset(g_pool, 0, sizeof(g_pool)); }
-
 /* ── init ── */
-static int bin_vsc_init(void **drv_ctx, uint32_t base_addr,
-                        const vsc_override_t *overrides, uint8_t num_over)
+static int bin_vsc_init(void *inst)
 {
-    bin_ctx_t *ctx = NULL;
-    for (int i = 0; i < BIN_MAX_INSTANCES; i++)
-        if (!g_pool[i].in_use) { ctx = &g_pool[i]; ctx->in_use = true; break; }
-    if (!ctx) return VSC_ERR_TOPOLOGY_BROKEN;
-
-    binning_init(&ctx->hw, base_addr);
-    for (uint8_t i = 0; i < num_over; i++) {
-        const char *k = overrides[i].key;
-        if (strstr(k, "factor_x")) binning_set_factors(&ctx->hw, (uint8_t)overrides[i].value, ctx->hw.factor_y);
-        if (strstr(k, "factor_y")) binning_set_factors(&ctx->hw, ctx->hw.factor_x, (uint8_t)overrides[i].value);
-    }
-    *drv_ctx = ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)inst;
+    /* base_addr 和默认 factor 已在编译期静态初始化中设置 */
+    (void)ctx;
     return VSC_OK;
 }
 
 /* ── try_fmt_sink ── */
 static int bin_vsc_sink(void *drv_ctx, const vsc_mbus_fmt_t *proposed, vsc_mbus_fmt_t *clamped)
 {
-    bin_ctx_t *ctx = (bin_ctx_t *)drv_ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
     *clamped = *proposed;
-    /* ensure dimensions are divisible by factor (conservative: just pass through) */
+    /* factor 整除校验由硬件保证，此处透传 */
     (void)ctx;
     return VSC_OK;
 }
@@ -52,17 +34,17 @@ static int bin_vsc_sink(void *drv_ctx, const vsc_mbus_fmt_t *proposed, vsc_mbus_
 /* ── try_fmt_source ── */
 static int bin_vsc_source(void *drv_ctx, const vsc_mbus_fmt_t *sink, vsc_mbus_fmt_t *src)
 {
-    bin_ctx_t *ctx = (bin_ctx_t *)drv_ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
     *src = *sink;
-    if (ctx->hw.factor_x > 1) src->width  /= ctx->hw.factor_x;
-    if (ctx->hw.factor_y > 1) src->height /= ctx->hw.factor_y;
+    if (ctx->hw.factor_x > 1) src->spatial.width  /= ctx->hw.factor_x;
+    if (ctx->hw.factor_y > 1) src->spatial.height /= ctx->hw.factor_y;
     return VSC_OK;
 }
 
 /* ── commit ── */
 static int bin_vsc_commit(void *drv_ctx, const vsc_mbus_fmt_t *final_fmt)
 {
-    bin_ctx_t *ctx = (bin_ctx_t *)drv_ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
     (void)final_fmt;
     binning_enable(&ctx->hw);
     binning_commit(&ctx->hw);
@@ -75,14 +57,14 @@ static int bin_get_timing_req(void *drv_ctx,
                               const vsc_mbus_fmt_t *source_fmt,
                               vsc_timing_req_t *req)
 {
-    bin_ctx_t *ctx = (bin_ctx_t *)drv_ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
     (void)source_fmt;
 
     memset(req, 0, sizeof(*req));
 
     /* 行缓冲 flush: 内部 @200MHz 需 32 cycle，换算为 sensor pclk */
-    if (sink_fmt->pixel_clock_hz > 0) {
-        float ratio = (float)sink_fmt->pixel_clock_hz / 200000000.0f;
+    if (sink_fmt->timing.pixel_clock_hz > 0) {
+        float ratio = (float)sink_fmt->timing.pixel_clock_hz / 200000000.0f;
         req->min_h_blank = (uint32_t)(32.0f * ratio + 0.9999f);
     } else {
         req->min_h_blank = 12;   /* 默认回退 */
@@ -99,7 +81,7 @@ static int bin_get_timing_req(void *drv_ctx,
 /* ── set_ctrl / get_ctrl ── */
 static int bin_set_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t value)
 {
-    bin_ctx_t *ctx = (bin_ctx_t *)drv_ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
     switch (ctrl_id) {
     case VSC_CTRL_BIN_FACTOR_X:
         binning_set_factors(&ctx->hw, (uint8_t)value, ctx->hw.factor_y);
@@ -117,7 +99,7 @@ static int bin_set_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t value)
 
 static int bin_get_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t *value)
 {
-    bin_ctx_t *ctx = (bin_ctx_t *)drv_ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
     switch (ctrl_id) {
     case VSC_CTRL_BIN_FACTOR_X: *value = ctx->hw.factor_x; return VSC_OK;
     case VSC_CTRL_BIN_FACTOR_Y: *value = ctx->hw.factor_y; return VSC_OK;
@@ -134,7 +116,7 @@ static int bin_get_ctrl(void *drv_ctx, uint32_t ctrl_id, uint32_t *value)
 static int bin_query_cap(void *drv_ctx, uint32_t cap_id,
                           void *out, uint8_t *out_len)
 {
-    bin_ctx_t *ctx = (bin_ctx_t *)drv_ctx;
+    binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
 
     if (cap_id != VSC_CAP_BINNING)
         return VSC_ERR_NOT_SUPPORTED;

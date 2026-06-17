@@ -27,8 +27,9 @@ extern "C"
 
 /** @name 业务逻辑模块 (App) */
 /** @{ */
-#define MODULE_AUTO_EXP 0x01u /**< 自动曝光控制模块 */
-#define MODULE_SYS 0x02u      /**< 系统管理模块 */
+#define MODULE_AUTO_EXP  0x01u /**< 自动曝光控制模块 */
+#define MODULE_SYS       0x02u /**< 系统管理模块 */
+#define MODULE_VSC_LITE  0x03u /**< VSC Lite 管线控制模块 */
 /** @} */
 
 /** @name IP 寄存器模块 (0x80 起) */
@@ -51,6 +52,7 @@ extern "C"
         IP_ACQUISITION,   \
         IP_LVDS_RX,       \
         IP_PWM,           \
+        MODULE_VSC_LITE,  \
         MODULE_AUTO_EXP,  \
         MODULE_SYS
 

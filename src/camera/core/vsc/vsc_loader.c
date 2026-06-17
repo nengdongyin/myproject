@@ -76,10 +76,9 @@ int vsc_instance_create(const vsc_driver_t *driver,
 
     /* initialise driver context via ops->init() */
     if (driver->ops.init) {
-        void *ctx = NULL;
-        int rc = driver->ops.init(&ctx, base_addr, overrides, num_over);
+        int rc = driver->ops.init(entity);
         if (rc != VSC_OK) return rc;
-        entity->drv_ctx = ctx;
+        /* entity->drv_ctx set by init */
     }
 
     entity->ops = &driver->ops;

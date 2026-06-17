@@ -3,15 +3,24 @@
  * @brief VSC Lite — 简化版视频管线求解器
  *
  * 与完整 VSC 相同的 API 语义，但:
- *   - 固定 5 阶段管线拓扑（不做图遍历）
+ *   - 线性管线拓扑（不做图遍历），最多 VSC_LITE_MAX_STAGES 阶段
  *   - 仅前向传播（不反向、不收敛）
  *   - 无 schema 元数据、无调整追踪
  *   - 驱动层复用 vsc_ip_ops_t 接口
+ *   - 实例由应用层编译期静态分配，同一 driver 可多实例
  *
  * 用法:
  * @code
+ *   static binning_vsc_inst_t g_bin0 = { .hw = { .base_addr = 0x43C10000, .factor_x = 2, .factor_y = 2 } };
+ *   static crop_vsc_inst_t    g_crop0 = { .hw = { .base_addr = 0x43C00000 } };
+ *
+ *   const vsc_lite_stage_def_t stages[] = {
+ *       { &sensor_imx477_vsc_driver, &g_sensor0 },
+ *       { &crop_vsc_driver,           &g_crop0   },
+ *       { &binning_vsc_driver,        &g_bin0    },
+ *   };
  *   vsc_lite_pipeline_t pipe;
- *   vsc_lite_pipeline_init(&pipe, sensor_drv, crop_drv, ...);
+ *   vsc_lite_pipeline_init(&pipe, stages, 3);
  *   vsc_lite_try_fmt(&pipe, &intent, &result);
  *   vsc_lite_commit_fmt(&pipe, &result.primary_fmt);
  * @endcode
@@ -24,6 +33,12 @@
 #include "vsc_ctrl_ids.h"
 
 #define VSC_LITE_MAX_STAGES 6
+
+/** @brief Stage 配置定义 — 编译期静态分配，driver + 实例绑定 */
+typedef struct {
+    const vsc_driver_t *driver;    /* 驱动类描述符（共享 ROM）       */
+    void               *inst;      /* 实例内存（编译期静态分配）      */
+} vsc_lite_stage_def_t;
 
 typedef struct {
     const vsc_driver_t *driver;
@@ -38,14 +53,14 @@ typedef struct {
 } vsc_lite_pipeline_t;
 
 /**
- * @brief 初始化管线，按顺序注册驱动
+ * @brief 初始化管线，按顺序注册驱动与实例
  * @param pipe      管线实例
- * @param drivers   驱动数组
- * @param count     驱动数量
+ * @param stages    stage 配置数组（driver + inst 对）
+ * @param count     stage 数量
  * @return VSC_OK 成功
  */
 int vsc_lite_pipeline_init(vsc_lite_pipeline_t *pipe,
-                           const vsc_driver_t **drivers, uint8_t count);
+                           const vsc_lite_stage_def_t *stages, uint8_t count);
 
 /**
  * @brief 格式协商 — 从 sensor 到端点逐级前向传播

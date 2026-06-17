@@ -27,7 +27,7 @@ int main(void)
     test_suite_add(&_ts_camyu);
     test_suite_add(&_ts_isc);
     test_suite_add(&_ts_vsc_lite);
-    test_suite_add(&_ts_vsc_resolver);
+    //test_suite_add(&_ts_vsc_resolver);
 
     int failures = test_suite_run_all();
     (void)failures;

@@ -46,6 +46,7 @@ extern "C" {
  *  Media-bus format descriptor
  * ======================================================================== */
 
+/** @brief 空间/分辨率参数 */
 typedef struct {
     uint32_t width;
     uint32_t height;
@@ -55,6 +56,12 @@ typedef struct {
     uint8_t  bit_depth;
     uint8_t  lanes;
     uint8_t  reserved[2];
+    uint32_t crop_left;       /* ROI 水平起始偏移                  */
+    uint32_t crop_top;        /* ROI 垂直起始偏移                  */
+} vsc_spatial_fmt_t;
+
+/** @brief 时序参数 */
+typedef struct {
     uint32_t pixel_clock_hz;
     uint32_t h_total;
     uint32_t h_active;
@@ -62,14 +69,21 @@ typedef struct {
     uint32_t v_total;
     uint32_t v_active;
     uint32_t v_blank;
-    uint32_t reserved_t[4];
+    uint32_t reserved_t[2];
+} vsc_timing_fmt_t;
+
+/** @brief 完整 media-bus 格式 = 空间 + 时序 */
+typedef struct {
+    vsc_spatial_fmt_t spatial;
+    vsc_timing_fmt_t  timing;
 } vsc_mbus_fmt_t;
 
-#define VSC_MBUS_FMT_INIT {0, 0, VSC_FMT_INVALID, 0, 1, 0, 0, {0}, 0, 0, 0, 0, 0, 0, 0, {0}}
+#define VSC_MBUS_FMT_INIT { {0, 0, VSC_FMT_INVALID, 0, 1, 0, 0, {0}, 0, 0}, {0, 0, 0, 0, 0, 0, 0, {0}} }
 
 static inline bool vsc_fmt_is_valid(const vsc_mbus_fmt_t *f)
 {
-    return f->pixel_format != VSC_FMT_INVALID && f->width > 0 && f->height > 0;
+    return f->spatial.pixel_format != VSC_FMT_INVALID
+        && f->spatial.width > 0 && f->spatial.height > 0;
 }
 
 /* ========================================================================
@@ -85,12 +99,14 @@ typedef struct {
     uint32_t min_v_blank;
     uint32_t pipeline_lines;
     uint32_t ip_clock_hz;
-    uint32_t reserved[2];
+    uint32_t reserved[4];
 } vsc_timing_req_t;
 
+/** @brief 能力描述符统一头 — query_cap 可用此类型做可用性预检 */
+typedef struct { bool available; } vsc_cap_header_t;
+
 typedef struct vsc_ip_ops {
-    int (*init)(void **drv_ctx, uint32_t base_addr,
-                const vsc_override_t *overrides, uint8_t num_over);
+    int (*init)(void *inst);
     int (*try_fmt_sink)(void *drv_ctx, const vsc_mbus_fmt_t *proposed,
                         vsc_mbus_fmt_t *clamped);
     int (*try_fmt_source)(void *drv_ctx, const vsc_mbus_fmt_t *sink_fmt,

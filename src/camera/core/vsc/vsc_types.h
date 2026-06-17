@@ -35,11 +35,11 @@ extern "C" {
 typedef vsc_endpoint_t vsc_endpoint_fmt_t;
 
 static inline bool vsc_fmt_equal(const vsc_mbus_fmt_t *a, const vsc_mbus_fmt_t *b) {
-    return a->width == b->width && a->height == b->height
-        && a->pixel_format == b->pixel_format
-        && a->frame_rate_num == b->frame_rate_num
-        && a->frame_rate_den == b->frame_rate_den
-        && a->bit_depth == b->bit_depth && a->lanes == b->lanes;
+    return a->spatial.width == b->spatial.width && a->spatial.height == b->spatial.height
+        && a->spatial.pixel_format == b->spatial.pixel_format
+        && a->spatial.frame_rate_num == b->spatial.frame_rate_num
+        && a->spatial.frame_rate_den == b->spatial.frame_rate_den
+        && a->spatial.bit_depth == b->spatial.bit_depth && a->spatial.lanes == b->spatial.lanes;
 }
 
 /* ========================================================================

@@ -13,6 +13,7 @@
 #include "sensor_imx296_vsc.h"
 #include <zephyr/logging/log.h>
 #include <string.h>
+#include "vsc_lite_board.h"
 
 LOG_MODULE_REGISTER(init_thread, LOG_LEVEL_INF);
 
@@ -53,28 +54,20 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
     LOG_INF("  File io:   LittleFS (file_io_fs)");
     LOG_INF("=========================================");
 
-    /* ── VSC Lite pipeline: sensor → crop → binning → decoder → histogram ── */
-    const vsc_driver_t *isp_drivers[] = {
-        &sensor_imx296_vsc_driver,
-        &crop_vsc_driver,
-        &binning_vsc_driver,
-        &decoder_vsc_driver,
-        &histogram_vsc_driver,
-    };
-
+    /* ── VSC Lite pipeline ── */
     vsc_lite_pipeline_t isp_pipe;
-    int rc = vsc_lite_pipeline_init(&isp_pipe, isp_drivers, 5);
+    int rc = vsc_lite_pipeline_init(&isp_pipe, vsc_lite_board_stages, vsc_lite_board_num_stages);
     if (rc != VSC_OK) {
         LOG_ERR("VSC Lite pipeline init failed: %d", rc);
     } else {
-        vsc_mbus_fmt_t intent = {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}};
+        vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
         vsc_resolver_result_t result;
         rc = vsc_lite_try_fmt(&isp_pipe, &intent, &result);
         if (rc == VSC_OK && vsc_fmt_is_valid(&result.primary_fmt)) {
             LOG_INF("VSC Lite negotiated: %ux%u fmt=0x%x fps=%u",
-                    result.primary_fmt.width, result.primary_fmt.height,
-                    (unsigned)result.primary_fmt.pixel_format,
-                    (unsigned)result.primary_fmt.frame_rate_num);
+                    result.primary_fmt.spatial.width, result.primary_fmt.spatial.height,
+                    (unsigned)result.primary_fmt.spatial.pixel_format,
+                    (unsigned)result.primary_fmt.spatial.frame_rate_num);
             vsc_lite_commit_fmt(&isp_pipe, &result.primary_fmt);
         } else {
             LOG_WRN("VSC Lite negotiation failed: %d", rc);
