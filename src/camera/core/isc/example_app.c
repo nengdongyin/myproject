@@ -124,8 +124,8 @@ void app_sensor_demo(void)
     fmt.crop_height    = 1088;
     fmt.crop_left      = 0;
     fmt.crop_top       = 0;
-    fmt.reduction_x    = 1; fmt.reduction_y = 1;
-    fmt.reduction_mode = ISC_REDUCE_NONE;  /* IMX296: ROI 时 binning 自动禁用 */
+    fmt.bin_x    = 1; fmt.bin_y = 1;
+    /* binning 模式通过 set_ctrl 设置，try_fmt 不管 */
     fmt.frame_rate_num = 60;
     fmt.frame_rate_den = 1;
     fmt.bit_depth      = 10;
@@ -134,10 +134,10 @@ void app_sensor_demo(void)
     if (rc != ISC_OK) goto cleanup;
 
     printf("\ntry_fmt 结果: %u×%u, crop=(%u,%u,%u×%u), "
-           "reduction=(%u,%u,%u), fps=%u/%u\n",
+           "bin=(%u,%u), fps=%u/%u\n",
            fmt.width, fmt.height,
            fmt.crop_left, fmt.crop_top, fmt.crop_width, fmt.crop_height,
-           fmt.reduction_x, fmt.reduction_y, fmt.reduction_mode,
+           fmt.bin_x, fmt.bin_y,
            fmt.frame_rate_num, fmt.frame_rate_den);
 
     /* ── 4.6 提交格式 (SET_FMT — 写传感器寄存器 + 通知 FPGA) ── */

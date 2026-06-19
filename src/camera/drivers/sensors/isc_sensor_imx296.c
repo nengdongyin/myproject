@@ -541,7 +541,7 @@ static int imx296_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
     /* ── 4. Binning: 仅全阵列时允许 ── */
     if (fmt->crop_width  != IMX296_PIXEL_ARRAY_WIDTH ||
         fmt->crop_height != IMX296_PIXEL_ARRAY_HEIGHT) {
-        fmt->reduction_x = 1; fmt->reduction_y = 1; fmt->reduction_mode = ISC_REDUCE_NONE;
+        fmt->bin_x = 1; fmt->bin_y = 1;
     }
 
     /* ── 5. 输出分辨率 ── */
@@ -549,11 +549,10 @@ static int imx296_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
     if (fmt->height == 0) fmt->height = fmt->crop_height;
 
     /* Binning 时输出 = 裁剪 / 因子                                        */
-    if (fmt->reduction_x > 1) fmt->width  /= (uint32_t)fmt->reduction_x;
-    if (fmt->reduction_y > 1) fmt->height /= (uint32_t)fmt->reduction_y;
+    if (fmt->bin_x > 1) fmt->width  /= (uint32_t)fmt->bin_x;
+    if (fmt->bin_y > 1) fmt->height /= (uint32_t)fmt->bin_y;
     /* 默认 binning 模式: 全阵列裁剪 + 缩减因子 >1 */
-    if (fmt->reduction_x > 1 || fmt->reduction_y > 1)
-        fmt->reduction_mode = ISC_REDUCE_BIN_SUM;
+    /* binning 模式通过 ctrl 设置 */
 
     /* ── 6. 帧率默认 ── */
     if (fmt->frame_rate_num == 0 || fmt->frame_rate_den == 0) {

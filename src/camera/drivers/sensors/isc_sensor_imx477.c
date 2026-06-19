@@ -129,9 +129,8 @@ typedef struct {
     uint32_t frm_length_default;
     uint8_t  bit_depth;
     uint32_t max_fps_num, max_fps_den;
-    uint8_t  reduction_x;
-    uint8_t  reduction_y;
-    uint8_t  reduction_mode;
+    uint8_t  bin_x;
+    uint8_t  bin_y;
 } imx477_mode_t;
 
 static const imx477_mode_t imx477_modes[] = {
@@ -367,9 +366,8 @@ static int imx477_try_fmt(isc_dev_t *dev, isc_fmt_t *fmt)
     fmt->crop_top     = IMX477_PIXEL_ARRAY_TOP;
     fmt->crop_width   = mode->width;
     fmt->crop_height  = mode->height;
-    fmt->reduction_x    = mode->reduction_x;
-    fmt->reduction_y    = mode->reduction_y;
-    fmt->reduction_mode = mode->reduction_mode;
+    fmt->bin_x    = mode->bin_x;
+    fmt->bin_y    = mode->bin_y;
     fmt->bit_depth    = mode->bit_depth;
     fmt->pixel_format = (mode->bit_depth == 12)
         ? ISC_PIX_FMT_SRGGB12 : ISC_PIX_FMT_SRGGB10;

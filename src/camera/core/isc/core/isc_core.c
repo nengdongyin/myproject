@@ -480,20 +480,15 @@ static void probe_capabilities(isc_dev_t *dev)
         if (dev->ops->try_fmt) {
             isc_fmt_t test;
             memset(&test, 0, sizeof(test));
-            test.reduction_x = 2; test.reduction_y = 2;
-            test.reduction_mode = ISC_REDUCE_BIN_SUM;
+            test.bin_x = 2; test.bin_y = 2;
             if (dev->ops->try_fmt(dev, &test) == ISC_OK)
                 dev->cached_caps |= ISC_CAP_BINNING;
-            test.reduction_mode = ISC_REDUCE_SKIP;
-            if (dev->ops->try_fmt(dev, &test) == ISC_OK)
-                dev->cached_caps |= ISC_CAP_SUBSAMPLE;
             memset(&test, 0, sizeof(test));
             test.crop_width    = 64;
             test.crop_height   = 64;
-            test.reduction_x   = 2; test.reduction_y = 2;
-            test.reduction_mode = ISC_REDUCE_BIN_SUM;
+            test.bin_x   = 2; test.bin_y = 2;
             if (dev->ops->try_fmt(dev, &test) == ISC_OK &&
-                test.reduction_x == 2 && test.crop_width > 0)
+                test.bin_x == 2 && test.crop_width > 0)
                 dev->cached_caps |= ISC_CAP_ROI_WITH_BINNING;
         }
     }

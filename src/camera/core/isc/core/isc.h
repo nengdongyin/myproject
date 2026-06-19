@@ -112,27 +112,26 @@ typedef enum {
 
 /** @brief 当前格式 (含裁剪窗口) */
 typedef struct isc_fmt {
-    /* ── 输出格式 (缩减后) ── */
+    /* ── 输出格式 (只读) ── */
     uint32_t width;                          /**< 输出图像宽度 (pixels)                 */
     uint32_t height;                         /**< 输出图像高度 (lines)                  */
-    uint32_t pixel_format;                   /**< 像素格式 FourCC                      */
-    uint32_t frame_rate_num;                 /**< 帧率分子                              */
-    uint32_t frame_rate_den;                 /**< 帧率分母                              */
-    uint8_t  bit_depth;                      /**< 像素位深                              */
-    uint8_t  reduction_x;                    /**< X 缩减因子 (1=无, 2=1/2, 4=1/4)       */
-    uint8_t  reduction_y;                    /**< Y 缩减因子 (1=无, 2=1/2, 4=1/4)       */
-    uint8_t  reduction_mode;                 /**< isc_reduce_mode_t                   */
+    uint32_t offsetx;                        /**< 输出图像水平偏移量 (pixels)            */
+    uint32_t offsety;                        /**< 输出图像垂直偏移量 (lines)             */
 
-    /* ── 裁剪窗口 (传感器像素阵列坐标系, 缩减前) ── */
-    /**
-     * crop_width=0 && crop_height=0 → 全传感器阵列 (兼容零初始化).
-     * isc_get_fmt() 始终返回实际 crop 坐标 (永不为 0×0).
-     * output = crop / reduction_factor.
-     */
+    /* ── 输入格式（写入后返回实际生效值） ── */
     uint32_t crop_left;                      /**< 裁剪窗口水平起始列 (0-based)           */
     uint32_t crop_top;                       /**< 裁剪窗口垂直起始行 (0-based)           */
     uint32_t crop_width;                     /**< 裁剪窗口宽度 (0=全阵列)                */
     uint32_t crop_height;                    /**< 裁剪窗口高度 (0=全阵列)                */
+    uint8_t  bin_x;                          /**< X 缩减因子 (1=无, 2=1/2, 4=1/4)       */
+    uint8_t  bin_y;                          /**< Y 缩减因子 (1=无, 2=1/2, 4=1/4)      */
+    uint8_t  dec_x;                          /**< X 抽点因子 (1=无, 2=1/2, 4=1/4)     */
+    uint8_t  dec_y;                          /**< Y 抽点因子 (1=无, 2=1/2, 4=1/4)     */
+    uint32_t pixel_format;                   /**< 像素格式 FourCC                      */
+    uint32_t frame_rate_num;                 /**< 帧率分子                             */
+    uint32_t frame_rate_den;                 /**< 帧率分母                             */
+    uint8_t  bit_depth;                      /**< 像素位深                             */
+
 } isc_fmt_t;
 
 /** @brief 物理时序快照 */

@@ -14,8 +14,14 @@
 static void vsc_to_isc(const vsc_mbus_fmt_t *v, isc_fmt_t *i)
 {
     memset(i, 0, sizeof(*i));
-    i->width          = v->spatial.width;
-    i->height         = v->spatial.height;
+    i->crop_left   = v->spatial.offsetx;
+    i->crop_top    = v->spatial.offsety;
+    i->crop_width  = v->spatial.width;
+    i->crop_height = v->spatial.height;
+    i->bin_x       = v->spatial.bin_x;
+    i->bin_y       = v->spatial.bin_y;
+    i->dec_x       = v->spatial.dec_x;
+    i->dec_y       = v->spatial.dec_y;
     i->pixel_format   = v->spatial.pixel_format;
     i->frame_rate_num = v->spatial.frame_rate_num;
     i->frame_rate_den = v->spatial.frame_rate_den;
@@ -30,6 +36,12 @@ static void isc_to_vsc(const isc_fmt_t *i, vsc_mbus_fmt_t *v)
     v->spatial.frame_rate_num = i->frame_rate_num;
     v->spatial.frame_rate_den = i->frame_rate_den;
     v->spatial.bit_depth      = i->bit_depth;
+    v->spatial.bin_x   = (i->bin_x    == v->spatial.bin_x)   ? 1 : v->spatial.bin_x;
+    v->spatial.bin_y   = (i->bin_y    == v->spatial.bin_y)   ? 1 : v->spatial.bin_y;
+    v->spatial.dec_x   = (i->dec_x    == v->spatial.dec_x)   ? 1 : v->spatial.dec_x;
+    v->spatial.dec_y   = (i->dec_y    == v->spatial.dec_y)   ? 1 : v->spatial.dec_y;
+    v->spatial.offsetx = (i->crop_left == v->spatial.offsetx) ? 0 : v->spatial.offsetx;
+    v->spatial.offsety = (i->crop_top  == v->spatial.offsety) ? 0 : v->spatial.offsety;
 }
 
 static int imx296_vsc_init(void *inst)
