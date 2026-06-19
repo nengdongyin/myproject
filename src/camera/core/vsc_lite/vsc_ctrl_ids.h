@@ -42,4 +42,8 @@
 /* ── 0x4000: Decoder ── */
 #define VSC_CTRL_DECODER_TARGET_FMT 0x4000   /* 输出像素格式                    */
 
+/* ── 0x5000: Decimation ── */
+#define VSC_CTRL_DEC_FACTOR_X       0x5000   /* X 方向抽点因子                  */
+#define VSC_CTRL_DEC_FACTOR_Y       0x5001   /* Y 方向抽点因子                  */
+
 #endif /* VSC_CTRL_IDS_H */

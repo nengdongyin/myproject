@@ -60,7 +60,7 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
     if (rc != VSC_OK) {
         LOG_ERR("VSC Lite pipeline init failed: %d", rc);
     } else {
-        vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+        vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
         vsc_resolver_result_t result;
         rc = vsc_lite_try_fmt(&isp_pipe, &intent, &result);
         if (rc == VSC_OK && vsc_fmt_is_valid(&result.primary_fmt)) {

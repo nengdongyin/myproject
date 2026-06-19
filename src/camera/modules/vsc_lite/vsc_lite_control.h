@@ -45,6 +45,8 @@ enum {
     VSCL_CROP_TOP      = 9,   /* crop ROI 垂直起始偏移           */
     VSCL_CROP_WIDTH    = 10,  /* crop 输出宽度                   */
     VSCL_CROP_HEIGHT   = 11,  /* crop 输出高度                   */
+    VSCL_DEC_FACTOR_X  = 12,  /* decimation X 方向因子           */
+    VSCL_DEC_FACTOR_Y  = 13,  /* decimation Y 方向因子           */
     VSCL_COUNT
 };
 
@@ -64,6 +66,8 @@ enum {
 #define PID_VSCL_CROP_TOP       MAKE_PARAM_ID(MODULE_VSC_LITE, VSCL_CROP_TOP)
 #define PID_VSCL_CROP_WIDTH     MAKE_PARAM_ID(MODULE_VSC_LITE, VSCL_CROP_WIDTH)
 #define PID_VSCL_CROP_HEIGHT    MAKE_PARAM_ID(MODULE_VSC_LITE, VSCL_CROP_HEIGHT)
+#define PID_VSCL_DEC_FACTOR_X   MAKE_PARAM_ID(MODULE_VSC_LITE, VSCL_DEC_FACTOR_X)
+#define PID_VSCL_DEC_FACTOR_Y   MAKE_PARAM_ID(MODULE_VSC_LITE, VSCL_DEC_FACTOR_Y)
 
 /* ========================================================================
  *  模块上下文 — 持有管线引用，init 回调中使用

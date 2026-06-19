@@ -40,12 +40,43 @@ static int crop_vsc_try_fmt_source(void *drv_ctx,
                                    vsc_mbus_fmt_t *source_fmt)
 {
     crop_vsc_inst_t *ctx = (crop_vsc_inst_t *)drv_ctx;
-    uint32_t rx, ry, rw, rh;
-    crop_get_roi(&ctx->hw, &rx, &ry, &rw, &rh);
+    uint32_t max_w, max_h;
+    crop_get_limits(&ctx->hw, &max_w, &max_h);
+
+    /* source_fmt 由框架预填（Phase 0 写 intent，Phase A 已乘待认领缩放因子）。
+     * 直接读作裁剪目标，无需理解 bin/dec 语义。 */
+    uint32_t target_w = source_fmt->spatial.width;
+    uint32_t target_h = source_fmt->spatial.height;
 
     *source_fmt = *sink_fmt;
-    if (rw > 0 && rw < source_fmt->spatial.width)  source_fmt->spatial.width  = rw;
-    if (rh > 0 && rh < source_fmt->spatial.height) source_fmt->spatial.height = rh;
+
+    /* ── 认领 crop offset（若 sink 携带）─── */
+    if (sink_fmt->spatial.offsetx > 0 || sink_fmt->spatial.offsety > 0)
+    {
+        uint32_t needed_w = sink_fmt->spatial.offsetx + target_w;
+        uint32_t needed_h = sink_fmt->spatial.offsety + target_h;
+
+        if (needed_w > max_w || needed_h > max_h)
+            return VSC_ERR_UNREACHABLE;
+
+        if (target_w > 0 && target_w < source_fmt->spatial.width)
+            source_fmt->spatial.width  = target_w;
+        if (target_h > 0 && target_h < source_fmt->spatial.height)
+            source_fmt->spatial.height = target_h;
+
+        source_fmt->spatial.offsetx = 0;
+        source_fmt->spatial.offsety = 0;
+    }
+    else
+    {
+        if (target_w > 0 && target_w < source_fmt->spatial.width)
+            source_fmt->spatial.width  = target_w;
+        if (target_h > 0 && target_h < source_fmt->spatial.height)
+            source_fmt->spatial.height = target_h;
+
+        if (source_fmt->spatial.width  > max_w) source_fmt->spatial.width  = max_w;
+        if (source_fmt->spatial.height > max_h) source_fmt->spatial.height = max_h;
+    }
 
     /* 对齐 */
     if (ctx->hw.align_w > 1)

@@ -58,14 +58,9 @@ static int vsc_lite_write(void *ctx_ptr, uint32_t param_id, param_value_t value)
     if (loc >= VSCL_COUNT || !ctx->pipe)
         return PARAM_ERR_INVALID_ID;
 
-    /* intent 参数不立即生效，仅更新 cache（下次 try_fmt 时使用） */
-    if (loc <= VSCL_INTENT_FPS_D)
-        return PARAM_OK;
-
-    /* 控制参数：通过 VSC 路由立即写入正确的 IP */
-    const vsc_lite_param_map_t *m = &s_map[loc];
-    int rc = vsc_lite_set_ctrl(ctx->pipe, m->cap_id, m->ctrl_id, value.u32);
-    return (rc == VSC_OK) ? PARAM_OK : PARAM_ERR_INVALID_ID;
+    /* 所有参数均为 intent 的一部分 — 仅更新 cache，由 try_fmt 统一协商 */
+    (void)ctx;
+    return PARAM_OK;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -80,13 +75,8 @@ static int vsc_lite_read(void *ctx_ptr, uint32_t param_id, param_value_t *value)
     if (loc >= VSCL_COUNT || !ctx->pipe || !value)
         return PARAM_ERR_INVALID_ID;
 
-    if (loc <= VSCL_INTENT_FPS_D)
-        return PARAM_ERR_INVALID_ID;  /* intent 从 cache 读 */
-
-    const vsc_lite_param_map_t *m = &s_map[loc];
-    int rc = vsc_lite_get_ctrl(ctx->pipe, m->cap_id, m->ctrl_id,
-                                &value->u32);
-    return (rc == VSC_OK) ? PARAM_OK : PARAM_ERR_INVALID_ID;
+    (void)loc;
+    return PARAM_ERR_INVALID_ID;  /* 所有参数均从 param_manager cache 读取 */
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -105,7 +95,7 @@ static int vsc_lite_init(void *ctx_ptr)
     if (!ctx->pipe || !ctx->stages || ctx->num_stages < 2)
         return PARAM_ERR_INVALID_ID;
 
-    /* ── 1. 从 Flash 恢复用户 intent ── */
+    /* ── 1. 从 Flash 恢复完整 intent（含 bin/crop 字段）─── */
     vsc_mbus_fmt_t intent;
     memset(&intent, 0, sizeof(intent));
     intent.spatial.pixel_format   = VSC_FMT_RAW10;
@@ -113,6 +103,10 @@ static int vsc_lite_init(void *ctx_ptr)
     intent.spatial.frame_rate_den = 1;
     intent.spatial.bit_depth      = 10;
     intent.spatial.lanes          = 4;
+    intent.spatial.bin_x          = 1;
+    intent.spatial.bin_y          = 1;
+    intent.spatial.dec_x          = 1;
+    intent.spatial.dec_y          = 1;
 
     if (param_read(PID_VSCL_INTENT_WIDTH,  &v) == PARAM_OK) intent.spatial.width          = v.u32;
     if (param_read(PID_VSCL_INTENT_HEIGHT, &v) == PARAM_OK) intent.spatial.height         = v.u32;
@@ -120,23 +114,13 @@ static int vsc_lite_init(void *ctx_ptr)
     if (param_read(PID_VSCL_INTENT_FPS_N,  &v) == PARAM_OK) intent.spatial.frame_rate_num = v.u32;
     if (param_read(PID_VSCL_INTENT_FPS_D,  &v) == PARAM_OK) intent.spatial.frame_rate_den = v.u32;
 
-    /* ── 2. 逐参数恢复控制值，通过 VSC 路由到正确的物理 IP ── */
-    for (uint8_t i = VSCL_BIN_FACTOR_X; i < VSCL_COUNT; i++)
-    {
-        rc = param_read(MAKE_PARAM_ID(MODULE_VSC_LITE, i), &v);
-        if (rc != PARAM_OK)
-            continue;
-
-        const vsc_lite_param_map_t *m = &s_map[i];
-        rc = vsc_lite_set_ctrl(ctx->pipe, m->cap_id, m->ctrl_id, v.u32);
-        if (rc == VSC_ERR_NOT_SUPPORTED)
-        {
-            /* 当前管线不提供此能力（拓扑变化），静默跳过 */
-            continue;
-        }
-        if (rc != VSC_OK)
-            return PARAM_ERR_INVALID_ID;
-    }
+    /* bin/crop 字段直接作为 intent 的一部分，不再通过 set_ctrl 单独路由 */
+    if (param_read(PID_VSCL_BIN_FACTOR_X,  &v) == PARAM_OK) intent.spatial.bin_x     = (uint8_t)v.u32;
+    if (param_read(PID_VSCL_BIN_FACTOR_Y,  &v) == PARAM_OK) intent.spatial.bin_y     = (uint8_t)v.u32;
+    if (param_read(PID_VSCL_CROP_LEFT,     &v) == PARAM_OK) intent.spatial.offsetx = v.u32;
+    if (param_read(PID_VSCL_CROP_TOP,      &v) == PARAM_OK) intent.spatial.offsety = v.u32;
+    if (param_read(PID_VSCL_DEC_FACTOR_X,  &v) == PARAM_OK) intent.spatial.dec_x     = (uint8_t)v.u32;
+    if (param_read(PID_VSCL_DEC_FACTOR_Y,  &v) == PARAM_OK) intent.spatial.dec_y     = (uint8_t)v.u32;
 
     /* ── 3. 格式协商 + 提交 ── */
     vsc_resolver_result_t result;
@@ -173,6 +157,8 @@ PARAM_UINT(vscl_crop_left,     PID_VSCL_CROP_LEFT,     PARAM_FLAG_PERSIST, 0,   
 PARAM_UINT(vscl_crop_top,      PID_VSCL_CROP_TOP,      PARAM_FLAG_PERSIST, 0,             0, 8192);
 PARAM_UINT(vscl_crop_width,    PID_VSCL_CROP_WIDTH,    PARAM_FLAG_PERSIST, 1920,         64, 8192);
 PARAM_UINT(vscl_crop_height,   PID_VSCL_CROP_HEIGHT,   PARAM_FLAG_PERSIST, 1080,          4, 8192);
+PARAM_UINT(vscl_dec_factor_x,  PID_VSCL_DEC_FACTOR_X,  PARAM_FLAG_PERSIST, 1,             1, 8);
+PARAM_UINT(vscl_dec_factor_y,  PID_VSCL_DEC_FACTOR_Y,  PARAM_FLAG_PERSIST, 1,             1, 8);
 
 PARAM_TABLE(vsc_lite_control_params,
     &vscl_intent_width.base,
@@ -187,6 +173,8 @@ PARAM_TABLE(vsc_lite_control_params,
     &vscl_crop_top.base,
     &vscl_crop_width.base,
     &vscl_crop_height.base,
+    &vscl_dec_factor_x.base,
+    &vscl_dec_factor_y.base,
 );
 
 PARAM_MODULE_DEFINE(vsc_lite, MODULE_VSC_LITE, "VSC-Lite-Pipeline",

@@ -38,6 +38,7 @@ extern "C" {
 #define VSC_CAP_CROP            (1 << 5)
 #define VSC_CAP_BINNING         (1 << 6)
 #define VSC_CAP_FORMAT_CONV     (1 << 7)
+#define VSC_CAP_DECIMATION      (1 << 8)
 
 #define VSC_CAP_LOCATION_SENSOR   0
 #define VSC_CAP_LOCATION_FPGA     1
@@ -50,14 +51,17 @@ extern "C" {
 typedef struct {
     uint32_t width;
     uint32_t height;
+    uint32_t offsetx;         /* ROI 水平起始偏移 (GenICam 规范)    */
+    uint32_t offsety;         /* ROI 垂直起始偏移 (GenICam 规范)    */
+    uint8_t  bin_x;           /* binning X 因子 (1=无)              */
+    uint8_t  bin_y;           /* binning Y 因子 (1=无)              */
+    uint8_t  dec_x;           /* decimation X 因子 (1=无)           */
+    uint8_t  dec_y;           /* decimation Y 因子 (1=无)           */
     uint32_t pixel_format;
     uint32_t frame_rate_num;
     uint32_t frame_rate_den;
     uint8_t  bit_depth;
     uint8_t  lanes;
-    uint8_t  reserved[2];
-    uint32_t crop_left;       /* ROI 水平起始偏移                  */
-    uint32_t crop_top;        /* ROI 垂直起始偏移                  */
 } vsc_spatial_fmt_t;
 
 /** @brief 时序参数 */
@@ -78,7 +82,7 @@ typedef struct {
     vsc_timing_fmt_t  timing;
 } vsc_mbus_fmt_t;
 
-#define VSC_MBUS_FMT_INIT { {0, 0, VSC_FMT_INVALID, 0, 1, 0, 0, {0}, 0, 0}, {0, 0, 0, 0, 0, 0, 0, {0}} }
+#define VSC_MBUS_FMT_INIT { {0, 0, 0, 0, 1, 1, 1, 1, VSC_FMT_INVALID, 0, 1, 0, 0}, {0, 0, 0, 0, 0, 0, 0, {0}} }
 
 static inline bool vsc_fmt_is_valid(const vsc_mbus_fmt_t *f)
 {
@@ -161,13 +165,15 @@ typedef enum {
     VSC_TRANSFORM_BINNING        = 1,
     VSC_TRANSFORM_CROP           = 2,
     VSC_TRANSFORM_PIXEL_FMT_CONV = 3,
-    VSC_TRANSFORM_MULTI_STAGE    = 4,
+    VSC_TRANSFORM_DECIMATION     = 4,
+    VSC_TRANSFORM_MULTI_STAGE    = 5,
 } vsc_fmt_transform_type_t;
 #define VSC_MAX_SUB_TRANSFORMS 8
 typedef struct vsc_fmt_transform_desc {
     vsc_fmt_transform_type_t type;
     union {
         struct { uint8_t factor_x, factor_y; } binning;
+        struct { uint8_t factor_x, factor_y; } decimation;
         struct { uint32_t min_w, min_h, max_w, max_h; uint8_t align_w, align_h; } crop;
         struct { uint32_t fmt_in, fmt_out; } pixel_fmt_conv;
         struct { uint8_t count; const struct vsc_fmt_transform_desc *subs; } multi_stage;

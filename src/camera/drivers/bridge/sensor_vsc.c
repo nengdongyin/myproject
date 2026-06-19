@@ -15,51 +15,17 @@
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  格式转换 helper: vsc_mbus_fmt_t ↔ isc_fmt_t
- *
- *  ISC 使用 Bayer 顺序编码 (e.g. SRGGB10 = 'RG10'),
- *  VSC 使用通用 RAW 编码 (e.g. RAW10).
- *  转换时需在两套格式空间之间映射。
  * ═══════════════════════════════════════════════════════════════════════ */
-
-static uint32_t vsc_pixfmt_to_isc(uint32_t vsc_fmt)
-{
-    switch (vsc_fmt) {
-    case VSC_FMT_RAW8:  return ISC_PIX_FMT_SRGGB8;
-    case VSC_FMT_RAW10: return ISC_PIX_FMT_SRGGB10;
-    case VSC_FMT_RAW12: return ISC_PIX_FMT_SRGGB12;
-    default:            return vsc_fmt;  /* RGB888 等非 RAW 格式直接透传 */
-    }
-}
-
-static uint32_t isc_pixfmt_to_vsc(uint32_t isc_fmt)
-{
-    switch (isc_fmt) {
-    case ISC_PIX_FMT_SRGGB8:
-    case ISC_PIX_FMT_SBGGR8:
-    case ISC_PIX_FMT_SGRBG8:
-    case ISC_PIX_FMT_SGBRG8:
-    case ISC_PIX_FMT_GREY8:
-        return VSC_FMT_RAW8;
-    case ISC_PIX_FMT_SRGGB10:
-    case ISC_PIX_FMT_SBGGR10:
-    case ISC_PIX_FMT_SGRBG10:
-    case ISC_PIX_FMT_SGBRG10:
-    case ISC_PIX_FMT_GREY10:
-        return VSC_FMT_RAW10;
-    case ISC_PIX_FMT_SRGGB12:
-    case ISC_PIX_FMT_SBGGR12:
-        return VSC_FMT_RAW12;
-    default:
-        return isc_fmt;  /* RGB888 等非 Bayer 格式直接透传 */
-    }
-}
 
 static void vsc_to_isc(const vsc_mbus_fmt_t *v, isc_fmt_t *i)
 {
     memset(i, 0, sizeof(*i));
-    i->width          = v->spatial.width;
-    i->height         = v->spatial.height;
-    i->pixel_format   = vsc_pixfmt_to_isc(v->spatial.pixel_format);
+    /* 裁剪窗口 (ISC 输入) — width/height 是 ISC 输出，不在此设置 */
+    i->crop_left   = v->spatial.offsetx;
+    i->crop_top    = v->spatial.offsety;
+    i->crop_width  = v->spatial.width;
+    i->crop_height = v->spatial.height;
+    i->pixel_format   = v->spatial.pixel_format;
     i->frame_rate_num = v->spatial.frame_rate_num;
     i->frame_rate_den = v->spatial.frame_rate_den;
     i->bit_depth      = v->spatial.bit_depth;
@@ -69,7 +35,7 @@ static void isc_to_vsc(const isc_fmt_t *i, vsc_mbus_fmt_t *v)
 {
     v->spatial.width          = i->width;
     v->spatial.height         = i->height;
-    v->spatial.pixel_format   = isc_pixfmt_to_vsc(i->pixel_format);
+    v->spatial.pixel_format   = i->pixel_format;
     v->spatial.frame_rate_num = i->frame_rate_num;
     v->spatial.frame_rate_den = i->frame_rate_den;
     v->spatial.bit_depth      = i->bit_depth;
@@ -115,17 +81,45 @@ static int sensor_vsc_try_fmt_source(void *drv_ctx,
     sensor_vsc_inst_t *ctx = (sensor_vsc_inst_t *)drv_ctx;
 
     if (ctx->isc_dev) {
+        /* ── 坐标翻译：post-scaling/offset → pre-scaling 物理像素需求 ── */
+        uint8_t  bx = intent->spatial.bin_x;  if (bx < 1) bx = 1;
+        uint8_t  by = intent->spatial.bin_y;  if (by < 1) by = 1;
+        uint8_t  dx = intent->spatial.dec_x;  if (dx < 1) dx = 1;
+        uint8_t  dy = intent->spatial.dec_y;  if (dy < 1) dy = 1;
+        /* 框架已做 pre-scaling 翻译，裁剪窗口 + reduction 是 ISC 输入 */
         isc_fmt_t isc_in;
         vsc_to_isc(intent, &isc_in);
-        /* 应用缓存的 binning 控制值 */
-        if (ctx->bin_enabled) {
-            isc_in.reduction_x    = ctx->bin_factor_x;
-            isc_in.reduction_y    = ctx->bin_factor_y;
-            isc_in.reduction_mode = ISC_REDUCE_BIN_SUM;
-        }
+        isc_in.reduction_x    = bx;
+        isc_in.reduction_y    = by;
+        isc_in.reduction_mode = ISC_REDUCE_BIN_SUM;
+        /* width/height 是 ISC 输出 — vsc_to_isc 已设为 0，ISC 填充 */
+
         int rc = isc_try_fmt(ctx->isc_dev, &isc_in);
         if (rc != ISC_OK) return VSC_ERR_PROPAGATION_SOURCE;
         isc_to_vsc(&isc_in, source_fmt);
+
+        /* ── 反向检测 ISC 认领了什么（crop_w/off = intent 空间尺寸）─── */
+        {
+            uint32_t out_w = source_fmt->spatial.width;
+            uint32_t crop_w = intent->spatial.width;
+            uint32_t crop_off_x = intent->spatial.offsetx;
+            uint32_t crop_off_y = intent->spatial.offsety;
+            bool isc_binned = (bx > 1 || by > 1)
+                           && (out_w * bx <= crop_off_x + crop_w + bx);
+            bool isc_windowed = !isc_binned
+                             && (crop_off_x > 0 || crop_off_y > 0)
+                             && (out_w >= crop_w - bx
+                                 && out_w <= crop_w + crop_off_x / 2);
+
+            source_fmt->spatial.bin_x = isc_binned ? 1 : bx;
+            source_fmt->spatial.bin_y = isc_binned ? 1 : by;
+            source_fmt->spatial.dec_x = dx;
+            source_fmt->spatial.dec_y = dy;
+            source_fmt->spatial.offsetx = isc_binned ? crop_off_x / bx
+                                        : (isc_windowed ? 0 : crop_off_x);
+            source_fmt->spatial.offsety = isc_binned ? crop_off_y / by
+                                        : (isc_windowed ? 0 : crop_off_y);
+        }
 
         /* 填充时序基准值 */
         isc_timing_t timing;

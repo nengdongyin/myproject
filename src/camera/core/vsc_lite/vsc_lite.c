@@ -1,11 +1,14 @@
 /**
  * @file vsc_lite.c
- * @brief VSC Lite 实现 — 线性管线前向传播 + 反向可行性预检 + 独立时序聚合
+ * @brief VSC Lite 实现 — 透传逆推 + sensor 源头解算 + 前向能力认领
  *
  * 协商分为四个阶段:
- *   阶段 0 — 反向可行性: endpoint → sensor 逆推，确认用户意图可达
- *   阶段 A — 前向空间传播: sensor → endpoint 协商 width/height/format
- *           sensor 填充时序基准值，中间 stage 透传
+ *   阶段 0 — 反向 spatial 分发: endpoint → sensor 透传 intent spatial
+ *           不做数值解算，bin/crop 标记原样保留
+ *           每个 stage 的逆推目标写入 stage->source_fmt.spatial
+ *   阶段 A — 前向空间传播: sensor 源头做坐标翻译到 pre-bin 物理空间
+ *           sensor → endpoint 逐级 try_fmt，driver 按能力认领标记
+ *           sensor 填充时序基准值
  *   阶段 B — 时序聚合: 遍历所有 stage 调用 get_timing_req
  *           并行约束取 max，串行延迟取 sum，合并 sensor 基准
  *   阶段 C — 收敛: 组装最终 vsc_mbus_fmt_t 写入 result
@@ -31,58 +34,38 @@ static void vsc_lite_copy_timing(const vsc_timing_fmt_t *src,
 }
 
 /* ================================================================
- *  阶段 0 — 反向可行性预检
+ *  阶段 0 — 反向 spatial 分发
  *
- *  从 endpoint 逆推到 sensor，检查用户 intent 是否可达。
- *  只读：不修改任何 stage 状态。成功时返回 sensor 所需的最小尺寸。
+ *  endpoint → sensor 透传 intent 的 spatial 字段（不做数值解算）。
+ *  bin/crop/format 标记原样保留，由 Phase A sensor 源头统一解算。
+ *  每 stage 的 source_fmt.spatial 记录各自应产出的目标分辨率。
+ *  可行性由 Phase A 各 stage 的 try_fmt 自行判断。
  * ================================================================ */
 
-static int vsc_lite_feasibility_check(const vsc_lite_pipeline_t *pipe,
-                                      const vsc_mbus_fmt_t *intent,
-                                      uint32_t *out_w_min, uint32_t *out_h_min)
+static int vsc_lite_reverse_spatial(vsc_lite_pipeline_t *pipe,
+                                    const vsc_mbus_fmt_t *intent)
 {
-    uint32_t w = intent->spatial.width;
-    uint32_t h = intent->spatial.height;
+    vsc_mbus_fmt_t working = *intent;
 
-    /* 从 endpoint 前一级逆推到 sensor（跳过 endpoint 自身） */
     for (int i = pipe->count - 2; i >= 0; i--)
     {
+        /* ── 粗粒度边界检查（off + w ≤ max），实际可行性由 Phase A 判定 ── */
         const vsc_driver_t *drv = pipe->stages[i].driver;
-        if (!drv || !drv->transform_template)
-            continue;
-
-        const vsc_fmt_transform_desc_t *td = drv->transform_template;
-        switch (td->type) {
-        case VSC_TRANSFORM_BINNING:
-            w *= td->params.binning.factor_x;
-            h *= td->params.binning.factor_y;
-            break;
-        case VSC_TRANSFORM_CROP:
-            if (w < td->params.crop.min_w) w = td->params.crop.min_w;
-            if (h < td->params.crop.min_h) h = td->params.crop.min_h;
-            if (w > td->params.crop.max_w || h > td->params.crop.max_h)
+        if (drv && drv->transform_template
+            && drv->transform_template->type == VSC_TRANSFORM_CROP)
+        {
+            uint32_t max_w = drv->transform_template->params.crop.max_w;
+            uint32_t max_h = drv->transform_template->params.crop.max_h;
+            uint32_t needed_w = working.spatial.width + working.spatial.offsetx;
+            uint32_t needed_h = working.spatial.height + working.spatial.offsety;
+            if (max_w > 0 && (needed_w > max_w || needed_h > max_h))
                 return VSC_ERR_UNREACHABLE;
-            break;
-        case VSC_TRANSFORM_PIXEL_FMT_CONV:
-        case VSC_TRANSFORM_PASS_THROUGH:
-            break;  /* 尺寸不变 */
-        default:
-            break;
         }
+
+        /* ── 透传写入（sensor 源头在 Phase A 做坐标翻译）─── */
+        pipe->stages[i].source_fmt.spatial = working.spatial;
     }
 
-    /* 检查 sensor 能力（通过其 transform_template 的 crop 约束或 max */
-    if (pipe->count > 0 && pipe->stages[0].driver
-        && pipe->stages[0].driver->transform_template)
-    {
-        const vsc_fmt_transform_desc_t *td = pipe->stages[0].driver->transform_template;
-        if ((td->type == VSC_TRANSFORM_CROP || td->type == VSC_TRANSFORM_PASS_THROUGH)
-            && (w > td->params.crop.max_w || h > td->params.crop.max_h))
-            return VSC_ERR_UNREACHABLE;
-    }
-
-    *out_w_min = w;
-    *out_h_min = h;
     return VSC_OK;
 }
 
@@ -98,13 +81,26 @@ static int vsc_lite_forward_spatial(vsc_lite_pipeline_t *pipe,
                                     const vsc_mbus_fmt_t *sensor_intent,
                                     vsc_mbus_fmt_t *out_endpoint_sink)
 {
-    /* ── Stage 0: sensor ── */
+    /* ── Stage 0: sensor ──
+     * 框架将 intent 的 post-scaling 坐标翻译到 pre-scaling 物理空间，
+     * sensor 驱动无需理解 bin/dec 语义。 */
     vsc_lite_stage_t *sensor = &pipe->stages[0];
     const vsc_ip_ops_t *ops = sensor->driver ? &sensor->driver->ops : NULL;
 
+    vsc_mbus_fmt_t sensor_req = *sensor_intent;
+    uint8_t total_sx = (uint8_t)(sensor_req.spatial.bin_x * sensor_req.spatial.dec_x);
+    uint8_t total_sy = (uint8_t)(sensor_req.spatial.bin_y * sensor_req.spatial.dec_y);
+    if (total_sx < 1) total_sx = 1;
+    if (total_sy < 1) total_sy = 1;
+    /* 坐标翻译到 pre-scaling 物理空间（仅乘因子，是否求和由 sensor 决定） */
+    sensor_req.spatial.width   *= total_sx;
+    sensor_req.spatial.height  *= total_sy;
+    sensor_req.spatial.offsetx *= total_sx;
+    sensor_req.spatial.offsety *= total_sy;
+
     if (ops && ops->try_fmt_source)
     {
-        int rc = ops->try_fmt_source(sensor->drv_ctx, sensor_intent,
+        int rc = ops->try_fmt_source(sensor->drv_ctx, &sensor_req,
                                      &sensor->source_fmt);
         if (rc != VSC_OK || !vsc_fmt_is_valid(&sensor->source_fmt))
             return rc != VSC_OK ? rc : VSC_ERR_PARAM;
@@ -131,6 +127,17 @@ static int vsc_lite_forward_spatial(vsc_lite_pipeline_t *pipe,
         else
         {
             st->sink_fmt = *upstream;
+        }
+
+        /* ── crop stage: 框架将逆推目标乘上待认领缩放因子 ── */
+        if (st->driver && (st->driver->capabilities & VSC_CAP_CROP))
+        {
+            uint8_t psx = (uint8_t)(st->sink_fmt.spatial.bin_x * st->sink_fmt.spatial.dec_x);
+            uint8_t psy = (uint8_t)(st->sink_fmt.spatial.bin_y * st->sink_fmt.spatial.dec_y);
+            if (psx < 1) psx = 1;
+            if (psy < 1) psy = 1;
+            st->source_fmt.spatial.width  *= psx;
+            st->source_fmt.spatial.height *= psy;
         }
 
         if (ops && ops->try_fmt_source)
@@ -303,23 +310,18 @@ int vsc_lite_try_fmt(vsc_lite_pipeline_t *pipe,
     }
 
     /* ================================================================
-     *  阶段 0 — 反向可行性预检
+     *  阶段 0 — 反向空间传播（写 stage->source_fmt.spatial）
      * ================================================================ */
 
-    uint32_t sensor_w, sensor_h;
-    int rc = vsc_lite_feasibility_check(pipe, intent, &sensor_w, &sensor_h);
+    int rc = vsc_lite_reverse_spatial(pipe, intent);
     if (rc != VSC_OK)
     {
         result->status = VSC_NEGOTIATE_FAILED;
         return rc;
     }
 
-    /* 构造 sensor 的 intent：用逆推出的最小尺寸（不小于用户原始意图） */
-    vsc_mbus_fmt_t sensor_intent = *intent;
-    if (sensor_w > sensor_intent.spatial.width)
-        sensor_intent.spatial.width  = sensor_w;
-    if (sensor_h > sensor_intent.spatial.height)
-        sensor_intent.spatial.height = sensor_h;
+    /* sensor_intent = 逆推到达 sensor 时的完整格式（bin/crop 标记保留） */
+    vsc_mbus_fmt_t sensor_intent = pipe->stages[0].source_fmt;
 
     /* ================================================================
      *  阶段 A — 前向空间传播
@@ -376,6 +378,8 @@ int vsc_lite_try_fmt(vsc_lite_pipeline_t *pipe,
     }
 
     {
+        /* 仅用户可见字段参与 EXACT/ADJUSTED 判定；
+         * bin_x/y、crop_left/top 是内部协商标记，排除在外。 */
         bool exact = (result->primary_fmt.spatial.width        == intent->spatial.width)
                   && (result->primary_fmt.spatial.height       == intent->spatial.height)
                   && (result->primary_fmt.spatial.pixel_format == intent->spatial.pixel_format);

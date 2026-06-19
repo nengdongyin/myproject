@@ -119,9 +119,9 @@ typedef struct isc_fmt {
     uint32_t frame_rate_num;                 /**< 帧率分子                              */
     uint32_t frame_rate_den;                 /**< 帧率分母                              */
     uint8_t  bit_depth;                      /**< 像素位深                              */
-    uint8_t  reduction_x;                    /**< X 缩减因子 (1=无, 2=1/2, 4=1/4)      */
-    uint8_t  reduction_y;                    /**< Y 缩减因子 (1=无, 2=1/2, 4=1/4)      */
-    uint8_t  reduction_mode;                 /**< isc_reduce_mode_t                      */
+    uint8_t  reduction_x;                    /**< X 缩减因子 (1=无, 2=1/2, 4=1/4)       */
+    uint8_t  reduction_y;                    /**< Y 缩减因子 (1=无, 2=1/2, 4=1/4)       */
+    uint8_t  reduction_mode;                 /**< isc_reduce_mode_t                   */
 
     /* ── 裁剪窗口 (传感器像素阵列坐标系, 缩减前) ── */
     /**

@@ -418,7 +418,7 @@ void test_feasibility_linear_pass_chain(void)
 {
     build_linear_pass_chain();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 }
@@ -432,7 +432,7 @@ void test_feasibility_binning_chain(void)
 
     /* 1920×1080 RGB888 → reverse: 1920*2=3840, 1080*2=2160 RAW10
      * Sensor max=4056×3040 → should fit */
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 }
@@ -445,7 +445,7 @@ void test_feasibility_exceeds_sensor_max(void)
     build_full_chain();
 
     /* 3000×2000 RGB888 → reverse: 3000*2=6000 > sensor max 4056 */
-    vsc_mbus_fmt_t intent = { {3000, 2000, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 3000, 2000, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_ERR_UNREACHABLE, rc);
 }
@@ -458,7 +458,7 @@ void test_feasibility_exceeds_crop_max(void)
     build_full_chain();
 
     /* 2048×2048 RGB888 → Crop max is 1920×1080 → won't fit */
-    vsc_mbus_fmt_t intent = { {2048, 2048, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 2048, 2048, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_ERR_UNREACHABLE, rc);
 }
@@ -471,7 +471,7 @@ void test_feasibility_crop_boundary(void)
     build_full_chain();
 
     /* 1920×1080 exactly at crop max → should be feasible */
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 }
@@ -484,7 +484,7 @@ void test_feasibility_format_mismatch(void)
     build_full_chain();
 
     /* YUV422 is not RAW → decoder can't process → mismatch */
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_YUV422, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_YUV422, 30, 1, 8, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_ERR_UNREACHABLE, rc);
 }
@@ -500,7 +500,7 @@ void test_feasibility_binning_odd_width(void)
     /* 1919×1079 — odd values within crop range [64..1920], reverse through
      * binning gives 3838×2158, within sensor 4056×3040. Conservative pre-check
      * widens the range, not aligns. */
-    vsc_mbus_fmt_t intent = { {1919, 1079, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1919, 1079, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     /* pre-check is conservative — it only checks ranges, not alignment */
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
@@ -515,7 +515,7 @@ void test_feasibility_empty_pipeline(void)
     g_pipe.num_links    = 0;
     vsc_pipeline_build(&g_pipe);
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_feasibility_check(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_ERR_UNREACHABLE, rc);
 }
@@ -636,7 +636,7 @@ void test_forward_linear_exact(void)
 {
     build_linear_pass_chain();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_forward_propagate(&g_pipe, &intent);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -658,7 +658,7 @@ void test_forward_binning_halves(void)
 {
     build_full_chain();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_forward_propagate(&g_pipe, &intent);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -679,7 +679,7 @@ void test_forward_crop_clamps(void)
     /* Intent larger than crop max → crop should clamp */
     /* Note: sensor will reduce to 4056 max first, then binning halves to 2028,
      * decoder passes through, then crop clamps to 1920 */
-    vsc_mbus_fmt_t intent = { {4096, 2160, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 4096, 2160, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_forward_propagate(&g_pipe, &intent);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -696,7 +696,7 @@ void test_forward_multi_branch(void)
 {
     build_multi_branch_with_tap();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_forward_propagate(&g_pipe, &intent);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -715,7 +715,7 @@ void test_forward_tap_success(void)
 {
     build_multi_branch_with_tap();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_forward_propagate(&g_pipe, &intent);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -736,7 +736,7 @@ void test_forward_tap_failure(void)
     g_mock_ctx_histogram.supported_fmts[2] = VSC_FMT_INVALID;
     g_mock_ctx_histogram.supported_fmts[3] = VSC_FMT_INVALID;
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_forward_propagate(&g_pipe, &intent);
     /* Main pipeline should succeed even if TAP fails */
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
@@ -755,7 +755,7 @@ void test_forward_sink_rejection(void)
     /* Replace decoder sink with reject mock */
     g_pipe.entities[2].ops = &g_ops_reject;
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_forward_propagate(&g_pipe, &intent);
     /* Propagation should detect that a STREAM entity was not visited */
     TEST_ASSERT_EQUAL_INT(VSC_ERR_TOPOLOGY_BROKEN, rc);
@@ -772,7 +772,7 @@ void test_converge_identical_branches(void)
 {
     build_multi_branch_with_tap();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -792,7 +792,7 @@ void test_converge_trace_populated(void)
 {
     build_multi_branch_with_tap();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -813,7 +813,7 @@ void test_converge_tap_failure_partial(void)
     g_mock_ctx_histogram.supported_fmts[2] = VSC_FMT_INVALID;
     g_mock_ctx_histogram.supported_fmts[3] = VSC_FMT_INVALID;
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -845,7 +845,7 @@ void test_converge_branch_isolation(void)
     g_pipe.entities[1].ops     = &g_ops_binning;
     g_pipe.entities[1].drv_ctx = &g_mock_ctx_bin2x2;
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -867,7 +867,7 @@ void test_integration_exact_match(void)
 {
     build_linear_pass_chain();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
     TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_EXACT, g_result.status);
@@ -883,7 +883,7 @@ void test_integration_adjusted(void)
     build_full_chain();
 
     /* RGB888 intent: decoder outputs RGB888, reverse through it works */
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -900,7 +900,7 @@ void test_integration_invalid_intent(void)
 {
     build_full_chain();
 
-    vsc_mbus_fmt_t intent = { {0, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 0, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_ERR_INVALID_INTENT, rc);
     TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_FAILED, g_result.status);
@@ -913,7 +913,7 @@ void test_integration_multi_branch_tap(void)
 {
     build_multi_branch_with_tap();
 
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_resolver_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);
 
@@ -1227,12 +1227,12 @@ static void test_crop_vsc_try_fmt_sink(void)
     void *ctx = NULL;
     drv->ops.init(ctx);
 
-    vsc_mbus_fmt_t in  = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t in  = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     vsc_mbus_fmt_t out;
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_sink(ctx, &in, &out));
     TEST_ASSERT_TRUE(vsc_fmt_equal(&in, &out));
 
-    vsc_mbus_fmt_t big = { {9000, 9000, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t big = { { 9000, 9000, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_sink(ctx, &big, &out));
     TEST_ASSERT_EQUAL_UINT32(8192, out.spatial.width);
     TEST_ASSERT_EQUAL_UINT32(8192, out.spatial.height);
@@ -1246,13 +1246,13 @@ static void test_crop_vsc_try_fmt_source(void)
     void *ctx = NULL;
     drv->ops.init(ctx);
 
-    vsc_mbus_fmt_t sink = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t sink = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     vsc_mbus_fmt_t source;
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_source(ctx, &sink, &source));
     TEST_ASSERT_EQUAL_UINT32(1920, source.spatial.width);
     TEST_ASSERT_EQUAL_UINT32(1080, source.spatial.height);
 
-    vsc_mbus_fmt_t big = { {3840, 2160, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t big = { { 3840, 2160, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_source(ctx, &big, &source));
     TEST_ASSERT_EQUAL_UINT32(1920, source.spatial.width);
     TEST_ASSERT_EQUAL_UINT32(1080, source.spatial.height);
@@ -1318,7 +1318,7 @@ static void test_binning_vsc_halves(void)
     TEST_ASSERT_NOT_NULL(ctx);
 
     /* sink: pass-through */
-    vsc_mbus_fmt_t in = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t in = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     vsc_mbus_fmt_t out;
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_sink(ctx, &in, &out));
 
@@ -1342,12 +1342,12 @@ static void test_decoder_vsc_format_conv(void)
     drv->ops.init(ctx);
 
     /* RAW10 accepted */
-    vsc_mbus_fmt_t in = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t in = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     vsc_mbus_fmt_t out;
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_sink(ctx, &in, &out));
 
     /* RGB888 rejected */
-    vsc_mbus_fmt_t rgb = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t rgb = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     TEST_ASSERT_NOT_EQUAL(VSC_OK, drv->ops.try_fmt_sink(ctx, &rgb, &out));
 
     /* source: RAW10 → RGB888 */
@@ -1370,16 +1370,16 @@ static void test_histogram_vsc_format_filter(void)
     drv->ops.init(ctx);
 
     /* RAW10 accepted */
-    vsc_mbus_fmt_t in = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t in = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     vsc_mbus_fmt_t out;
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_sink(ctx, &in, &out));
 
     /* RGB888 accepted */
-    vsc_mbus_fmt_t rgb = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t rgb = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_sink(ctx, &rgb, &out));
 
     /* YUV422 rejected */
-    vsc_mbus_fmt_t yuv = { {1920, 1080, VSC_FMT_YUV422, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t yuv = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_YUV422, 30, 1, 8, 4 }};
     TEST_ASSERT_NOT_EQUAL(VSC_OK, drv->ops.try_fmt_sink(ctx, &yuv, &out));
 
     /* ANALYZER has no try_fmt_source */
@@ -1429,7 +1429,7 @@ static void test_sensor_vsc_init_and_source(void)
     TEST_ASSERT_NOT_NULL(ctx);
 
     /* try_fmt_source: supported format passes through */
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     vsc_mbus_fmt_t out;
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_source(ctx, &intent, &out));
     TEST_ASSERT_EQUAL_UINT32(1920, out.spatial.width);
@@ -1437,12 +1437,12 @@ static void test_sensor_vsc_init_and_source(void)
     TEST_ASSERT_EQUAL_UINT32(VSC_FMT_RAW10, out.spatial.pixel_format);
 
     /* unsupported format falls back to first supported */
-    vsc_mbus_fmt_t rgb = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t rgb = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_source(ctx, &rgb, &out));
     TEST_ASSERT_EQUAL_UINT32(VSC_FMT_RAW8, out.spatial.pixel_format);  /* fallback */
 
     /* exceeds max — clamps */
-    vsc_mbus_fmt_t big = { {5000, 4000, VSC_FMT_RAW10, 30, 1, 10, 4, {0}} };
+    vsc_mbus_fmt_t big = { { 5000, 4000, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     TEST_ASSERT_EQUAL_INT(VSC_OK, drv->ops.try_fmt_source(ctx, &big, &out));
     TEST_ASSERT_EQUAL_UINT32(4056, out.spatial.width);
     TEST_ASSERT_EQUAL_UINT32(3040, out.spatial.height);
@@ -1481,7 +1481,7 @@ static void test_full_pipeline_end_to_end(void)
     TEST_ASSERT_EQUAL_INT(VSC_ENTITY_ANALYZER, pipeline.entities[4].entity_class);
 
     /* ── try_fmt: {1920, 1080, RGB888, 30fps} ── */
-    vsc_mbus_fmt_t intent = { {1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0}} };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     vsc_resolver_result_t result;
     rc = vsc_resolver_try_fmt(&pipeline, &intent, &result);
     TEST_ASSERT_EQUAL_INT(VSC_OK, rc);

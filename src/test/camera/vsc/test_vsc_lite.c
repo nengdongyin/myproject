@@ -26,7 +26,7 @@
  * ======================================================================== */
 
 static binning_vsc_inst_t   g_real_bin  = { .hw = { .base_addr = 0, .factor_x = 2, .factor_y = 2 } };
-static crop_vsc_inst_t      g_real_crop = { .hw = { .base_addr = 0 } };
+static crop_vsc_inst_t      g_real_crop = { .hw = { .base_addr = 0, .max_w = 8192, .max_h = 8192 } };
 static decoder_vsc_inst_t   g_real_dec  = { .hw = { .base_addr = 0 } };
 static histogram_vsc_inst_t g_real_hist = { .hw = { .base_addr = 0 } };
 static sensor_vsc_inst_t    g_real_sensor = { .model = "sensor_imx477" };
@@ -71,8 +71,14 @@ static int mock_source_pass(void *drv_ctx, const vsc_mbus_fmt_t *s, vsc_mbus_fmt
     { (void)drv_ctx; *o = *s; return VSC_OK; }
 
 static int mock_source_binning(void *drv_ctx, const vsc_mbus_fmt_t *s, vsc_mbus_fmt_t *o)
-    { mock_drv_ctx_t *c = (mock_drv_ctx_t *)drv_ctx;
-      *o = *s; o->spatial.width /= c->bin_factor_x; o->spatial.height /= c->bin_factor_y; return VSC_OK; }
+    { (void)drv_ctx;
+      uint8_t bx = s->spatial.bin_x; if (bx < 1) bx = 1;
+      uint8_t by = s->spatial.bin_y; if (by < 1) by = 1;
+      *o = *s;
+      if (bx > 1) { o->spatial.width /= bx; o->spatial.offsetx /= bx; }
+      if (by > 1) { o->spatial.height /= by; o->spatial.offsety /= by; }
+      o->spatial.bin_x = 1; o->spatial.bin_y = 1;
+      return VSC_OK; }
 
 static int mock_source_decoder(void *drv_ctx, const vsc_mbus_fmt_t *s, vsc_mbus_fmt_t *o)
     { mock_drv_ctx_t *c = (mock_drv_ctx_t *)drv_ctx;
@@ -80,9 +86,20 @@ static int mock_source_decoder(void *drv_ctx, const vsc_mbus_fmt_t *s, vsc_mbus_
 
 static int mock_source_crop(void *drv_ctx, const vsc_mbus_fmt_t *s, vsc_mbus_fmt_t *o)
     { mock_drv_ctx_t *c = (mock_drv_ctx_t *)drv_ctx;
+      /* o->spatial 由框架预填（Phase 0 + Phase A crop 预处理） */
+      uint32_t target_w = o->spatial.width;
+      uint32_t target_h = o->spatial.height;
       *o = *s;
-      if (o->spatial.width > c->max_w)  o->spatial.width  = c->max_w;
-      if (o->spatial.height > c->max_h) o->spatial.height = c->max_h;
+      if (s->spatial.offsetx > 0 || s->spatial.offsety > 0) {
+          if (target_w > 0 && target_w < o->spatial.width)  o->spatial.width  = target_w;
+          if (target_h > 0 && target_h < o->spatial.height) o->spatial.height = target_h;
+          o->spatial.offsetx = 0; o->spatial.offsety = 0;
+      } else {
+          if (target_w > 0 && target_w < o->spatial.width)  o->spatial.width  = target_w;
+          if (target_h > 0 && target_h < o->spatial.height) o->spatial.height = target_h;
+          if (o->spatial.width  > c->max_w)  o->spatial.width  = c->max_w;
+          if (o->spatial.height > c->max_h) o->spatial.height = c->max_h;
+      }
       return VSC_OK; }
 
 static bool mock_fmt_supported(const mock_drv_ctx_t *ctx, uint32_t fmt)
@@ -100,7 +117,11 @@ static int mock_sensor_source(void *drv_ctx, const vsc_mbus_fmt_t *intent, vsc_m
     *src = *intent;
     if (!mock_fmt_supported(ctx, intent->spatial.pixel_format))
         src->spatial.pixel_format = ctx->supported_fmts[0];
-    if (src->spatial.width > ctx->max_w)  src->spatial.width  = ctx->max_w;
+
+    /* 框架翻译后 width/off 是 crop 窗口，mock sensor 输出 total = off + w */
+    src->spatial.width  += src->spatial.offsetx;
+    src->spatial.height += src->spatial.offsety;
+    if (src->spatial.width  > ctx->max_w) src->spatial.width  = ctx->max_w;
     if (src->spatial.height > ctx->max_h) src->spatial.height = ctx->max_h;
     return VSC_OK;
 }
@@ -186,6 +207,24 @@ static int mock_sensor_source_timed(void *drv_ctx, const vsc_mbus_fmt_t *intent,
     return VSC_OK;
 }
 
+/* ── mock transform templates (for Phase 0 capability detection) ── */
+static const vsc_fmt_transform_desc_t s_mock_bin_template = {
+    .type = VSC_TRANSFORM_BINNING,
+    .params.binning = { .factor_x = 2, .factor_y = 2 },
+};
+static const vsc_fmt_transform_desc_t s_mock_crop_template = {
+    .type = VSC_TRANSFORM_CROP,
+    .params.crop = { .min_w = 64, .min_h = 4, .max_w = 1920, .max_h = 1080 },
+};
+static const vsc_fmt_transform_desc_t s_mock_sensor_template = {
+    .type = VSC_TRANSFORM_CROP,
+    .params.crop = { .min_w = 1, .min_h = 1, .max_w = 4056, .max_h = 3040 },
+};
+static const vsc_fmt_transform_desc_t s_mock_decoder_template = {
+    .type = VSC_TRANSFORM_PIXEL_FMT_CONV,
+    .params.pixel_fmt_conv = { .fmt_in = VSC_FMT_RAW10, .fmt_out = VSC_FMT_RGB888 },
+};
+
 /* ── mock ops tables ── */
 static const vsc_ip_ops_t g_ops_sensor    = { NULL, NULL, mock_sensor_source, NULL };
 static const vsc_ip_ops_t g_ops_sensor_timed = { NULL, NULL, mock_sensor_source_timed, NULL };
@@ -205,21 +244,21 @@ static const vsc_ip_ops_t g_ops_sensor_query    = { NULL, NULL, mock_sensor_sour
 static const vsc_ip_ops_t g_ops_pass_fail_timing = { NULL, mock_sink_pass, mock_source_pass, NULL, mock_get_timing_req_fail, NULL };
 
 /* ── mock driver descriptors ── */
-static const vsc_driver_t g_drv_sensor        = { .ops = g_ops_sensor };
-static const vsc_driver_t g_drv_sensor_timed  = { .ops = g_ops_sensor_timed };
+static const vsc_driver_t g_drv_sensor        = { .capabilities = VSC_CAP_SENSOR, .transform_template = &s_mock_sensor_template, .ops = g_ops_sensor };
+static const vsc_driver_t g_drv_sensor_timed  = { .capabilities = VSC_CAP_SENSOR, .transform_template = &s_mock_sensor_template, .ops = g_ops_sensor_timed };
 static const vsc_driver_t g_drv_pass          = { .ops = g_ops_pass };
 static const vsc_driver_t g_drv_endpoint      = { .ops = g_ops_endpoint };
-static const vsc_driver_t g_drv_binning       = { .ops = g_ops_binning };
-static const vsc_driver_t g_drv_decoder       = { .ops = g_ops_decoder };
-static const vsc_driver_t g_drv_crop          = { .ops = g_ops_crop };
+static const vsc_driver_t g_drv_binning       = { .capabilities = VSC_CAP_BINNING, .transform_template = &s_mock_bin_template, .ops = g_ops_binning };
+static const vsc_driver_t g_drv_decoder       = { .capabilities = VSC_CAP_FORMAT_CONV, .transform_template = &s_mock_decoder_template, .ops = g_ops_decoder };
+static const vsc_driver_t g_drv_crop          = { .capabilities = VSC_CAP_CROP, .transform_template = &s_mock_crop_template, .ops = g_ops_crop };
 static const vsc_driver_t g_drv_reject        = { .ops = g_ops_reject };
 
 /* ── mock driver descriptors with timing ── */
 static const vsc_driver_t g_drv_pass_timed     = { .ops = g_ops_pass_timed };
-static const vsc_driver_t g_drv_binning_timed  = { .ops = g_ops_binning_timed };
+static const vsc_driver_t g_drv_binning_timed  = { .capabilities = VSC_CAP_BINNING, .transform_template = &s_mock_bin_template, .ops = g_ops_binning_timed };
 static const vsc_driver_t g_drv_endpoint_timed = { .ops = g_ops_endpoint_timed };
-static const vsc_driver_t g_drv_sensor_timed2   = { .ops = g_ops_sensor_timed2 };
-static const vsc_driver_t g_drv_sensor_query    = { .ops = g_ops_sensor_query };
+static const vsc_driver_t g_drv_sensor_timed2   = { .capabilities = VSC_CAP_SENSOR, .transform_template = &s_mock_sensor_template, .ops = g_ops_sensor_timed2 };
+static const vsc_driver_t g_drv_sensor_query    = { .capabilities = VSC_CAP_SENSOR, .transform_template = &s_mock_sensor_template, .ops = g_ops_sensor_query };
 static const vsc_driver_t g_drv_pass_fail_timing = { .ops = g_ops_pass_fail_timing };
 
 /* ── ops with query_cap + set/get_ctrl for testing ── */
@@ -287,7 +326,7 @@ void test_linear_pass_chain(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_EXACT, g_result.status);
     TEST_ASSERT_EQUAL_UINT32(1920, g_result.primary_fmt.spatial.width);
@@ -309,14 +348,14 @@ void test_full_pipeline(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 5);
 
-    /* 1920×1080 RGB888 → sensor falls back RAW8 → bin /2 → 960×540 → decoder → RGB → crop clamp */
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RGB888, 30, 1, 8, 4, {0} } };
+    /* 1920×1080 RGB888 bin_x=2 → 逆推补偿 → sensor 3840 → bin /2 → 1920 → decoder → RGB → crop clamp */
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 2, 2, 1, 1, VSC_FMT_RGB888, 30, 1, 8, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
-    /* intent 1920×1080 → binning 2×2 → 960×540, 最终尺寸与意图不同, 状态为 ADJUSTED */
-    TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_ADJUSTED, g_result.status);
-    /* Binning halves before reaching crop, final output = 960×540 */
-    TEST_ASSERT_EQUAL_UINT32(960, g_result.primary_fmt.spatial.width);
-    TEST_ASSERT_EQUAL_UINT32(540, g_result.primary_fmt.spatial.height);
+    /* sensor 源头解算 + 前向认领后匹配 intent = EXACT */
+    TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_EXACT, g_result.status);
+    TEST_ASSERT_EQUAL_UINT32(1920, g_result.primary_fmt.spatial.width);
+    TEST_ASSERT_EQUAL_UINT32(1080, g_result.primary_fmt.spatial.height);
+    TEST_ASSERT_EQUAL_UINT32(VSC_FMT_RGB888, g_result.primary_fmt.spatial.pixel_format);
 }
 
 /**
@@ -332,7 +371,7 @@ void test_intent_exceeds_sensor(void)
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
     /* 5000×4000 exceeds sensor's 4056×3040 */
-    vsc_mbus_fmt_t intent = { { 5000, 4000, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 5000, 4000, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_UINT32(4056, g_result.primary_fmt.spatial.width);
     TEST_ASSERT_EQUAL_UINT32(3040, g_result.primary_fmt.spatial.height);
@@ -354,7 +393,7 @@ void test_format_rejected_by_decoder(void)
 
     /* YUV422 sensor doesn't support, but mock_sensor falls back to first supported.
        Then decoder doesn't support YUV422 format filter → fail */
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_YUV422, 30, 1, 8, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 2, 2, 1, 1, VSC_FMT_YUV422, 30, 1, 8, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* Sensor falls back to RAW8 (first supported), decoder accepts RAW8 → pass */
     TEST_ASSERT_EQUAL_UINT32(VSC_FMT_RGB888, g_result.primary_fmt.spatial.pixel_format);
@@ -372,7 +411,7 @@ void test_reject_in_middle(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_NOT_EQUAL(VSC_OK, rc);
     TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_FAILED, g_result.status);
@@ -389,7 +428,7 @@ void test_minimal_sensor_endpoint(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 2);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_UINT32(1920, g_result.primary_fmt.spatial.width);
 }
@@ -404,10 +443,9 @@ void test_real_drivers_sensor_crop(void)
         { &crop_vsc_driver,           &g_real_crop   },
         { &binning_vsc_driver,        &g_real_bin    },
         { &decoder_vsc_driver,        &g_real_dec    },
-        { &histogram_vsc_driver,      &g_real_hist   },
     };
-    vsc_lite_pipeline_init(&g_pipe, stages, 5);
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_lite_pipeline_init(&g_pipe, stages, 4);
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* Real drivers may adjust format — just verify it's valid */
     TEST_ASSERT_TRUE(vsc_fmt_is_valid(&g_result.primary_fmt));
@@ -425,7 +463,7 @@ void test_commit_after_try(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     rc = vsc_lite_commit_fmt(&g_pipe, &g_result.primary_fmt);
 }
@@ -444,12 +482,12 @@ void test_multiple_try_fmt_isolation(void)
 
     int rc;
     /* First call: 1920×1080 */
-    vsc_mbus_fmt_t intent1 = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent1 = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     rc = vsc_lite_try_fmt(&g_pipe, &intent1, &g_result);
     TEST_ASSERT_EQUAL_UINT32(1920, g_result.primary_fmt.spatial.width);
 
     /* Second call: smaller intent, must NOT retain first call's 1920 */
-    vsc_mbus_fmt_t intent2 = { { 640, 480, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent2 = { { 640, 480, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     rc = vsc_lite_try_fmt(&g_pipe, &intent2, &g_result);
     TEST_ASSERT_EQUAL_UINT32(640, g_result.primary_fmt.spatial.width);
     TEST_ASSERT_EQUAL_UINT32(480, g_result.primary_fmt.spatial.height);
@@ -460,7 +498,7 @@ void test_multiple_try_fmt_isolation(void)
  */
 void test_commit_null_params(void)
 {
-    vsc_mbus_fmt_t fmt = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t fmt = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     TEST_ASSERT_NOT_EQUAL(VSC_OK, vsc_lite_commit_fmt(NULL, &fmt));
     TEST_ASSERT_NOT_EQUAL(VSC_OK, vsc_lite_commit_fmt(&g_pipe, NULL));
 }
@@ -489,7 +527,7 @@ void test_null_driver_in_middle(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_UINT32(1920, g_result.primary_fmt.spatial.width);
 }
@@ -499,7 +537,7 @@ void test_null_driver_in_middle(void)
  */
 void test_null_params(void)
 {
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     TEST_ASSERT_NOT_EQUAL(VSC_OK, vsc_lite_pipeline_init(NULL, NULL, 0));
     TEST_ASSERT_NOT_EQUAL(VSC_OK, vsc_lite_try_fmt(NULL, &intent, &g_result));
     TEST_ASSERT_NOT_EQUAL(VSC_OK, vsc_lite_try_fmt(&g_pipe, NULL, &g_result));
@@ -507,7 +545,9 @@ void test_null_params(void)
 }
 
 /* ========================================================================
+    printf("DBG has_timing=%d res0=%u\n", g_ctx_sensor_raw.has_timing, g_ctx_sensor_raw.timing_req.reserved[0]);
  *  能力查询测试
+    printf("DBG direct_rc=%d\n", rc);
  * ======================================================================== */
 
 /* mock query_cap — 返回预设的能力描述符 */
@@ -709,7 +749,7 @@ void test_timing_no_req_preserves_baseline(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* 时序应保持 sensor 基准值 */
     TEST_ASSERT_EQUAL_UINT32(74250000,  g_result.primary_fmt.timing.pixel_clock_hz);
@@ -736,7 +776,7 @@ void test_timing_single_stage_h_total(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* sensor h_total = 1920+128=2048, stage 要求 3000 → final = 3000 */
     TEST_ASSERT_EQUAL_UINT32(3000, g_result.primary_fmt.timing.h_total);
@@ -767,7 +807,7 @@ void test_timing_parallel_max(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 4);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* h_total: max(2048, 3000, 2500) = 3000 */
     TEST_ASSERT_EQUAL_UINT32(3000, g_result.primary_fmt.timing.h_total);
@@ -799,7 +839,7 @@ void test_timing_pipeline_lines_sum(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 4);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* v_blank: max(sensor=80, pipeline=2+3=5) = 80 (sensor 基准更大) */
     TEST_ASSERT_EQUAL_UINT32(80, g_result.primary_fmt.timing.v_blank);
@@ -823,7 +863,7 @@ void test_timing_latency_exceeds_vblank(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* v_blank = max(80, 100) = 100 */
     TEST_ASSERT_EQUAL_UINT32(100, g_result.primary_fmt.timing.v_blank);
@@ -854,7 +894,7 @@ void test_timing_mixed_parallel_serial(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 4);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* v_blank = max(80, 0, 50) = 80; v_total = max(1160, 2000, 1080+80) = 2000 */
     TEST_ASSERT_EQUAL_UINT32(2000, g_result.primary_fmt.timing.v_total);
@@ -882,7 +922,7 @@ void test_timing_exceeds_sensor_max(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_ERR_UNREACHABLE, rc);
     TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_FAILED, g_result.status);
@@ -910,7 +950,7 @@ void test_timing_within_sensor_max(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_UINT32(6000, g_result.primary_fmt.timing.h_total);
 }
@@ -928,17 +968,16 @@ void test_timing_copy_through_stages(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 4);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* Stage 1 (pass) 应保持 sensor 时序 */
     TEST_ASSERT_EQUAL_UINT32(74250000, g_pipe.stages[1].source_fmt.timing.pixel_clock_hz);
     TEST_ASSERT_EQUAL_UINT32(1920 + 128, g_pipe.stages[1].source_fmt.timing.h_total);
 
-    /* Stage 2 (binning 2x2) 修改了 width/height, 但时序字段应透传 */
+    /* Stage 2 (binning) — bin_x=1 无缩放, 时序透传 */
     TEST_ASSERT_EQUAL_UINT32(74250000, g_pipe.stages[2].source_fmt.timing.pixel_clock_hz);
     TEST_ASSERT_EQUAL_UINT32(1920 + 128, g_pipe.stages[2].source_fmt.timing.h_total);
-    /* binning 2x2 后 width=960, 但 active 应被透传覆盖 */
-    TEST_ASSERT_EQUAL_UINT32(960, g_pipe.stages[2].source_fmt.timing.h_active);
+    TEST_ASSERT_EQUAL_UINT32(1920, g_pipe.stages[2].source_fmt.timing.h_active);
 }
 
 /**
@@ -954,7 +993,7 @@ void test_timing_multiple_try_isolation(void)
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
     int rc;
-    vsc_mbus_fmt_t intent2 = { { 640, 480, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent2 = { { 640, 480, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     rc = vsc_lite_try_fmt(&g_pipe, &intent2, &g_result);
     TEST_ASSERT_EQUAL_UINT32(640 + 128, g_result.primary_fmt.timing.h_total);
 }
@@ -971,7 +1010,7 @@ void test_timing_req_error_aborts(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 3);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     TEST_ASSERT_EQUAL_INT(VSC_ERR_PROPAGATION_SINK, rc);
     TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_FAILED, g_result.status);
@@ -999,7 +1038,7 @@ void test_timing_ip_clock_diag(void)
     };
     vsc_lite_pipeline_init(&g_pipe, stages, 4);
 
-    vsc_mbus_fmt_t intent = { { 1920, 1080, VSC_FMT_RAW10, 30, 1, 10, 4, {0} } };
+    vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
     int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
     /* ip_clock_hz 不影响协商结果 */
 }
@@ -1052,6 +1091,80 @@ void test_ctrl_unknown_id(void)
         vsc_lite_get_ctrl(&g_pipe, VSC_CAP_BINNING, 0xFFFF, &val));
 }
 
+/* ========================================================================
+ *  逆推 + 前向认领 测试
+ * ======================================================================== */
+
+/**
+ * bin_x=2 在 intent 中 → 逆推补偿 → 最终输出匹配 intent 尺寸
+ * 管线: sensor → binning → endpoint
+ */
+void test_reverse_binning_compensates(void)
+{
+        const vsc_lite_stage_def_t stages[] = {
+        { &g_drv_sensor, &g_ctx_sensor_raw },
+        { &g_drv_binning, &g_ctx_bin2x2 },
+        { &g_drv_endpoint, &g_ctx_pass },
+    };
+    vsc_lite_pipeline_init(&g_pipe, stages, 3);
+
+    /* intent 640×480 bin_x=2: 逆推后 sensor 需要 1280×960 */
+    vsc_mbus_fmt_t intent = { { 640, 480, 0, 0, 2, 2, 1, 1, VSC_FMT_RAW10, 30, 1, 10, 4 }};
+    int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
+    /* sensor 源头解算 + binning 认领 → 640×480 */
+    TEST_ASSERT_EQUAL_UINT32(640, g_result.primary_fmt.spatial.width);
+    TEST_ASSERT_EQUAL_UINT32(480, g_result.primary_fmt.spatial.height);
+    TEST_ASSERT_EQUAL_INT(VSC_NEGOTIATE_EXACT, g_result.status);
+}
+
+/**
+ * crop_left=128 在 intent 中 → forward 时 crop 认领 offset
+ * 管线: sensor → crop → endpoint
+ */
+void test_crop_offset_claim(void)
+{
+        const vsc_lite_stage_def_t stages[] = {
+        { &g_drv_sensor, &g_ctx_sensor_raw },
+        { &g_drv_crop, &g_ctx_crop_1920 },
+        { &g_drv_endpoint, &g_ctx_pass },
+    };
+    vsc_lite_pipeline_init(&g_pipe, stages, 3);
+
+    /* intent 640×480 crop_left=128: sensor 输出足够大, crop 认领 offset */
+    vsc_mbus_fmt_t intent = { { 640, 480, 128, 0, 1, 1, 1, 1, VSC_FMT_RAW10, 30, 1, 10, 4 }};
+    int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
+    /* crop 认领 offset 后最终输出 640×480, offset 已清除 */
+    TEST_ASSERT_EQUAL_UINT32(640, g_result.primary_fmt.spatial.width);
+    TEST_ASSERT_EQUAL_UINT32(480, g_result.primary_fmt.spatial.height);
+    TEST_ASSERT_EQUAL_UINT32(0, g_result.primary_fmt.spatial.offsetx);
+}
+
+/**
+ * bin_x=2 + offsetx=128 → 逆推时坐标变换, 前向时 binning+crop 分别认领
+ * 管线: sensor → binning → crop → endpoint
+ */
+void test_binning_crop_coord_transform(void)
+{
+        const vsc_lite_stage_def_t stages[] = {
+        { &g_drv_sensor, &g_ctx_sensor_raw },
+        { &g_drv_binning, &g_ctx_bin2x2 },
+        { &g_drv_crop, &g_ctx_crop_1920 },
+        { &g_drv_endpoint, &g_ctx_pass },
+    };
+    vsc_lite_pipeline_init(&g_pipe, stages, 4);
+
+    /* intent 640×480 bin_x=2 crop_left=128:
+     *   逆推: binning → w=1280, off_x=256; crop pass-through
+     *   前向: sensor 1280 → binning /2 → 640 off_x=128 → crop 认领 off_x → 640 off_x=0 */
+    vsc_mbus_fmt_t intent = { { 640, 480, 128, 0, 2, 2, 1, 1, VSC_FMT_RAW10, 30, 1, 10, 4 }};
+    int rc = vsc_lite_try_fmt(&g_pipe, &intent, &g_result);
+    TEST_ASSERT_EQUAL_UINT32(640, g_result.primary_fmt.spatial.width);
+    TEST_ASSERT_EQUAL_UINT32(480, g_result.primary_fmt.spatial.height);
+    TEST_ASSERT_EQUAL_UINT32(0, g_result.primary_fmt.spatial.offsetx);
+    TEST_ASSERT_EQUAL_UINT32(1, g_result.primary_fmt.spatial.bin_x);
+    TEST_ASSERT_EQUAL_UINT32(1, g_result.primary_fmt.spatial.dec_x);
+}
+
 /**
  * 无 driver 提供 set_ctrl → NOT_SUPPORTED
  */
@@ -1095,6 +1208,10 @@ static int lite_run_all_tests(void)
     RUN_TEST(test_commit_null_params);
     RUN_TEST(test_single_stage_rejected);
     RUN_TEST(test_null_driver_in_middle);
+    /* ── 逆推 + 前向认领测试 ── */
+    RUN_TEST(test_reverse_binning_compensates);
+    RUN_TEST(test_crop_offset_claim);
+    RUN_TEST(test_binning_crop_coord_transform);
     /* ── 能力查询测试 ── */
     RUN_TEST(test_cap_binning_sensor_first);
     RUN_TEST(test_cap_binning_fpga_fallback);

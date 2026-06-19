@@ -35,9 +35,23 @@ static int bin_vsc_sink(void *drv_ctx, const vsc_mbus_fmt_t *proposed, vsc_mbus_
 static int bin_vsc_source(void *drv_ctx, const vsc_mbus_fmt_t *sink, vsc_mbus_fmt_t *src)
 {
     binning_vsc_inst_t *ctx = (binning_vsc_inst_t *)drv_ctx;
+    (void)ctx;
     *src = *sink;
-    if (ctx->hw.factor_x > 1) src->spatial.width  /= ctx->hw.factor_x;
-    if (ctx->hw.factor_y > 1) src->spatial.height /= ctx->hw.factor_y;
+
+    /* ── 认领 binning：从 sink 的 bin_x/y 读取因子 ── */
+    uint8_t bx = sink->spatial.bin_x;
+    uint8_t by = sink->spatial.bin_y;
+    if (bx < 1) bx = 1;
+    if (by < 1) by = 1;
+
+    if (bx > 1) src->spatial.width     /= bx;
+    if (by > 1) src->spatial.height    /= by;
+    if (bx > 1) src->spatial.offsetx /= bx;
+    if (by > 1) src->spatial.offsety /= by;
+
+    /* 认领完成，清除标记 */
+    src->spatial.bin_x = 1;
+    src->spatial.bin_y = 1;
     return VSC_OK;
 }
 
@@ -71,8 +85,12 @@ static int bin_get_timing_req(void *drv_ctx,
     }
 
     /* 行缓冲深度: factor_y > 1 时至少缓存 factor_y 行才输出 */
-    if (ctx->hw.factor_y > 1)
-        req->pipeline_lines = ctx->hw.factor_y;
+    {
+        uint8_t factor_y = sink_fmt->spatial.bin_y;
+        if (factor_y < 1) factor_y = ctx->hw.factor_y;  /* 回退到 HW 值 */
+        if (factor_y > 1)
+            req->pipeline_lines = factor_y;
+    }
 
     req->ip_clock_hz = 200000000;
     return VSC_OK;
