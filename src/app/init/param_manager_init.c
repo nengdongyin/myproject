@@ -20,6 +20,7 @@
 #include "param_manager.h"
 #include "lwevt/lwevt.h"
 #include "param_storage_flashdb.h"
+#include "param_storage_mkv.h"
 #include "sensor_module.h"
 #include "auto_exp_control.h"
 #include "ip_param_manager.h"
@@ -145,9 +146,11 @@ static void on_param_changed(uint32_t param_id, param_value_t new_value)
 void param_manager_init(void)
 {
     /* 步骤 1: 存储后端创建 */
-    const param_storage_drv_t *storage = param_storage_flashdb_create();
-    if (!storage)
-        return;
+    //const param_storage_drv_t *storage = param_storage_flashdb_create();
+    const param_storage_drv_t *storage = param_storage_mkv_create();
+    //const param_storage_drv_t *storage = NULL;
+    //f (!storage)
+    //   return;
     /* 步骤 2: 事件系统初始化 */
     lwevt_init();
     /* 步骤 3: 框架初始化 */
@@ -168,7 +171,7 @@ void param_manager_init(void)
     int ret = param_load_all();
     if (ret != PARAM_OK)
         printf("[PM] load_all ret=%d\n", ret);
-
+    param_dump(0, dump_cb, NULL);
     /* 步骤 7: 校验 MODULE_INIT_ORDER 完整性 */
     ret = param_check_flush_integrity();
     if (ret != PARAM_OK)

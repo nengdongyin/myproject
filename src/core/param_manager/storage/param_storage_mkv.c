@@ -10,6 +10,7 @@
 #include "param_storage_mkv.h"
 #include "mkv.h"
 #include "fal.h"
+#include "param_manager_internal.h"
 #include <string.h>
 
 /** @brief mkv 存储上下文 — 每个物理分区对应一个实例 */
@@ -41,6 +42,19 @@ static int mkv_storage_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len)
     mkv_storage_ctx_t *c = (mkv_storage_ctx_t *)ctx;
     if (!c || !c->used || !data || len == 0) return -1;
     return mkv_get(&c->kv, id, data, len);
+}
+
+static void mkv_scan_restore_cb(uint32_t id, const uint8_t *data, uint16_t len, void *user)
+{
+    (void)user;
+    param_cache_restore(id, data, len);
+}
+
+static int mkv_storage_load_all(void *ctx)
+{
+    mkv_storage_ctx_t *c = (mkv_storage_ctx_t *)ctx;
+    if (!c || !c->used) return -1;
+    return mkv_scan(&c->kv, mkv_scan_restore_cb, NULL);
 }
 
 static int mkv_storage_save(void *ctx, uint32_t id, const uint8_t *data, uint16_t len)
@@ -108,6 +122,8 @@ static const param_storage_drv_t *mkv_storage_get_partition(void *ctx, uint8_t i
 
 const param_storage_drv_t *param_storage_mkv_create(void)
 {
+    fal_init();
+
     uint8_t boot_index = 0xFF;
     const struct fal_partition *boot = fal_partition_find(FAL_BOOT_PART);
     if (boot)
@@ -151,6 +167,7 @@ const param_storage_drv_t *param_storage_mkv_get_driver(const char *part_name)
 
             c->drv.ctx = c;
             c->drv.load = mkv_storage_load;
+            c->drv.load_all = mkv_storage_load_all;
             c->drv.save = mkv_storage_save;
             c->drv.delete = mkv_storage_delete;
             c->drv.erase_all = mkv_storage_erase_all;

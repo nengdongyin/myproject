@@ -189,6 +189,48 @@ static int write_rec(mkv_t *kv, uint32_t id, const uint8_t *data, uint16_t vlen,
     return 0;
 }
 
+/* ═══════════════════════════════════════════════ 扫描辅助 ═══════ */
+
+/**
+ * @brief 探测 off 位置是否为擦除区（连续 16 字节全 0xFF）
+ *
+ * NOR Flash 擦除后全为 0xFF。16 字节全 0xFF 判定为已到达扇区末尾，
+ * 外部扫描循环可安全终止。误判概率 < 2^-128。
+ */
+static bool mkv_probe_erased(mkv_t *kv, uint32_t base, uint32_t off)
+{
+    uint8_t buf[16];
+    if (fal_partition_read(kv->part, base + off, buf, 16) < 0)
+        return false;
+    for (int i = 0; i < 16; i++)
+        if (buf[i] != 0xFF) return false;
+    return true;
+}
+
+/**
+ * @brief 尝试按 header 的 vlen 跳过半写记录
+ *
+ * 追加写下掉电可能产生半写记录（header 完整但 CRC 错误）。
+ * 若 header magic 匹配则按 vlen 返回跳跃步长；
+ * header 也损坏时返回 1，外循环逐字节寻找下一条记录或擦除区。
+ *
+ * @return 外循环应前进的字节数（至少 1）
+ */
+static uint32_t mkv_try_skip(mkv_t *kv, uint32_t base, uint32_t off)
+{
+    uint8_t head[MKV_REC_HEAD_SIZE];
+    if (fal_partition_read(kv->part, base + off, head, 8) >= 0
+        && r16(head) == MKV_REC_MAGIC)
+    {
+        uint16_t v = r16(head + 6);
+        uint32_t total = (v == MKV_TOMBSTONE)
+            ? MKV_REC_OVERHEAD
+            : MKV_REC_OVERHEAD + v;
+        if (off + total <= kv->sector_size) return total;
+    }
+    return 1; /* header 损坏，逐字节前进 */
+}
+
 /* ═══════════════════════════════════════════════ GC ══════════════ */
 
 #define GC_MAP_MAX 256
@@ -197,7 +239,7 @@ static int mkv_gc(mkv_t *kv)
 {
     uint32_t old_base = kv->active_base;
     int      old_id   = (int)(old_base / kv->sector_size);
-    int      new_id   = 1 - old_id;
+    int      new_id   = (old_id + 1) % (int)kv->sector_count;
     uint32_t new_base = (uint32_t)new_id * kv->sector_size;
     uint32_t new_seq  = kv->active_seq + 1;
 
@@ -213,7 +255,11 @@ static int mkv_gc(mkv_t *kv)
     {
         uint32_t rid; uint16_t vlen;
         if (!read_and_verify(kv, old_base, scan, &rid, &vlen))
-            { scan++; continue; }
+        {
+            if (mkv_probe_erased(kv, old_base, scan)) break;
+            scan += mkv_try_skip(kv, old_base, scan);
+            continue;
+        }
 
         int found = -1;
         for (int i = 0; i < map_count; i++)
@@ -264,37 +310,79 @@ int mkv_init(mkv_t *kv, const char *fal_part_name)
     if (!kv || !fal_part_name) return -1;
     memset(kv, 0, sizeof(*kv));
 
+    fal_init();
     kv->part = fal_partition_find(fal_part_name);
     if (!kv->part) return -1;
 
-    kv->sector_size = kv->part->len / 2;
+    /* 以物理擦除块 × MKV_SECTOR_MULT 为 sector 大小 */
+    {
+        const struct fal_flash_dev *flash =
+            fal_flash_device_find(kv->part->flash_name);
+        uint32_t erase = flash ? (uint32_t)flash->blk_size : 4096;
+        kv->sector_size = erase * MKV_SECTOR_MULT;
+    }
     if (kv->sector_size < MKV_MIN_SECTOR_SIZE) return -1;
 
-    uint32_t seq0, seq1;
-    bool ok0 = read_sec_hdr(kv, 0, &seq0);
-    bool ok1 = read_sec_hdr(kv, 1, &seq1);
+    kv->sector_count = (uint8_t)(kv->part->len / kv->sector_size);
+    if (kv->sector_count < 2) return -1;  /* GC 至少需要 2 个 sector */
 
-    if (!ok0 && !ok1)
+    /* 扫描全部 sector header，找到 seq 最大的活跃 sector */
+    int      best_id = 0;
+    uint32_t best_seq = 0;
+    bool     any_ok = false;
+
+    for (uint8_t i = 0; i < kv->sector_count; i++)
     {
-        /* 全新分区：两个 sector 都擦除，避免随机数据被误判为有效 */
-        fal_partition_erase(kv->part, 0, kv->sector_size);
-        fal_partition_erase(kv->part, kv->sector_size, kv->sector_size);
+        uint32_t seq;
+        if (read_sec_hdr(kv, i, &seq))
+        {
+            any_ok = true;
+            if (!any_ok || seq >= best_seq)
+                { best_id = i; best_seq = seq; }
+        }
+    }
+
+    if (!any_ok)
+    {
+        /* 全新分区：擦除全部 sector，从 sector 0 开始 */
+        for (uint8_t i = 0; i < kv->sector_count; i++)
+            fal_partition_erase(kv->part, (uint32_t)i * kv->sector_size,
+                                kv->sector_size);
         write_sec_hdr(kv, 0, 1);
-        kv->active_base=0; kv->active_seq=1; kv->write_offset=MKV_SEC_HDR_SIZE;
-        kv->initialized = true;
+        kv->active_base  = 0;
+        kv->active_seq   = 1;
+        kv->write_offset = MKV_SEC_HDR_SIZE;
+        kv->initialized  = true;
         return 0;
     }
 
-    int id = (ok0&&ok1) ? ((seq0>=seq1)?0:1) : (ok0?0:1);
-    kv->active_base = (uint32_t)id * kv->sector_size;
-    kv->active_seq  = (id==0) ? seq0 : seq1;
+    kv->active_base = (uint32_t)best_id * kv->sector_size;
+    kv->active_seq  = best_seq;
 
+    /* 扫描活跃 sector 找到 write_offset */
     uint32_t off = MKV_SEC_HDR_SIZE;
+    uint16_t cons_fail = 0;
     while (off + MKV_REC_OVERHEAD <= kv->sector_size)
     {
         uint32_t rid; uint16_t vlen;
         if (!read_and_verify(kv, kv->active_base, off, &rid, &vlen))
-            { off++; continue; }
+        {
+            if (mkv_probe_erased(kv, kv->active_base, off)) break;
+            uint32_t step = mkv_try_skip(kv, kv->active_base, off);
+            if (step == 1 && ++cons_fail > 256)
+            {
+                /* 扇区内容为脏数据，擦除重建 */
+                fal_partition_erase(kv->part, kv->active_base, kv->sector_size);
+                write_sec_hdr(kv, best_id, best_seq);
+                kv->write_offset = MKV_SEC_HDR_SIZE;
+                kv->initialized = true;
+                return 0;
+            }
+            if (step != 1) cons_fail = 0;
+            off += step;
+            continue;
+        }
+        cons_fail = 0;
         off += rec_total(vlen);
     }
     kv->write_offset = off;
@@ -302,21 +390,63 @@ int mkv_init(mkv_t *kv, const char *fal_part_name)
     return 0;
 }
 
-int mkv_get(mkv_t *kv, uint32_t id, uint8_t *buf, uint16_t max_len)
+int mkv_scan(mkv_t *kv, mkv_scan_cb cb, void *user)
 {
-    if (!kv || !kv->initialized || !buf || max_len==0) return -1;
+    if (!kv || !kv->initialized || !cb) return -1;
 
-    bool found=false, deleted=false;
-    uint16_t last_vlen=0;
-    uint32_t last_off=0, off=MKV_SEC_HDR_SIZE;
+    uint32_t off = MKV_SEC_HDR_SIZE;
+    uint8_t buf[128];  /* 栈缓冲区: value >128B 时需多次读取 */
 
     while (off + MKV_REC_OVERHEAD <= kv->sector_size)
     {
         uint32_t rid; uint16_t vlen;
         if (!read_and_verify(kv, kv->active_base, off, &rid, &vlen))
-            { off++; continue; }
+        {
+            if (mkv_probe_erased(kv, kv->active_base, off)) break;
+            off += mkv_try_skip(kv, kv->active_base, off);
+            continue;
+        }
+
+        if (vlen == MKV_TOMBSTONE) {
+            cb(rid, NULL, 0, user);
+        } else if (vlen > 0) {
+            /* 分块读取 value 并直接传给回调 — 不做缓存聚合 */
+            if (vlen <= sizeof(buf)) {
+                fal_partition_read(kv->part,
+                                   kv->active_base + off + MKV_REC_HEAD_SIZE,
+                                   buf, vlen);
+                cb(rid, buf, vlen, user);
+            }
+        }
+        off += rec_total(vlen);
+    }
+    return 0;
+}
+
+int mkv_get(mkv_t *kv, uint32_t id, uint8_t *buf, uint16_t max_len)
+{
+    if (!kv || !kv->initialized || !buf || max_len==0) return -1;
+
+    bool found = false, deleted = false;
+    uint16_t last_vlen = 0;
+    uint32_t last_off = 0, off = MKV_SEC_HDR_SIZE;
+
+    while (off + MKV_REC_OVERHEAD <= kv->sector_size)
+    {
+        uint32_t rid; uint16_t vlen;
+        if (!read_and_verify(kv, kv->active_base, off, &rid, &vlen))
+        {
+            if (mkv_probe_erased(kv, kv->active_base, off)) break;
+            off += mkv_try_skip(kv, kv->active_base, off);
+            continue;
+        }
         if (rid == id)
-            { found=true; last_vlen=vlen; last_off=off; deleted=(vlen==MKV_TOMBSTONE); }
+        {
+            found    = true;
+            last_off = off;
+            last_vlen = vlen;
+            deleted  = (vlen == MKV_TOMBSTONE);
+        }
         off += rec_total(vlen);
     }
 
@@ -324,7 +454,9 @@ int mkv_get(mkv_t *kv, uint32_t id, uint8_t *buf, uint16_t max_len)
     if (last_vlen > max_len) last_vlen = max_len;
     if (last_vlen == 0) return 0;
 
-    if (fal_partition_read(kv->part, kv->active_base + last_off + MKV_REC_HEAD_SIZE, buf, last_vlen) < 0)
+    if (fal_partition_read(kv->part,
+                           kv->active_base + last_off + MKV_REC_HEAD_SIZE,
+                           buf, last_vlen) < 0)
         return -1;
     return (int)last_vlen;
 }
@@ -384,8 +516,9 @@ int mkv_del(mkv_t *kv, uint32_t id)
 int mkv_erase_all(mkv_t *kv)
 {
     if (!kv || !kv->initialized) return -1;
-    fal_partition_erase(kv->part, 0, kv->sector_size);
-    fal_partition_erase(kv->part, kv->sector_size, kv->sector_size);
+    for (uint8_t i = 0; i < kv->sector_count; i++)
+        fal_partition_erase(kv->part, (uint32_t)i * kv->sector_size,
+                            kv->sector_size);
     write_sec_hdr(kv, 0, 1);
     kv->active_base=0; kv->active_seq=1; kv->write_offset=MKV_SEC_HDR_SIZE;
     return 0;

@@ -70,6 +70,15 @@
 /** @brief 最小 sector 大小 (必须 ≥ 2×最大记录) */
 #define MKV_MIN_SECTOR_SIZE 256
 
+/** @brief sector 大小 = 物理擦除块 × 倍数 (默认 1)
+ *
+ *  参数多 (512+) 或 value 大 (BLOB) 时提高倍数确保 GC 后装得下。
+ *  例: W25Q64 擦除块 4KB, MULT=4 → sector=16KB, 30 sector/128KB 分区。
+ *  必须整除分区总大小。 */
+#ifndef MKV_SECTOR_MULT
+#define MKV_SECTOR_MULT 1
+#endif
+
 /**
  * @brief 极简 KV 实例句柄
  *
@@ -79,10 +88,11 @@
 typedef struct
 {
     const struct fal_partition *part;  /**< FAL 分区描述符 */
-    uint32_t sector_size;              /**< 单个 sector 大小 (字节) */
+    uint32_t sector_size;              /**< 单个 sector 大小 (字节), = 物理擦除块 */
     uint32_t active_base;              /**< 当前活跃 sector 起始偏移 */
     uint32_t active_seq;               /**< 当前活跃 sector 的 seq */
     uint32_t write_offset;             /**< 当前 sector 内写入偏移 */
+    uint8_t  sector_count;             /**< 扇区总数 (≥2) */
     bool     initialized;              /**< 是否已初始化 */
 } mkv_t;
 
@@ -97,6 +107,23 @@ typedef struct
  * @return 0 成功，-1 失败 (分区不存在)
  */
 int mkv_init(mkv_t *kv, const char *fal_part_name);
+
+/** @brief 扫描回调 — 逐条接收扇区中的有效记录 */
+typedef void (*mkv_scan_cb)(uint32_t id, const uint8_t *data, uint16_t len, void *user);
+
+/**
+ * @brief 正向扫描扇区，对每条有效记录调用回调
+ *
+ * 扫描顺序即写入顺序。同一 id 多次出现时回调被多次调用
+ * (调用方可自行覆盖——最后调用即最新值)。
+ * 墓碑记录 (vlen=0xFFFF) 回调 len=0。
+ *
+ * @param kv   已初始化实例
+ * @param cb   回调
+ * @param user 透传
+ * @return 0 成功，-1 参数错误
+ */
+int mkv_scan(mkv_t *kv, mkv_scan_cb cb, void *user);
 
 /**
  * @brief 读取 param_id 的最新有效值

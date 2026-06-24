@@ -133,21 +133,21 @@ static int sensor_init(void *drv)
 
     sensor_device_hw_init(dev);
 
-    param_value_t v;
-    param_read(PID_IP_SENSOR_EXPOSURE, &v);
-    sensor_reg_write(dev, 0x00, v.u32);
+    // param_value_t v;
+    // param_read(PID_IP_SENSOR_EXPOSURE, &v);
+    // sensor_reg_write(dev, 0x00, v.u32);
 
-    param_read(PID_IP_SENSOR_GAIN, &v);
-    dev->reg_shadow[1] = *(uint32_t *)&v.f32;
+    // param_read(PID_IP_SENSOR_GAIN, &v); 
+    // dev->reg_shadow[1] = *(uint32_t *)&v.f32;
 
-    param_read(PID_IP_SENSOR_FPS, &v);
-    sensor_reg_write(dev, 0x08, v.u32);
+    // param_read(PID_IP_SENSOR_FPS, &v);
+    // sensor_reg_write(dev, 0x08, v.u32);
 
-    param_read(PID_IP_SENSOR_RESOLUTION, &v);
-    sensor_reg_write(dev, 0x0C, v.u32);
+    // param_read(PID_IP_SENSOR_RESOLUTION, &v);
+    // sensor_reg_write(dev, 0x0C, v.u32);
 
-    param_read(PID_IP_SENSOR_ROI_X, &v);
-    sensor_reg_write(dev, 0x14, v.u32);
+    // param_read(PID_IP_SENSOR_ROI_X, &v);
+    // sensor_reg_write(dev, 0x14, v.u32);
 
     return PARAM_OK;
 }

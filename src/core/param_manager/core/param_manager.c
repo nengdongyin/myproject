@@ -1151,14 +1151,23 @@ int param_load_all(void)
 
     system_lock(SYS_LOCK_PARAM);
 
-    /* 第一阶段: 遍历哈希表，恢复所有 entry 的缓存值 */
-    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
-        param_entry_t *e = g_pm.hash[i];
-        if (!e)
-            continue;
-        int ret = e->vtable->load(e);
+    /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存 */
+    if (g_pm.storage->load_all) {
+        int ret = g_pm.storage->load_all(g_pm.storage->ctx);
         if (ret < 0 && first_err == PARAM_OK)
             first_err = ret;
+    }
+
+    /* 第一阶段 (兜底): 逐条加载 — load_all 失败或未实现时回退 */
+    if (!g_pm.storage->load_all || first_err != PARAM_OK) {
+        for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
+            param_entry_t *e = g_pm.hash[i];
+            if (!e)
+                continue;
+            int ret = e->vtable->load(e);
+            if (ret < 0 && first_err == PARAM_OK)
+                first_err = ret;
+        }
     }
 
     system_unlock(SYS_LOCK_PARAM);

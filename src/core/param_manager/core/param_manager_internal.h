@@ -52,6 +52,20 @@ extern "C"
     /** @brief 通过 param_id 查找参数条目 (哈希查找) */
     param_entry_t *param_entry_find(uint32_t param_id);
 
+    /**
+     * @brief 存储后端批量恢复 — 直接写入参数缓存
+     *
+     * 供存储后端在 load_all 回调中逐条调用。
+     * 正向扫描追加写日志时，同一 id 后出现的值覆盖前值，
+     * 扫描完成时缓存中即为最新值。
+     *
+     * @param param_id 参数 ID
+     * @param data     值数据 (NULL 表示删除/墓碑)
+     * @param len      数据长度 (0 表示删除/墓碑)
+     * @return PARAM_OK 成功，PARAM_ERR_NOT_FOUND 参数不存在
+     */
+    int param_cache_restore(uint32_t param_id, const uint8_t *data, uint16_t len);
+
     /** @brief dirty 统计计数 +1 */
     void param_stats_dirty_inc(void);
     /** @brief dirty 统计计数 -1 (防负数) */

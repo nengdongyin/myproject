@@ -366,6 +366,10 @@ extern "C"
         void *ctx; /**< 实例上下文 (传递给所有回调) */
         /** 加载指定参数的数据。返回实际读取字节数，≤0 表示不存在。 */
         int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len);
+        /** 批量加载全部参数。NULL=走逐条 load；非 NULL=param_load_all 优先调用。
+         *  后端应一次扫描完成所有数据恢复（如通过 param_cache_restore），
+         *  典型场景是追加写日志型存储（mkv）的 O(N²)→O(N) 优化。 */
+        int (*load_all)(void *ctx);
         /** 保存指定参数的数据。删除操作请用 delete 回调，不要用 len==0 隐式删除。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
         /** 删除单个参数的持久化数据 (NULL = 后端不支持) */

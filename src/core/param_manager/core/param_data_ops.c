@@ -254,6 +254,33 @@ static int string_load(param_entry_t *e)
 }
 
 /* ================================================================
+ *  批量恢复 — 供存储后端 load_all 使用
+ * ================================================================ */
+
+int param_cache_restore(uint32_t param_id, const uint8_t *data, uint16_t len)
+{
+    param_entry_t *e = param_entry_find(param_id);
+    if (!e) return PARAM_ERR_NOT_FOUND;
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+
+    if (data && len > 0) {
+        param_value_t value;
+        memset(&value, 0, sizeof(value));
+        if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
+            value.ptr = (void *)data;
+        else
+            memcpy(&value, data, len < sizeof(value) ? len : sizeof(value));
+        g_param_data_ops[t].cache_update(e, value);
+    } else {
+        /* 墓碑/删除 → 重置为默认值 */
+        g_param_data_ops[t].reset(e);
+    }
+    return PARAM_OK;
+}
+
+/* ================================================================
  *  reset 函数
  * ================================================================ */
 

@@ -55,26 +55,26 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
     LOG_INF("=========================================");
 
     /* ── VSC Lite pipeline ── */
-    vsc_lite_pipeline_t isp_pipe;
-    int rc = vsc_lite_pipeline_init(&isp_pipe, vsc_lite_board_stages, vsc_lite_board_num_stages);
-    if (rc != VSC_OK) {
-        LOG_ERR("VSC Lite pipeline init failed: %d", rc);
-    } else {
-        vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
-        vsc_resolver_result_t result;
-        rc = vsc_lite_try_fmt(&isp_pipe, &intent, &result);
-        if (rc == VSC_OK && vsc_fmt_is_valid(&result.primary_fmt)) {
-            LOG_INF("VSC Lite negotiated: %ux%u fmt=0x%x fps=%u",
-                    result.primary_fmt.spatial.width, result.primary_fmt.spatial.height,
-                    (unsigned)result.primary_fmt.spatial.pixel_format,
-                    (unsigned)result.primary_fmt.spatial.frame_rate_num);
-            vsc_lite_commit_fmt(&isp_pipe, &result.primary_fmt);
-        } else {
-            LOG_WRN("VSC Lite negotiation failed: %d", rc);
-        }
-    }
+    // vsc_lite_pipeline_t isp_pipe;
+    // int rc = vsc_lite_pipeline_init(&isp_pipe, vsc_lite_board_stages, vsc_lite_board_num_stages);
+    // if (rc != VSC_OK) {
+    //     LOG_ERR("VSC Lite pipeline init failed: %d", rc);
+    // } else {
+    //     vsc_mbus_fmt_t intent = { { 1920, 1080, 0, 0, 0, 0, 0, 0, VSC_FMT_RAW10, 30, 1, 10, 4 }};
+    //     vsc_resolver_result_t result;
+    //     rc = vsc_lite_try_fmt(&isp_pipe, &intent, &result);
+    //     if (rc == VSC_OK && vsc_fmt_is_valid(&result.primary_fmt)) {
+    //         LOG_INF("VSC Lite negotiated: %ux%u fmt=0x%x fps=%u",
+    //                 result.primary_fmt.spatial.width, result.primary_fmt.spatial.height,
+    //                 (unsigned)result.primary_fmt.spatial.pixel_format,
+    //                 (unsigned)result.primary_fmt.spatial.frame_rate_num);
+    //         vsc_lite_commit_fmt(&isp_pipe, &result.primary_fmt);
+    //     } else {
+    //         LOG_WRN("VSC Lite negotiation failed: %d", rc);
+    //     }
+    // }
 
-    app_sensor_demo();
+    //app_sensor_demo();
 
     k_thread_create(&protocol_parser_thread_data, protocol_parser_stack,
                     K_THREAD_STACK_SIZEOF(protocol_parser_stack),
