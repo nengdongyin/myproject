@@ -1,7 +1,9 @@
 /**
  * @file    isc_internal.h
  * @brief   ISC 模块内部定义 (仅 isc_core.c 及传感器驱动 .c 引用)
- * @details 包含 isc_dev_t 完整结构体、状态枚举、控制缓存。
+ * @details 包含 isc_dev_t 完整结构体、状态枚举。
+ *          控制值的缓存策略由各传感器驱动自行决定。
+ *          驱动可通过 dev->driver_priv 关联私有数据。
  *
  *          传感器驱动通过 `dev->port` / `dev->fpga_ops` 访问平台接口,
  *          这是刻意的架构权衡 — 在不透明指针封装与嵌入式零开销之间取平衡。
@@ -21,13 +23,6 @@ typedef enum {
 } isc_state_t;
 
 
-/* ──── 控制项缓存 ──── */
-typedef struct isc_ctrl_cache {
-    uint32_t          cid;        /**< 控制 ID                                    */
-    isc_ctrl_value_t  value;      /**< 缓存值                                      */
-    uint32_t          flags;      /**< 缓存标志 (含 ISC_CTRL_FLAG_VOLATILE 副本)    */
-} isc_ctrl_cache_t;
-
 /* ──── 传感器设备实例 ──── */
 struct isc_dev_t {
     /* 身份 */
@@ -44,8 +39,6 @@ struct isc_dev_t {
     uint32_t                cached_caps;    /**< 能力位图快照 (isc_open 时探测一次)  */
 
     /* 控制 */
-    isc_ctrl_cache_t        ctrl_cache[ISC_MAX_CTRLS]; /**< 控制值缓存               */
-    uint8_t                 num_ctrls;      /**< 实际控制项数量                      */
     uint32_t                last_ctrl_cid;  /**< isc_query_next_ctrl 枚举游标       */
 
     /* 回调 */
@@ -53,6 +46,9 @@ struct isc_dev_t {
     void                   *cb_user_data;   /**< 回调用户数据                        */
     isc_on_error_t          on_error;       /**< 预留: 异步异常通知 (需硬件中断+轮询线程配合) */
     void                   *err_user_data;  /**< 异常回调用户数据                     */
+
+    /* 驱动私有数据 */
+    void                   *driver_priv;    /**< 驱动自行管理的私有数据指针(init 赋值, deinit 清零) */
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════

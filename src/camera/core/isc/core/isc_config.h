@@ -13,7 +13,6 @@
 #define ISC_MAX_SENSORS         4   /**< 最大可注册传感器驱动数         */
 
 /* ── 控制项 ── */
-#define ISC_MAX_CTRLS           24  /**< 最大控制项数（含标准+私有）   */
 #define ISC_MAX_EXT_CTRLS       8   /**< 批量控制最大项数               */
 #define ISC_MAX_CTRL_NAME       32  /**< 控制项名称最大字符数          */
 #define ISC_MAX_MENU_NAME       32  /**< 菜单项名称最大字符数          */

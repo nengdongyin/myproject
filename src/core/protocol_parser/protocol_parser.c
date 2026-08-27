@@ -404,6 +404,7 @@ bool protocol_parser_check_timeout_poll(protocol_parser_t *parser)
     if (parser->ops && parser->ops->poll)
     {
         poll_result = parser->ops->poll(parser);
+        return poll_result;
     }
 
     if (parser->config.timeout_ms == 0)

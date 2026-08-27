@@ -721,7 +721,7 @@ bool ymodem_sender_poll(ymodem_sender_t* send)
     if (!send) {
         return false;
     }
-    if (send->stage == YMODEM_STAGE_IDLE) {
+    if (send->stage == YMODEM_STAGE_IDLE || send->stage == YMODEM_STAGE_ABORTED) {
         return false;
     }
     uint32_t now = system_get_time_ms();
@@ -740,6 +740,11 @@ bool ymodem_sender_start(ymodem_sender_t* send)
         return false;
     }
     send->stage = YMODEM_STAGE_ESTABLISHING;
+    memset(&send->process, 0, sizeof(send->process));
+    memset(&send->file_info, 0, sizeof(send->file_info));
+    memset(&send->frame_info, 0, sizeof(send->frame_info));   
+    send->error = YMODEM_ERROR_NONE;
+    send->buffer.tx_buffer_active_len = 0;
     return true;
 }
 

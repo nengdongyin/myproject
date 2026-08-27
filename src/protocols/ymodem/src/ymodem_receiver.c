@@ -52,7 +52,6 @@ bool ymodem_receiver_reset(ymodem_receiver_parser_t* parser)
     /* ---- 阶段复位（按当前错误类型分级） ---- */
     if (parser->error == YMODEM_ERROR_NONE) {
         parser->frame_info.current_frame_error_count = 0;
-        parser->process.is_handshake_active = true;
         parser->process.handshake_count = 0;
         switch (parser->stage)
         {
@@ -640,7 +639,6 @@ ymodem_error_e ymodem_receiver_parse(ymodem_receiver_parser_t* parser, const uin
                 parser->buffer.rx_buffer[parser->frame_info.current_frame_rev_len++] = byte;
                 parser->stat = YMODEM_RECV_WAIT_SEQ;
                 parser->frame_info.frame_is_start = true;
-                parser->process.is_handshake_active = true;
                 parser->process.last_time_ms = system_get_time_ms();
             }
             else if (byte == YMODEM_STX) {
@@ -650,7 +648,6 @@ ymodem_error_e ymodem_receiver_parse(ymodem_receiver_parser_t* parser, const uin
                 parser->buffer.rx_buffer[parser->frame_info.current_frame_rev_len++] = byte;
                 parser->stat = YMODEM_RECV_WAIT_SEQ;
                 parser->frame_info.frame_is_start = true;
-                parser->process.is_handshake_active = true;
                 parser->process.last_time_ms = system_get_time_ms();
             }
             /* EOT: 单字节帧，直接触发 stage 处理 */
@@ -668,7 +665,7 @@ ymodem_error_e ymodem_receiver_parse(ymodem_receiver_parser_t* parser, const uin
                 parser->process.last_time_ms = system_get_time_ms();
             }
             else {
-                ;
+                saw_garbage = true;
             }
             break;
         }
@@ -686,6 +683,7 @@ ymodem_error_e ymodem_receiver_parse(ymodem_receiver_parser_t* parser, const uin
                     /* 正常帧 */
                     if (parser->buffer.rx_buffer[YMODEM_SEQ_BYTE_INDEX] == expected_seq) {
                         parser->stat = YMODEM_RECV_WAIT_DATA;
+                        parser->process.is_handshake_active = true;
                     }
                     /* 重传帧（seq 为 prev） */
                     else if (parser->buffer.rx_buffer[YMODEM_SEQ_BYTE_INDEX] == prev_seq) {
@@ -788,7 +786,7 @@ bool ymodem_receiver_poll(ymodem_receiver_parser_t* parser)
         if (parser->process.is_handshake_active == false) {
             parser->error = YMODEM_ERROR_HANDSHAKE_NACK;
             frame_stage_process(parser);
-            return true;
+            return false;
         }
     }
     /* 帧接收超时 → NAK */

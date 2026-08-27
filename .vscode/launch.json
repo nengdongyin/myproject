@@ -25,7 +25,13 @@
         "adapter speed 5000"
       ],
       "rtos": "Zephyr",
-      "preLaunchTask": "Compile Project"
+      "preLaunchTask": "Compile Project",
+      "postLaunchCommands": [
+        {
+          "text": "monitor reset init",
+          "ignoreFailures": true
+        }
+      ]
     },
     {
       "name": "Debug PC Tests",

@@ -70,18 +70,6 @@ static int8_t dev_index(const isc_dev_t *dev)
 }
 
 /**
- * @brief 在控制缓存中查找 CID 索引
- * @return 索引, 未找到返回 ISC_MAX_CTRLS
- */
-static uint8_t find_cache(const isc_dev_t *dev, uint32_t cid)
-{
-    for (uint8_t i = 0; i < dev->num_ctrls; i++) {
-        if (dev->ctrl_cache[i].cid == cid) return i;
-    }
-    return ISC_MAX_CTRLS;
-}
-
-/**
  * @brief 将控制值钳位到 [min,max] 并对齐 step
  * @details 根据控制类型分发: INT/ENUM 做整数钳位+步进对齐, BOOL 钳到 0/1,
  *          FLOAT 做浮点钳位+步进对齐 (纯 float 运算, 无 double 依赖, 嵌入式 FPU 友好)。
@@ -389,7 +377,6 @@ int isc_open(const char *model, isc_dev_t **dev)
         }
     }
 
-    d->num_ctrls     = 0;
     d->last_ctrl_cid = 0;
 
     probe_capabilities(d);
@@ -692,34 +679,14 @@ int isc_get_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t *value)
     if (dev->state < ISC_STATE_OPEN) return ISC_ERR_NOT_OPEN;
     if (dev->ops->get_ctrl == NULL) return ISC_ERR_NOT_SUPPORTED;
 
-    /* 检查缓存: 非 VOLATILE 且有缓存 → 直接返回 */
-    uint8_t ci = find_cache(dev, cid);
-    if (ci < dev->num_ctrls) {
-        if (!(dev->ctrl_cache[ci].flags & ISC_CTRL_FLAG_VOLATILE)) {
-            *value = dev->ctrl_cache[ci].value;
-            return ISC_OK;
-        }
-    }
-
-    int rc = dev->ops->get_ctrl(dev, cid, value);
-    if (rc != ISC_OK) return rc;
-
-    /* 更新缓存 — 若为新 CID 且缓存未满则分配槽位 (与 set_ctrl 对称) */
-    if (ci >= ISC_MAX_CTRLS && dev->num_ctrls < ISC_MAX_CTRLS) {
-        ci = dev->num_ctrls++;
-        dev->ctrl_cache[ci].cid = cid;
-    }
-    if (ci < ISC_MAX_CTRLS) {
-        dev->ctrl_cache[ci].value = *value;
-    }
-    return ISC_OK;
+    /* 直接委托驱动 — 缓存策略由驱动自行决定 */
+    return dev->ops->get_ctrl(dev, cid, value);
 }
 
 int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value)
 {
     int rc;
     isc_ctrl_desc_t desc;
-    uint8_t ci;
 
     system_lock(SYS_LOCK_ISC);
 
@@ -749,19 +716,6 @@ int isc_set_ctrl(isc_dev_t *dev, uint32_t cid, isc_ctrl_value_t value)
 
     rc = dev->ops->set_ctrl(dev, cid, value);
     if (rc != ISC_OK) { system_unlock(SYS_LOCK_ISC); return rc; }
-
-    ci = find_cache(dev, cid);
-    if (ci >= ISC_MAX_CTRLS) {
-        if (dev->num_ctrls < ISC_MAX_CTRLS) {
-            ci = dev->num_ctrls++;
-            dev->ctrl_cache[ci].cid = cid;
-        } else {
-            system_unlock(SYS_LOCK_ISC);
-            return ISC_OK;
-        }
-    }
-    dev->ctrl_cache[ci].value = value;
-    dev->ctrl_cache[ci].flags = desc.flags;
 
     /* 记录回调指针, 在锁外触发 — 回调可安全调用 ISC API */
     {
