@@ -411,6 +411,9 @@ static void frame_stage_process(ymodem_receiver_parser_t* parser)
                         frame_ack_c_with_data(parser, YMODEM_RECV_EVENT_FILE_INFO);
                     }
                 }
+                else{
+                    return;
+                }
                 break;
             }
 
@@ -436,6 +439,9 @@ static void frame_stage_process(ymodem_receiver_parser_t* parser)
                     parser->stage = YMODEM_STAGE_FINISHING;
                     frame_nak_without_data(parser);
                 }
+                else{
+                    return;
+                }
                 break;
             }
 
@@ -458,9 +464,10 @@ static void frame_stage_process(ymodem_receiver_parser_t* parser)
                     parser->stage = YMODEM_STAGE_FINISHING;
                     frame_nak_without_data(parser);
                 }
-                else {
-                    ;
+                else{
+                    return;
                 }
+
                 break;
             }
 
