@@ -127,14 +127,18 @@ static void cache_update_value(param_entry_t *e, param_value_t value)
 static void cache_update_blob(param_entry_t *e, param_value_t value)
 {
     param_blob_entry_t *be = (param_blob_entry_t *)e;
-    if (be->blob_size > 0 && value.ptr)
+    /* src==dst 时跳过: param_load_one / param_reset_one / param_update
+       会把 cache 值原样传回写入路径, memcpy 自拷贝属未定义行为 */
+    if (be->blob_size > 0 && value.ptr && be->cache.ptr != value.ptr)
         memcpy(be->cache.ptr, value.ptr, be->blob_size);
 }
 
 static void cache_update_string(param_entry_t *e, param_value_t value)
 {
     param_string_entry_t *se = (param_string_entry_t *)e;
-    if (se->max_len > 0 && value.ptr) {
+    /* src==dst 时跳过: param_load_one / param_reset_one / param_update
+       会把 cache 值原样传回写入路径, strncpy 自拷贝属未定义行为 */
+    if (se->max_len > 0 && value.ptr && se->cache.ptr != value.ptr) {
         strncpy((char *)se->cache.ptr, (const char *)value.ptr, se->max_len);
         ((char *)se->cache.ptr)[se->max_len] = '\0';
     }

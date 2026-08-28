@@ -54,6 +54,9 @@ static int ip_param_read(param_entry_t *e, param_value_t *value)
 
     /* 阶段 1: 优先从硬件读取最新值。成功则回写缓存并返回。 */
     if (inst && inst->read) {
+        /* 防御性清零: 回调未处理该 id 却返回 PARAM_OK 时,
+           输出参数不会携带栈上随机值污染 cache */
+        memset(value, 0, sizeof(*value));
         int ret = inst->read(inst->driver, e->param_id, value);
         if (ret == PARAM_OK) {
             system_lock(SYS_LOCK_PARAM);
@@ -329,6 +332,7 @@ static void ip_module_deinit(param_module_node_t *m)
 {
     ip_instance_t *inst = (ip_instance_t *)m;
     inst->dirty_map = 0;
+    m->initialized = 0;
 }
 
 static void ip_module_reset(param_module_node_t *m)
@@ -355,8 +359,12 @@ static int ip_module_init(param_module_node_t *m)
     if (inst->dirty_map != 0)
         m->dirty = 1;
 
-    if (inst->init)
-        return inst->init(inst->driver);
+    if (inst->init) {
+        int ret = inst->init(inst->driver);
+        if (ret != PARAM_OK)
+            return ret;
+    }
+    m->initialized = 1;
     return PARAM_OK;
 }
 

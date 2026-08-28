@@ -31,6 +31,12 @@ extern "C"
 
     /**
      * @brief IP Driver 读回调
+     *
+     * @attention 仅当确实从硬件寄存器取得有效值时才允许返回 PARAM_OK:
+     *   框架对返回值无条件回写缓存, 返回 PARAM_OK 但 value 未填有效值
+     *   将污染缓存并可能被持久化。未取得硬件值时必须返回错误,
+     *   框架会回退到缓存值。
+     *
      * @param driver   driver 私有数据指针
      * @param param_id 全局唯一参数 ID (MAKE_PARAM_ID 风格)
      * @param value    [out] 读出的值

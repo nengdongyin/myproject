@@ -40,6 +40,9 @@ static int app_read(param_entry_t *e, param_value_t *value)
 
     /* 阶段 1: 尝试通过 read 回调获取实时值 (与 IP ip_param_read 对称) */
     if (m && m->read) {
+        /* 防御性清零: 回调未处理该 id 却返回 PARAM_OK 时,
+           输出参数不会携带栈上随机值污染 cache */
+        memset(value, 0, sizeof(*value));
         int ret = m->read(m->ctx, e->param_id, value);
         if (ret == PARAM_OK) {
             param_type_t t = entry_type(e);
@@ -266,8 +269,13 @@ static int app_module_init(param_module_node_t *m)
 {
     param_module_t *mod = (param_module_t *)m;
     m->dirty = 0;
-    if (mod->init)
-        return mod->init(mod->ctx);
+
+    if (mod->init) {
+        int ret = mod->init(mod->ctx);
+        if (ret != PARAM_OK)
+            return ret;
+    }
+    m->initialized = 1;
     return PARAM_OK;
 }
 
@@ -281,7 +289,7 @@ static int app_module_exec(param_module_node_t *m, uint32_t cmd_id, param_value_
 
 static void app_module_deinit(param_module_node_t *m)
 {
-    (void)m;
+    m->initialized = 0;
 }
 
 const param_module_vtable_t app_module_vtable = {

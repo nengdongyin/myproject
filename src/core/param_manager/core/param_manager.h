@@ -131,6 +131,11 @@ extern "C"
      * 若提供且返回 PARAM_OK，框架回写缓存后返回。
      * NULL 或返回错误 → 回退到读取缓存值 (与 IP ip_param_read 对称)。
      *
+     * @attention 仅当确实从权威源 (硬件寄存器/实时数据) 取得有效值
+     *   时才允许返回 PARAM_OK: 框架对返回值无条件回写缓存,
+     *   返回 PARAM_OK 但 value 未填有效值将污染缓存并可能被持久化。
+     *   未取得权威值时必须返回错误, 框架会回退到缓存值。
+     *
      * @param ctx      模块私有上下文
      * @param param_id 参数 ID
      * @param value    [out] 读到的值
@@ -401,6 +406,7 @@ extern "C"
         param_entry_t **table;               /**< 参数条目指针数组 */
         const param_module_vtable_t *vtable; /**< 指向模块级 vtable */
         uint8_t dirty : 1;                   /**< 模块级 dirty 标志 */
+        uint8_t initialized : 1;             /**< 初始化完成标志 (vtable->init 成功置位, deinit 清除) */
     };
 
     /**
@@ -460,6 +466,12 @@ extern "C"
      * @brief 反初始化，释放所有资源
      */
     void param_deinit(void);
+
+    /** @brief 查询参数管理框架是否已初始化 (param_init 成功后 true, param_deinit 后 false) */
+    bool param_is_initialized(void);
+
+    /** @brief 查询指定模块是否已完成初始化 (vtable->init 成功后置位, deinit 清除) */
+    bool param_module_is_initialized(uint16_t module_id);
 
     /* ================================================================
      *  存储后端管理
@@ -542,17 +554,57 @@ extern "C"
      */
     int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len);
 
+    /**
+     * @brief 用缓存当前值重新执行完整写入路径 (re-apply)
+     *
+     * 直接取 entry->cache 作为新值走 param_write 完整流程:
+     * pre_write 校验(裁剪/枚举校验) → write/apply 回调 → 缓存更新 →
+     * dirty 标记 → notify 通知。不触发任何硬件/回调读取。
+     *
+     * 适用场景: 外部条件变化 (range 收紧、模式切换、约束变更) 后，
+     * 需要对已缓存参数重新校验/下发，无需调用者先 param_read 再 param_write。
+     *
+     * @note READONLY / EXEC 参数按写入规则拒绝。
+     *
+     * @param param_id 参数 ID
+     * @return PARAM_OK 成功，或错误码
+     */
+    int param_update(uint32_t param_id);
+
     /* ================================================================
      *  参数读取
      * ================================================================ */
 
     /**
-     * @brief 读取参数当前缓存值
+     * @brief 读取参数当前值 (优先硬件/回调读取，失败回退缓存)
+     *
+     * @attention STRING/BLOB 类型的返回值为指向框架内部静态缓冲区的指针
+     *   (value->ptr)，并非值的拷贝:
+     *   - 其他线程并发写入该参数后，指针内容会随之改变 (非快照)
+     *   - 指针生命周期与参数条目绑定，禁止长期持有或释放
+     *   - 需要安全拷贝时请改用 param_read_string() / param_read_raw()
+     *
      * @param param_id 参数 ID
      * @param value    [out] 接收值
      * @return PARAM_OK 成功，或错误码
      */
     int param_read(uint32_t param_id, param_value_t *value);
+
+    /**
+     * @brief 读取参数当前缓存值 (纯缓存读取，绝不触发硬件/回调)
+     *
+     * 与 param_read 的区别: 直接返回 entry->cache，不调用 App 模块的
+     * read 回调或 IP driver 的硬件读取。
+     *
+     * 适用场景: read-modify-write (读缓存→修改→param_write_cache)、
+     * 高频轮询展示、硬件未就绪时需要确定性返回的场合。
+     *
+     * @param param_id 参数 ID
+     * @param value    [out] 接收值 (STRING/BLOB 返回内部缓冲区指针，
+     *                 风险与 param_read 相同)
+     * @return PARAM_OK 成功，或错误码
+     */
+    int param_read_cache(uint32_t param_id, param_value_t *value);
 
     /**
      * @brief 原始字节流读取参数

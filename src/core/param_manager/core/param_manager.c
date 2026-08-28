@@ -329,6 +329,21 @@ void param_deinit(void)
     system_unlock(SYS_LOCK_PARAM);
 }
 
+/** @brief 查询参数管理框架是否已初始化 */
+bool param_is_initialized(void)
+{
+    return g_pm.initialized != 0;
+}
+
+/** @brief 查询指定模块是否已完成初始化 (vtable->init 成功后置位) */
+bool param_module_is_initialized(uint16_t module_id)
+{
+    if (!g_pm.initialized)
+        return false;
+    param_module_node_t *m = param_module_find(module_id);
+    return m && m->initialized;
+}
+
 /* ================================================================
  *  模块注册
  *
@@ -359,6 +374,10 @@ void param_deinit(void)
  *
  * App 和 IP 模块均通过此接口注册，消除双轨注册。
  * 注册前调用者必须先设置 node->vtable 和 node->module_id。
+ *
+ * @note 模块应在 param_load_all / param_reset_all 之前注册。
+ *       晚注册的模块不会自动初始化 (initialized 保持 0),
+ *       需再次调用 param_load_all / param_reset_all 触发 vtable->init。
  *
  * @param node    模块基类节点指针（vtable + module_id 已设）
  * @param entries 参数条目指针数组
@@ -562,6 +581,47 @@ int param_read(uint32_t param_id, param_value_t *value)
     int ret = e->vtable->read(e, value);
     system_unlock(SYS_LOCK_PARAM);
     return ret;
+}
+
+int param_read_cache(uint32_t param_id, param_value_t *value)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!value)
+        return PARAM_ERR_INVALID_ID;
+
+    system_lock(SYS_LOCK_PARAM);
+    param_entry_t *e = find_entry(param_id);
+    if (!e) {
+        system_unlock(SYS_LOCK_PARAM);
+        return PARAM_ERR_INVALID_ID;
+    }
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) {
+        system_unlock(SYS_LOCK_PARAM);
+        return PARAM_ERR_TYPE_MISMATCH;
+    }
+
+    int ret = g_param_data_ops[t].read(e, value);
+    system_unlock(SYS_LOCK_PARAM);
+    return ret;
+}
+
+int param_update(uint32_t param_id)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    /* 先取缓存快照 (param_read_cache 锁内), 再走 param_write 完整路径
+       (pre_write → apply → cache_update → dirty → notify)。
+       注意: 快照与 write 之间非原子, 并发写者可能覆盖此值 */
+    param_value_t cached;
+    int ret = param_read_cache(param_id, &cached);
+    if (ret != PARAM_OK)
+        return ret;
+
+    return param_write(param_id, cached);
 }
 
 /**
@@ -1140,37 +1200,42 @@ int param_migrate_storage(const param_storage_drv_t *storage,
  *      对每个模块调用 vtable->init()。通常用于将恢复的缓存值下发到硬件。
  *
  * 两阶段分离的意义: 确保 init 回调中通过 param_read() 能读到正确的缓存值。
+ *
+ * @note 存储后端不可用时跳过 LOAD 阶段, INIT 阶段仍执行
+ *       (param_init 允许 storage=NULL 的系统依赖此路径完成模块初始化)。
  */
 int param_load_all(void)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
-    if (!g_pm.storage || !g_pm.storage->load)
-        return PARAM_ERR_NOT_FOUND;
     int first_err = PARAM_OK;
 
-    system_lock(SYS_LOCK_PARAM);
+    /* 无存储后端时跳过 LOAD 阶段, 但 INIT 阶段仍须执行:
+       模块初始化 (标脏/下发默认值) 不依赖持久化 */
+    if (g_pm.storage && g_pm.storage->load) {
+        system_lock(SYS_LOCK_PARAM);
 
-    /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存 */
-    if (g_pm.storage->load_all) {
-        int ret = g_pm.storage->load_all(g_pm.storage->ctx);
-        if (ret < 0 && first_err == PARAM_OK)
-            first_err = ret;
-    }
-
-    /* 第一阶段 (兜底): 逐条加载 — load_all 失败或未实现时回退 */
-    if (!g_pm.storage->load_all || first_err != PARAM_OK) {
-        for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
-            param_entry_t *e = g_pm.hash[i];
-            if (!e)
-                continue;
-            int ret = e->vtable->load(e);
+        /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存 */
+        if (g_pm.storage->load_all) {
+            int ret = g_pm.storage->load_all(g_pm.storage->ctx);
             if (ret < 0 && first_err == PARAM_OK)
                 first_err = ret;
         }
-    }
 
-    system_unlock(SYS_LOCK_PARAM);
+        /* 第一阶段 (兜底): 逐条加载 — load_all 失败或未实现时回退 */
+        if (!g_pm.storage->load_all || first_err != PARAM_OK) {
+            for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
+                param_entry_t *e = g_pm.hash[i];
+                if (!e)
+                    continue;
+                int ret = e->vtable->load(e);
+                if (ret < 0 && first_err == PARAM_OK)
+                    first_err = ret;
+            }
+        }
+
+        system_unlock(SYS_LOCK_PARAM);
+    }
 
     /* 第二阶段: 按 MODULE_INIT_ORDER 顺序初始化每个模块 */
     param_module_node_t *m = g_pm.module_head;
