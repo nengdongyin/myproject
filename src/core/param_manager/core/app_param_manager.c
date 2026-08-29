@@ -178,7 +178,12 @@ static int app_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len)
         param_value_t value = { .ptr = (void *)data };
         return app_write(e, value);
     }
-
+    if (t == PARAM_TYPE_STRING) {
+        // STRING 无需检查 len（由 cache_update_string 自动截断）
+        param_value_t value = { .ptr = (void *)data };
+        return app_write(e, value);
+    }
+    // 值类型 (UINT/INT/FLOAT/BOOL/ENUM) 处理
     if (len == 0 || len > sizeof(param_value_t)) return PARAM_ERR_TYPE_MISMATCH;
 
     param_value_t value;

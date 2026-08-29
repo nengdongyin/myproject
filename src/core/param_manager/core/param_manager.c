@@ -576,10 +576,7 @@ int param_read(uint32_t param_id, param_value_t *value)
     param_entry_t *e = find_entry(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
-
-    system_lock(SYS_LOCK_PARAM);
     int ret = e->vtable->read(e, value);
-    system_unlock(SYS_LOCK_PARAM);
     return ret;
 }
 
