@@ -83,6 +83,23 @@ void    *system_malloc(size_t size);
 void     system_free(void *ptr);
 uint32_t system_get_time_ms(void);
 
+/* ================================================================
+ *  句柄式互斥锁 — 供 VFS 等需要"每实例一把锁"的子系统使用
+ *  与上面的 system_lock(id) 固定枚举锁并存，互不影响。
+ * ================================================================ */
+
+/** @brief 内部互斥句柄池容量（需 ≥ 需要的并发锁数，VFS 需 ≥ VFS_MAX_MOUNTS+1） */
+#ifndef SYS_MUTEX_POOL_SIZE
+#define SYS_MUTEX_POOL_SIZE 12
+#endif
+
+typedef struct sys_mutex sys_mutex_t;
+
+sys_mutex_t *sys_mutex_create(void);         /**< 从池取一把锁，池满返回 NULL */
+void         sys_mutex_destroy(sys_mutex_t *m);
+void         sys_mutex_lock(sys_mutex_t *m);   /**< 对 NULL 安全 */
+void         sys_mutex_unlock(sys_mutex_t *m); /**< 对 NULL 安全 */
+
 #ifdef __cplusplus
 }
 #endif

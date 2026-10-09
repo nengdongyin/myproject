@@ -5,6 +5,7 @@
 #include "file_storage_init.h"
 #include "param_manager_init.h"
 #include "vsc_lite.h"
+#include "port.h"
 #include "crop_vsc.h"
 #include "binning_vsc.h"
 #include "decoder_vsc.h"
@@ -31,6 +32,9 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
     test_ctx_t *ctx = &test_ctx;
 
     memset(ctx, 0, sizeof(test_ctx_t));
+
+    /* 平台互斥锁初始化：param/file 等子系统的 system_lock(id) 依赖此步 */
+    system_mutex_init();
 
     if (!protocol_chain_init(ctx))
     {

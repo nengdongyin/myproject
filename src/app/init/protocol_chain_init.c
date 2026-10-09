@@ -5,6 +5,8 @@
 #include "param_manager.h"
 #include <string.h>
 #include "param_dump.h"
+#include "storage_config.h"
+#include <stdio.h>
 
 LOG_MODULE_REGISTER(chain_test, LOG_LEVEL_DBG);
 
@@ -23,6 +25,12 @@ static void dump_cb(const char *line, void *user_data)
 {
     (void)user_data;
     LOG_INF("%s", line);
+}
+
+/** @brief 拼装 "/lfs/<name>" 完整路径，便于 vfs_open/stat */
+static void fp_path(char *buf, size_t n, const char *name)
+{
+    snprintf(buf, n, STORAGE_MNT_FILES "/%s", name);
 }
 /* ================================================================
  *  字节序转换 — wire format 为 big-endian
@@ -125,19 +133,32 @@ static void ymodem_recv_on_frame_ready(protocol_parser_t *parser,
     {
 
     case YMODEM_RECV_EVENT_FILE_INFO:
+    {
+        char path[VFS_PATH_MAX];
+        fp_path(path, sizeof(path), event->file_name);
         LOG_INF("Ymodem recv FILE_INFO: name=\"%s\" size=%u",
                 event->file_name, event->file_size);
-        fp_open_for_write(ctx->recv_fp, event->file_name);
+        if (ctx->recv_fd >= 0) /* 上一传输未正常收尾则先释放 */
+            vfs_close(ctx->recv_fd);
+        ctx->recv_fd = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
+        if (ctx->recv_fd < 0)
+            LOG_ERR("Ymodem recv: open %s failed: %d", path, (int)ctx->recv_fd);
         break;
+    }
 
     case YMODEM_RECV_EVENT_DATA_PACKET:
-        fp_write(ctx->recv_fp, event->data, event->data_len);
+        if (ctx->recv_fd >= 0)
+            vfs_write(ctx->recv_fd, event->data, event->data_len);
         break;
 
     case YMODEM_RECV_EVENT_TRANSFER_COMPLETE:
         LOG_INF("Ymodem recv: TRANSFER_COMPLETE (%u bytes total)",
                 event->total_received);
-        fp_close(ctx->recv_fp);
+        if (ctx->recv_fd >= 0)
+        {
+            vfs_close(ctx->recv_fd);
+            ctx->recv_fd = VFS_FD_INVALID;
+        }
         break;
 
     case YMODEM_RECV_EVENT_TRANSFER_FINISHED:
@@ -146,6 +167,11 @@ static void ymodem_recv_on_frame_ready(protocol_parser_t *parser,
 
     case YMODEM_RECV_EVENT_ERROR:
         LOG_ERR("Ymodem recv: transfer aborted");
+        if (ctx->recv_fd >= 0)
+        {
+            vfs_close(ctx->recv_fd);
+            ctx->recv_fd = VFS_FD_INVALID;
+        }
         break;
 
     default:
@@ -173,13 +199,26 @@ static void ymodem_send_on_frame_ready(protocol_parser_t *parser,
         }
         else
         {
-            uint32_t size = 0;
-            if (fp_get_size(ctx->send_fp, ctx->send_file_name, &size) != FP_OK)
+            if (ctx->send_fd >= 0) /* 上一传输未正常收尾则先释放 */
             {
-                LOG_ERR("Ymodem send: cannot get size of %s", ctx->send_file_name);
+                vfs_close(ctx->send_fd);
+                ctx->send_fd = VFS_FD_INVALID;
+            }
+            char path[VFS_PATH_MAX];
+            fp_path(path, sizeof(path), ctx->send_file_name);
+            vfs_stat_t st;
+            if (vfs_stat(path, &st) < 0)
+            {
+                LOG_ERR("Ymodem send: cannot stat %s", path);
                 break;
             }
-            fp_open_for_read(ctx->send_fp, ctx->send_file_name);
+            uint32_t size = st.size;
+            ctx->send_fd = vfs_open(path, VFS_O_RDONLY);
+            if (ctx->send_fd < 0)
+            {
+                LOG_ERR("Ymodem send: cannot open %s: %d", path, (int)ctx->send_fd);
+                break;
+            }
             ymodem_sender_t *send =
                 ymodem_adapter_get_sender((ymodem_protocol_parser_t *)parser);
             strncpy(send->file_info.file_name, ctx->send_file_name,
@@ -193,16 +232,21 @@ static void ymodem_send_on_frame_ready(protocol_parser_t *parser,
 
     case YMODEM_SENDER_EVENT_DATA_PACKET:
     {
-        uint32_t actual = 0;
-        fp_read(ctx->send_fp, event->data_seq * 1024,
-                event->data, 1024, &actual);
-        event->data_len = actual;
+        ssize_t actual = 0;
+        if (ctx->send_fd >= 0)
+            actual = vfs_pread(ctx->send_fd, event->data, 1024,
+                               (off_t)(event->data_seq * 1024));
+        event->data_len = (actual > 0) ? (uint32_t)actual : 0;
         break;
     }
 
     case YMODEM_SENDER_EVENT_TRANSFER_COMPLETE:
         LOG_INF("Ymodem send: TRANSFER_COMPLETE");
-        fp_close(ctx->send_fp);
+        if (ctx->send_fd >= 0)
+        {
+            vfs_close(ctx->send_fd);
+            ctx->send_fd = VFS_FD_INVALID;
+        }
         break;
 
     case YMODEM_SENDER_EVENT_SESSION_FINISHED:
@@ -211,6 +255,11 @@ static void ymodem_send_on_frame_ready(protocol_parser_t *parser,
 
     case YMODEM_SENDER_EVENT_ERROR:
         LOG_ERR("Ymodem send: transfer aborted");
+        if (ctx->send_fd >= 0)
+        {
+            vfs_close(ctx->send_fd);
+            ctx->send_fd = VFS_FD_INVALID;
+        }
         break;
 
     default:

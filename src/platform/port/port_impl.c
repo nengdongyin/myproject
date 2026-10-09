@@ -48,6 +48,53 @@ void system_free(void *ptr)
     vPortFree(ptr);
 }
 
+/* ---- 句柄式互斥 ---- */
+struct sys_mutex
+{
+    SemaphoreHandle_t h;
+    uint8_t used;
+};
+static struct sys_mutex g_sys_mutex_pool[SYS_MUTEX_POOL_SIZE];
+
+sys_mutex_t *sys_mutex_create(void)
+{
+    for (int i = 0; i < SYS_MUTEX_POOL_SIZE; i++)
+    {
+        if (!g_sys_mutex_pool[i].used)
+        {
+            SemaphoreHandle_t h = xSemaphoreCreateMutex();
+            if (!h)
+                return NULL;
+            g_sys_mutex_pool[i].h = h;
+            g_sys_mutex_pool[i].used = 1;
+            return &g_sys_mutex_pool[i];
+        }
+    }
+    return NULL;
+}
+
+void sys_mutex_destroy(sys_mutex_t *m)
+{
+    if (m && m->used)
+    {
+        vSemaphoreDelete(m->h);
+        m->h = NULL;
+        m->used = 0;
+    }
+}
+
+void sys_mutex_lock(sys_mutex_t *m)
+{
+    if (m && m->h)
+        xSemaphoreTake(m->h, portMAX_DELAY);
+}
+
+void sys_mutex_unlock(sys_mutex_t *m)
+{
+    if (m && m->h)
+        xSemaphoreGive(m->h);
+}
+
 #elif PORT_OS_ZEPHYR
 
 /* ================================================================
@@ -91,6 +138,46 @@ void system_free(void *ptr)
     k_free(ptr);
 }
 
+/* ---- 句柄式互斥 ---- */
+struct sys_mutex
+{
+    struct k_mutex m;
+    uint8_t used;
+};
+static struct sys_mutex g_sys_mutex_pool[SYS_MUTEX_POOL_SIZE];
+
+sys_mutex_t *sys_mutex_create(void)
+{
+    for (int i = 0; i < SYS_MUTEX_POOL_SIZE; i++)
+    {
+        if (!g_sys_mutex_pool[i].used)
+        {
+            k_mutex_init(&g_sys_mutex_pool[i].m);
+            g_sys_mutex_pool[i].used = 1;
+            return &g_sys_mutex_pool[i];
+        }
+    }
+    return NULL;
+}
+
+void sys_mutex_destroy(sys_mutex_t *m)
+{
+    if (m)
+        m->used = 0;
+}
+
+void sys_mutex_lock(sys_mutex_t *m)
+{
+    if (m && m->used)
+        k_mutex_lock(&m->m, K_FOREVER);
+}
+
+void sys_mutex_unlock(sys_mutex_t *m)
+{
+    if (m && m->used)
+        k_mutex_unlock(&m->m);
+}
+
 #elif PORT_OS_RTTHREAD
 
 /* ================================================================
@@ -128,6 +215,53 @@ void *system_malloc(size_t size)
 void system_free(void *ptr)
 {
     rt_free(ptr);
+}
+
+/* ---- 句柄式互斥 ---- */
+struct sys_mutex
+{
+    rt_mutex_t h;
+    uint8_t used;
+};
+static struct sys_mutex g_sys_mutex_pool[SYS_MUTEX_POOL_SIZE];
+
+sys_mutex_t *sys_mutex_create(void)
+{
+    for (int i = 0; i < SYS_MUTEX_POOL_SIZE; i++)
+    {
+        if (!g_sys_mutex_pool[i].used)
+        {
+            rt_mutex_t h = rt_mutex_create("vfsm", RT_IPC_FLAG_PRIO);
+            if (!h)
+                return NULL;
+            g_sys_mutex_pool[i].h = h;
+            g_sys_mutex_pool[i].used = 1;
+            return &g_sys_mutex_pool[i];
+        }
+    }
+    return NULL;
+}
+
+void sys_mutex_destroy(sys_mutex_t *m)
+{
+    if (m && m->used)
+    {
+        rt_mutex_delete(m->h);
+        m->h = NULL;
+        m->used = 0;
+    }
+}
+
+void sys_mutex_lock(sys_mutex_t *m)
+{
+    if (m && m->h)
+        rt_mutex_take(m->h, RT_WAITING_FOREVER);
+}
+
+void sys_mutex_unlock(sys_mutex_t *m)
+{
+    if (m && m->h)
+        rt_mutex_release(m->h);
 }
 
 #elif PORT_OS_LIBC
@@ -178,5 +312,29 @@ void system_free(void *ptr)
 {
     free(ptr);
 }
+
+/* ---- 句柄式互斥（单线程，空实现） ---- */
+struct sys_mutex
+{
+    uint8_t used;
+};
+static struct sys_mutex g_sys_mutex_pool[SYS_MUTEX_POOL_SIZE];
+
+sys_mutex_t *sys_mutex_create(void)
+{
+    for (int i = 0; i < SYS_MUTEX_POOL_SIZE; i++)
+    {
+        if (!g_sys_mutex_pool[i].used)
+        {
+            g_sys_mutex_pool[i].used = 1;
+            return &g_sys_mutex_pool[i];
+        }
+    }
+    return NULL;
+}
+
+void sys_mutex_destroy(sys_mutex_t *m) { if (m) m->used = 0; }
+void sys_mutex_lock(sys_mutex_t *m)    { (void)m; }
+void sys_mutex_unlock(sys_mutex_t *m)  { (void)m; }
 
 #endif /* PORT_OS_* */

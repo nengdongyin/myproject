@@ -6,7 +6,7 @@
 #include "protocol_parser_imperx.h"
 #include "protocol_parser_camyu.h"
 #include "protocol_parser_ymodem.h"
-#include "file_processing.h"
+#include "vfs.h"
 #include "ymodem_common.h"
 
 #define TEST_BAUD_RATE 460800
@@ -42,9 +42,9 @@ typedef struct
     uint8_t ymodem_send_rx_buf[YMODEM_SEND_RX_BUF_SIZE];
     uint8_t ymodem_send_tx_buf[YMODEM_SEND_TX_BUF_SIZE];
 
-    file_processing_t *recv_fp;
-    file_processing_t *send_fp;
-    char send_file_name[FP_NAME_MAX];
+    vfs_fd_t recv_fd;   /**< ymodem 接收文件句柄（每次传输 open/close） */
+    vfs_fd_t send_fd;   /**< ymodem 发送文件句柄 */
+    char send_file_name[VFS_NAME_MAX];
 
     uint32_t total_rx_bytes;
     uint32_t total_tx_bytes;
