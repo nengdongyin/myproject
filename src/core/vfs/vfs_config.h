@@ -89,11 +89,6 @@
 #define VFS_ENABLE_MP_LOCK        1
 #endif
 
-/** @brief FAL 块设备适配器（裸 flash 分区 → vfs_bdev） */
-#ifndef VFS_ENABLE_FAL_BDEV
-#define VFS_ENABLE_FAL_BDEV       1
-#endif
-
 /**
  * @brief FatFs 后端（默认关：需工程先引入 FatFs 库 + SD 块设备）
  *

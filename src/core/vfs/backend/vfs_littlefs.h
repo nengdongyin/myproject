@@ -2,8 +2,8 @@
  * @file vfs_littlefs.h
  * @brief littlefs 文件系统后端 —— 基于原生 lfs_* API + vfs_bdev_t
  *
- * 直接调用 littlefs 原生 API（RTOS 无关），块设备来自 vfs_bdev_t（FAL 分区或
- * Zephyr flash 直连均可）。每个挂载点持有一个独立的 lfs_t（多分区 = 多 lfs_t）。
+ * 直接调用 littlefs 原生 API（RTOS 无关），块设备来自 vfs_bdev_t（分区切片，
+ * 介质可为内部 flash 或 SD 等）。每个挂载点持有一个独立的 lfs_t（多分区 = 多 lfs_t）。
  *
  * @section threadsafe 线程安全
  * 本后端不启用 littlefs 自带线程安全。并发访问由 VFS 核心的"每挂载点锁"

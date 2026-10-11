@@ -1,7 +1,7 @@
 # VFS 用户手册
 
 > 嵌入式轻量级虚拟文件系统（Virtual File System）
-> 版本：1.0　|　代码位置：`src/core/vfs/`、`src/app/storage/`
+> 版本：1.0　|　代码位置：`src/core/vfs/`（含 `storage/` 装配与 FAL 驱动）
 
 ---
 
@@ -77,7 +77,7 @@ VFS 是一个面向嵌入式（MCU）场景的轻量级虚拟文件系统：对�
 ├───────────────────────────────┬─────────────────────────────────┤
 │ FAL 分区表（内部 flash）        │ SD 卡块设备（512B 扇区）          │
 └───────────────────────────────┴─────────────────────────────────┘
-   资源装配 → src/app/storage/storage_config.c（纯数据，无逻辑）
+   资源装配 → src/core/vfs/storage/storage_config.c（纯数据，无逻辑）
 ```
 
 ### 2.2 目录结构
@@ -87,21 +87,23 @@ src/core/vfs/
 ├── vfs.h                     # 公共 API + 全部对外类型 + 后端虚函数表
 ├── vfs_config.h              # 编译期上限与特性开关
 ├── vfs_core.c                # 核心实现（注册/挂载/解析/句柄池/分派/锁）
-├── vfs_bdev.h / vfs_bdev.c   # 物理设备 + 分区切片抽象 + FAL 适配器
+├── vfs_bdev.h / vfs_bdev.c   # 分区切片抽象（表驱动注册 + 块/字节访问）
+├── rawflash/
+│   └── rawflash.h/.c         # 掉电安全块区存储核心（可独立于 VFS 使用）
 ├── backend/
-│   ├── vfs_rawflash.h/.c     # 裸 flash 静态注册伪 FS
+│   ├── vfs_rawflash.h/.c     # 裸 flash 静态注册伪 FS（rawflash 核心的适配层）
 │   ├── vfs_littlefs.h/.c     # littlefs 后端（原生 lfs_* API）
 │   └── vfs_fatfs.h/.c        # FatFs 后端（默认编译关）
+├── storage/                  # 装配/驱动层（FAL 仅出现在此目录，可剔除）
+│   ├── storage_drv.h         # 介质驱动接口（vfs_storage_t）
+│   ├── storage_drv_fal.h/.c  # FAL 介质驱动（vfs_storage_t 实现）
+│   └── storage_config.h/.c   # 设备 / 分区 / 挂载点资源定义（表驱动）
 └── stdio/
     ├── vfs_stdio_newlib.c    # newlib/glibc 系统调用钩子
     └── vfs_stdio_armcc.c     # ARMCC/Keil 重定向钩子
-
-src/app/storage/
-├── storage_config.h
-└── storage_config.c          # 设备 / 分区 / 挂载点资源定义（需求落点）
 ```
 
-**边界约束**：`vfs_core.c`、`vfs.h`、`vfs_bdev.*` **不 include 任何后端头**，只认 `vfs_fs_ops_t` / `vfs_bdev_t`。
+**边界约束**：`vfs_core.c`、`vfs.h`、`vfs_bdev.*` **不 include 任何后端头**，只认 `vfs_fs_ops_t` / `vfs_bdev_t`；核心与介质无关，`fal.h` 仅被 `storage/` 子目录引用（不编入 `storage_drv_fal.c` 即零 FAL 依赖）。
 
 ### 2.3 数据流（以 `vfs_open("/lfs/foo.bin")` 为例）
 

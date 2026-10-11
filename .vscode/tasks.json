@@ -121,6 +121,11 @@
         "-Isrc/core/param_manager/config",
         "-Isrc/core/param_manager/storage",
         "-Isrc/core/protocol_parser",
+        "-Isrc/core/vfs",
+        "-Isrc/core/vfs/backend",
+        "-Isrc/core/vfs/rawflash",
+        "-Isrc/core/vfs/storage",
+        "-Isrc/test/core/vfs",
         "-Isrc/protocols/ymodem/src",
         "-Isrc/protocols/imperx",
         "-Isrc/protocols/camyu",
@@ -152,6 +157,14 @@
         "src/core/param_manager/core/param_data_ops.c",
         "src/core/protocol_parser/protocol_parser.c",
         "src/core/protocol_parser/protocol_chain.c",
+        "src/core/vfs/vfs_core.c",
+        "src/core/vfs/vfs_bdev.c",
+        "src/core/vfs/rawflash/rawflash.c",
+        "src/core/vfs/backend/vfs_rawflash.c",
+        "src/test/core/vfs/mock_storage.c",
+        "src/test/core/vfs/test_vfs_bdev.c",
+        "src/test/core/vfs/test_rawflash.c",
+        "src/test/core/vfs/test_vfs_core.c",
         "src/protocols/ymodem/src/ymodem_common.c",
         "src/protocols/ymodem/src/ymodem_sender.c",
         "src/protocols/ymodem/src/ymodem_receiver.c",
@@ -201,7 +214,10 @@
       },
       "problemMatcher": "$gcc",
       "options": {
-        "cwd": "${workspaceFolder}"
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "Path": "C:\\msys64\\ucrt64\\bin;${env:Path}"
+        }
       }
     }
   ]

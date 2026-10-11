@@ -6,7 +6,7 @@ project(my_project)
 target_include_directories(app PRIVATE
      src
      src/app/init
-    src/app/storage
+    src/core/vfs/storage
     src/test/core/unity
     src/test/core/param_manager
     src/camera/core/vsc
@@ -28,6 +28,7 @@ target_include_directories(app PRIVATE
     src/core/file_process
     src/core/vfs
     src/core/vfs/backend
+    src/core/vfs/rawflash
     src/lib/flashdb/inc
     src/lib/mkv
     src/lib/flashdb/port/fal/inc
@@ -82,7 +83,9 @@ target_sources(app PRIVATE
       src/core/vfs/backend/vfs_fatfs.c
       src/core/vfs/stdio/vfs_stdio_newlib.c
       src/core/vfs/stdio/vfs_stdio_armcc.c
-      src/app/storage/storage_config.c
+      src/core/vfs/storage/storage_config.c
+      src/core/vfs/storage/storage_drv_fal.c
+      src/core/vfs/rawflash/rawflash.c
       src/lib/flashdb/src/fdb.c
       src/lib/flashdb/src/fdb_kvdb.c
       src/lib/flashdb/src/fdb_utils.c

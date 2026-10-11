@@ -28,8 +28,13 @@
  * @code
  *   vfs_init();
  *   vfs_register(VFS_FSTYPE_LITTLEFS, &vfs_littlefs_ops);
- *   vfs_bdev_fal_init(&bd, "flash_app", "app");
- *   vfs_bdev_register("flash_app", &bd);
+ *
+ *   // 介质驱动产出 vfs_storage_t（此处以 stor 为例），表驱动切片注册
+ *   static const vfs_bdev_cfg_t bdevs[] = {
+ *       { "flash_app", stor, 0x00000000, 4096, 256 },
+ *   };
+ *   vfs_bdev_register_table(bdevs, 1);
+ *
  *   static const vfs_mount_cfg_t mnt[] = {
  *       { "/app", VFS_FSTYPE_LITTLEFS, "flash_app", 0, NULL },
  *   };

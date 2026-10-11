@@ -82,6 +82,10 @@ static vfs_reg_entry_t g_registry[VFS_MAX_TYPES];
 static vfs_bdev_entry_t g_bdevs[VFS_MAX_BDEVS];
 /** @brief 已注册块设备个数 */
 static int g_bdev_n;
+/** @brief 块设备切片静态池（表驱动注册用：register 存指针，须具静态生命周期） */
+static vfs_bdev_t g_bdev_pool[VFS_MAX_BDEVS];
+/** @brief 已用 bdev 池槽数 */
+static int g_bdev_pool_n;
 /** @brief 挂载点表（静态池） */
 static vfs_mount_t g_mounts[VFS_MAX_MOUNTS];
 /** @brief 文件句柄池（静态池，零堆） */
@@ -437,6 +441,7 @@ int vfs_init(void)
 
     memset(g_registry, 0, sizeof(g_registry));
     memset(g_bdevs, 0, sizeof(g_bdevs));
+    memset(g_bdev_pool, 0, sizeof(g_bdev_pool));
     memset(g_mounts, 0, sizeof(g_mounts));
     memset(g_files, 0, sizeof(g_files));
     memset(g_dirs, 0, sizeof(g_dirs));
@@ -444,6 +449,7 @@ int vfs_init(void)
     memset(g_flocks, 0, sizeof(g_flocks));
 #endif
     g_bdev_n = 0;
+    g_bdev_pool_n = 0;
 
     g_core_lock = VFS_LOCK_CREATE();
 #if VFS_ENABLE_MP_LOCK
@@ -558,6 +564,45 @@ int vfs_bdev_register(const char *name, const vfs_bdev_t *bdev)
     g_bdev_n++;
     VFS_UNLOCK(g_core_lock);
     return 0;
+}
+
+int vfs_bdev_register_table(const vfs_bdev_cfg_t *tbl, size_t n)
+{
+    if (!tbl)
+        return -EINVAL;
+
+    int last = 0;
+    for (size_t i = 0; i < n; i++)
+    {
+        const vfs_bdev_cfg_t *c = &tbl[i];
+        if (!c->name || !c->storage || c->blk_size == 0 || c->blk_count == 0)
+        {
+            last = -EINVAL; /* 记录，继续尝试其余（部分失败不致命） */
+            continue;
+        }
+        if (g_bdev_pool_n >= VFS_MAX_BDEVS)
+        {
+            last = -ENOSPC;
+            break; /* 池满：后续条目必然也放不下 */
+        }
+
+        /* 先落到核心静态池（vfs_bdev_register 存指针），成功再占用池槽 */
+        vfs_bdev_t *d = &g_bdev_pool[g_bdev_pool_n];
+        vfs_bdev_init(d, c->name, c->storage, c->offset, c->blk_size, c->blk_count);
+        int rc = vfs_bdev_register(c->name, d);
+        if (rc < 0)
+        {
+            last = rc;
+            continue; /* 失败不占用池槽，下一成功条目复用同槽 */
+        }
+        g_bdev_pool_n++;
+    }
+    return last;
+}
+
+const vfs_bdev_t *vfs_bdev_find(const char *name)
+{
+    return bdev_find(name);
 }
 
 int vfs_mount_table(const vfs_mount_cfg_t *tbl, size_t n)

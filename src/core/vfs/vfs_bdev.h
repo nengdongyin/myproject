@@ -2,18 +2,18 @@
  * @file vfs_bdev.h
  * @brief 块设备抽象 —— 物理存储设备与分区切片
  *
- * 采用"两层"模型，对齐 FAL 的 fal_flash_dev（整设备）+ fal_partition（分区）：
+ * 采用"两层"模型：整设备（@ref vfs_storage_t，见 storage_drv.h）+ 分区切片：
  *
  * @verbatim
  *   vfs_storage_t  物理存储设备（整块 flash / 整张 SD 卡）
- *         │  按字节偏移 read/prog/erase
+ *         │  按字节偏移 read/prog/erase（由 storage_drv_* 提供）
  *         ▼
  *   vfs_bdev_t     分区切片（storage 内 offset + 长度），文件系统挂在其上
  * @endverbatim
  *
- * 分区偏移（offset）来源：
- *  - 内部 flash：直接复用 FAL 分区表（见 vfs_bdev_fal_init）
- *  - SD 卡：解析 MBR 分区表得到 LBA 起始 + 扇区数
+ * 本文件只做"切片 + 块/字节访问转发"，不实现任何具体介质：介质的 read/prog/
+ * erase 由 @ref vfs_storage_t 提供，其实现位于装配/驱动层（如 storage_drv_fal.c），
+ * 核心不依赖 FAL 等任何具体框架。
  *
  * 该层是"多存储器"（需求 7）的关键：littlefs/fatfs 只认 vfs_bdev_t，
  * 不关心底层是 flash 还是 SD。
@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "vfs_config.h"
+#include "storage_drv.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -32,27 +33,7 @@ extern "C"
 #endif
 
     /**
-     * @brief 物理存储设备（≈ fal_flash_dev）
-     *
-     * 代表整块存储介质，提供按字节偏移的 read/prog/erase。
-     * 具体后端（FAL flash / SD 卡）各自实现三个回调函数。
-     */
-    typedef struct vfs_storage
-    {
-        const char *name;      /**< 设备名（诊断用） */
-        uint32_t blk_size;     /**< 擦除/编程粒度（flash 4K，SD 512） */
-        uint32_t blk_count;    /**< 整设备块数 */
-        /** 从 byte_off 起读 n 字节（byte_off 为设备内相对偏移，非绝对地址） */
-        int (*read)(struct vfs_storage *s, uint32_t byte_off, void *buf, size_t n);
-        /** 从 byte_off 起编程（写）n 字节（byte_off 为设备内相对偏移） */
-        int (*prog)(struct vfs_storage *s, uint32_t byte_off, const void *buf, size_t n);
-        /** 从 byte_off 起擦除 n 字节（n 为块大小整数倍，byte_off 为设备内相对偏移） */
-        int (*erase)(struct vfs_storage *s, uint32_t byte_off, size_t n);
-        void *ctx;             /**< 后端私有上下文（fal_flash_dev* / sd_ctx*） */
-    } vfs_storage_t;
-
-    /**
-     * @brief 分区切片（≈ fal_partition）
+     * @brief 分区切片
      *
      * 是某个 vfs_storage_t 内的一段区域，由 offset + 长度界定。
      * 文件系统后端（littlefs/fatfs）的块设备即此结构。
@@ -67,7 +48,7 @@ extern "C"
         uint32_t offset;             /**< 起始位置：storage 内字节偏移 */
         uint32_t blk_size;           /**< 块大小（通常 = storage->blk_size） */
         uint32_t blk_count;          /**< 分区块数（大小 = blk_count × blk_size） */
-        const void *ctx;             /**< 可选后端私有（如 FAL 分区指针） */
+        const void *ctx;             /**< 可选驱动私有（如分区描述符指针） */
     } vfs_bdev_t;
 
     /**
@@ -139,31 +120,38 @@ extern "C"
      */
     int vfs_bdev_prog_bytes(const vfs_bdev_t *d, uint32_t byte_off, const void *buf, size_t n);
 
-#if VFS_ENABLE_FAL_BDEV
     /**
-     * @brief 从 FAL 分区表构造 bdev（复用分区表的 offset/len）
-     *
-     * @param d        待填充的 bdev
-     * @param name     该 bdev 在 VFS 中的名字
-     * @param fal_part 对应的 FAL 分区名
-     * @return 0 成功，-ENOENT 分区/设备不存在，-ENOSPC 内部 storage 池满
+     * @brief 按名字查找已注册的块设备切片
+     * @param name 分区名（vfs_bdev_register / vfs_bdev_register_table 时用的名字）
+     * @return 命中返回切片指针，未注册返回 NULL
      */
-    int vfs_bdev_fal_init(vfs_bdev_t *d, const char *name, const char *fal_part);
+    const vfs_bdev_t *vfs_bdev_find(const char *name);
 
     /**
-     * @brief 从 FAL flash 设备 + 自定义 offset/size 构造 bdev
+     * @brief 分区切片配置（表驱动注册用）
      *
-     * 用于"分区几何定义在 storage_config.c"的场景（需求7），无需把分区
-     * 写进 FAL 分区表。
-     *
-     * @param fal_flash FAL flash 设备名（如 "rp2350_flash"）
-     * @param offset    设备内字节偏移（须块对齐）
-     * @param size      区域大小（须块对齐）
-     * @return 0 成功，-EINVAL 未对齐/越界，-ENOENT 设备不存在，-ENOSPC 池满
+     * 描述"如何从某介质切出一段分区"，供 vfs_bdev_register_table 批量注册。
+     * 相比逐个声明静态 vfs_bdev_t + 手写注册调用，加分区只需在配置表加一行。
      */
-    int vfs_bdev_fal_flash_init(vfs_bdev_t *d, const char *name,
-                                const char *fal_flash, uint32_t offset, uint32_t size);
-#endif
+    typedef struct vfs_bdev_cfg
+    {
+        const char *name;             /**< 分区名（全局唯一，挂载表按此名绑定） */
+        const vfs_storage_t *storage; /**< 所属物理设备（介质驱动产出） */
+        uint32_t offset;              /**< 介质内起始字节偏移（须块对齐） */
+        uint32_t blk_size;            /**< 块大小（通常 = storage->blk_size） */
+        uint32_t blk_count;           /**< 分区块数 */
+    } vfs_bdev_cfg_t;
+
+    /**
+     * @brief 表驱动批量注册块设备（核心内部持静态 bdev 池）
+     * @details 逐条把配置写入核心持有的静态 vfs_bdev_t 池并登记（vfs_bdev_register
+     *          存的是指针，故切片须具静态生命周期，由核心池保证）。部分失败不致命：
+     *          继续处理其余条目，返回最后一个错误码。
+     * @param tbl 配置数组（不能为 NULL）
+     * @param n   条目数
+     * @return 0 全部成功；否则最后一个失败的错误码（-EINVAL/-ENOSPC/-EEXIST）
+     */
+    int vfs_bdev_register_table(const vfs_bdev_cfg_t *tbl, size_t n);
 
 #ifdef __cplusplus
 }
