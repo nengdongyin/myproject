@@ -28,6 +28,13 @@ int storage_config_init(void);
 /** @brief 卸载所有卷（可选） */
 void storage_config_deinit(void);
 
+/**
+ * @brief 按分区名格式化 littlefs 分区（破坏性，出厂/首次上电 provisioning 用）
+ * @param bdev_name 分区名（s_parts 里的名字，如 "flash_lfs"）
+ * @return 0 成功；-ENOENT 分区未注册；< 0 其他负 errno
+ */
+int storage_config_format(const char *bdev_name);
+
 #ifdef __cplusplus
 }
 #endif

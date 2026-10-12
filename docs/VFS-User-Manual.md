@@ -163,45 +163,27 @@ vfs_open("/lfs/foo.bin", VFS_O_RDONLY)
 ### 4.1 最小可用流程
 
 ```c
-#include "vfs.h"
-#include "vfs_littlefs.h"
-#include "vfs_rawflash.h"
+#include "storage_config.h"   /* 本工程装配层：三张表 + 通用 init */
 
-/* 1) 定义块设备（几何可来自 FAL 分区表，或自定义 offset/size） */
-static vfs_bdev_t bd_lfs;
-static vfs_bdev_t bd_raw;
-
-/* 2) rawflash 静态注册表 */
-static const vfs_rawflash_entry_t raw_tbl[] = {
-    { "boot_log", &bd_raw, 32 * 1024, 0 },
-};
-static const vfs_rawflash_vol_t raw_vol = { raw_tbl, 1 };
-
-void storage_init(void)
+void app_init(void)
 {
-    /* 3) 初始化核心 + FAL */
-    vfs_init();
-    fal_init();
+    /* 1) 初始化并挂载所有卷（分区/挂载点定义见
+     *    src/core/vfs/storage/storage_config.c 的 s_parts/s_raw_cfgs/s_mounts 三张表） */
+    if (storage_config_init() != 0) {
+        /* 2) 首次上电 / 分区未格式化：先格式化再重试（破坏性，仅出厂用） */
+        storage_config_format("flash_lfs");
+        storage_config_init();
+    }
 
-    /* 4) 构造分区 */
-    vfs_bdev_fal_flash_init(&bd_lfs, "flash_lfs", "rp2350_flash", 0x200000, 0x200000);
-    vfs_bdev_fal_flash_init(&bd_raw, "flash_raw", "rp2350_flash", 0x170000, 0x10000);
-
-    /* 5) 注册块设备 */
-    vfs_bdev_register("flash_lfs", &bd_lfs);
-    vfs_bdev_register("flash_raw", &bd_raw);
-
-    /* 6) 注册文件系统类型 */
-    vfs_register(VFS_FSTYPE_LITTLEFS, &vfs_littlefs_ops);
-    vfs_register(VFS_FSTYPE_RAWFLASH, &vfs_rawflash_ops);
-
-    /* 7) 挂载 */
-    static const vfs_mount_cfg_t mounts[] = {
-        { "/lfs", VFS_FSTYPE_LITTLEFS, "flash_lfs", 0, NULL },
-        { "/raw", VFS_FSTYPE_RAWFLASH, NULL,        0, &raw_vol },
-    };
-    vfs_mount_table(mounts, 2);
+    /* 3) 直接使用 */
+    vfs_fd_t fd = vfs_open("/lfs/foo.bin", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
+    vfs_write(fd, "hi", 2);
+    vfs_truncate(fd, 1);      /* 截断到 1 字节 */
+    vfs_close(fd);
 }
+```
+
+> 新增分区/文件/挂载点只改 storage_config.c 的数据表；表驱动写法见该文件头注释。
 
 /* 8) 读写文件 */
 void demo(void)
@@ -309,7 +291,7 @@ if (n < 0) { int e = -n; /* e 为 errno 值，如 ENOSPC */ }
 | `VFS_ENABLE_FILE_LOCK` | 0 | 同文件独占锁表 | 多任务可能并发写同一文件 |
 | `VFS_ENABLE_STDIO` | 0 | stdio 适配层（另见 §8.4） | 需要 `fopen/fprintf` 走 VFS |
 | `VFS_ENABLE_MP_LOCK` | 1 | 每挂载点互斥锁 + 核心锁 | 多任务环境（强烈建议开） |
-| `VFS_ENABLE_FAL_BDEV` | 1 | FAL 适配器（依赖 `fal.h`） | 使用 FAL 分区 |
+| `STORAGE_DRV_FAL_ENABLE` | 1 | FAL 介质驱动（装配层 `storage_drv_fal.h`，依赖 `fal.h`） | 使用 FAL flash 作为介质 |
 | `VFS_ENABLE_FATFS` | 0 | 引入 FatFs 后端（依赖 `ff.h`） | 使用 SD + FatFs |
 | `VFS_RAWFLASH_ENABLE_APPEND` | 0 | rawflash 尾部续写追加写（定义于 `vfs_rawflash.h`，见 §7.1） | rawflash 需追加写 |
 
@@ -452,9 +434,9 @@ void     sys_mutex_unlock(sys_mutex_t *m);
 
 1. 定义一个 `vfs_storage_t`：填写 `blk_size`/`blk_count` 与 `read/prog/erase` 三个字节偏移回调。
 2. 为每个分区构造 `vfs_bdev_t`：
-   - 走 FAL：`vfs_bdev_fal_init(&bd, name, "分区名")` 或 `vfs_bdev_fal_flash_init(&bd, name, "flash_dev", offset, size)`；
+   - 走 FAL（装配层 `storage_drv_fal.h`）：`storage_drv_fal_partition_bdev(&bd, name, "分区名")`（几何取自分区表）或 `storage_drv_fal_bdev(&bd, name, "flash_dev", offset, size)`（自定义几何）；
    - 直接定义：`vfs_bdev_init(&bd, name, &storage, offset, blk_size, blk_count)`。
-3. `vfs_bdev_register(name, &bd)`。
+3. `vfs_bdev_register(name, &bd)`（批量可用 `vfs_bdev_register_table()`，见 §10.5）。
 4. 在挂载表里把 bdev 名绑定到某个文件系统类型。
 
 ### 8.3 新增文件系统后端（开闭原则）
@@ -543,6 +525,7 @@ typedef enum {
 | `int vfs_register(uint8_t fstype, const vfs_fs_ops_t *ops)` | 注册文件系统类型 | 0 / `-EINVAL` / `-EALREADY` / `-ENOSPC` |
 | `int vfs_bdev_register(const char *name, const vfs_bdev_t *bdev)` | 注册块设备 | 0 / `-EINVAL` / `-EEXIST` / `-ENOSPC` |
 | `int vfs_mount_table(const vfs_mount_cfg_t *tbl, size_t n)` | 批量挂载静态表 | 0 / 最后一个失败码 |
+| `int vfs_mount_table_ex(const vfs_mount_cfg_t *tbl, size_t n, int *rc_out)` | 同上，且逐项结果写入 `rc_out[i]` | 0 / 最后一个失败码 |
 | `int vfs_mount(const vfs_mount_cfg_t *cfg)` | 动态挂载（需 `VFS_ENABLE_DYNAMIC_MOUNT`） | 0 / `-ENOTSUP`（未开） |
 | `int vfs_unmount(const char *mnt_point)` | 动态卸载（需 `VFS_ENABLE_DYNAMIC_MOUNT`） | 0 / `-ENOENT` / `-EBUSY` |
 | `const vfs_fs_ops_t *vfs_fstype_lookup(uint8_t fstype)` | 查后端（诊断） | 指针 / NULL |
@@ -559,6 +542,7 @@ typedef enum {
 | `off_t vfs_tell(vfs_fd_t fd)` | 当前偏移 | 偏移 / `<0` |
 | `int vfs_sync(vfs_fd_t fd)` | 刷缓存 | 0 / `<0` |
 | `ssize_t vfs_pread(vfs_fd_t fd, void *buf, size_t n, off_t off)` | 定位读（**会移动偏移**） | 字节数 / `<0` |
+| `int vfs_truncate(vfs_fd_t fd, off_t len)` | 截断/扩展（fd 须写意图打开） | 0 / `-EINVAL`/`-EROFS`/`-ENOTSUP` |
 
 ### 10.4 文件系统级 / 目录
 
@@ -581,8 +565,10 @@ typedef enum {
 | `uint32_t vfs_bdev_size(const vfs_bdev_t *d)` | 分区总字节数 |
 | `int vfs_bdev_read/prog/erase(d, blk, buf/nblk, nblk)` | 按**块号**访问 |
 | `int vfs_bdev_read_bytes/prog_bytes(d, byte_off, buf, n)` | 按**字节偏移**访问 |
-| `int vfs_bdev_fal_init(d, name, fal_part)` | 从 FAL 分区表构造（复用 offset/len） |
-| `int vfs_bdev_fal_flash_init(d, name, fal_flash, offset, size)` | 从 FAL flash 设备 + 自定义几何构造 |
+| `int vfs_bdev_register_table(const vfs_bdev_cfg_t *tbl, size_t n)` | 表驱动批量注册切片（核心持静态池） |
+| `const vfs_bdev_t *vfs_bdev_find(const char *name)` | 按名查找已注册切片 |
+
+> FAL 适配（整设备 → `vfs_storage_t`）在装配层 `storage_drv_fal.h`（`storage_drv_fal_bdev` / `storage_drv_fal_partition_bdev`），不属核心 API。
 
 ### 10.6 后端接口 `vfs_fs_ops_t`（`vfs.h`）
 
@@ -652,8 +638,8 @@ typedef struct vfs_mount_cfg {
 | rawflash 写返回 `-EBUSY` | 同文件已有写会话未关闭 | 先 `vfs_close` 旧写 fd；查是否有 fd 泄漏 |
 | `-ENFILE` | 句柄池耗尽 | 增大 `VFS_MAX_OPEN_FILES/DIRS`，或检查是否有 fd 泄漏（未 close） |
 | `-ENOSPC` | 空间不足 / 挂载槽或锁池耗尽 | 检查介质剩余；增大 `VFS_MAX_MOUNTS` / `SYS_MUTEX_POOL_SIZE` |
-| 挂载返回 `-EIO` | littlefs 分区未格式化/损坏 | 调用 `vfs_littlefs_format(mp)` 后重试 |
-| 挂载返回 `-EINVAL` | 分区几何非法（对齐/容量/参数） | 检查 `vfs_bdev_fal_flash_init` 的 offset/size 是否块对齐、≤ 设备容量 |
+| 挂载返回 `-EIO` | littlefs 分区未格式化/损坏 | 调用 `storage_config_format("flash_lfs")`（或 `vfs_littlefs_format_bdev(bdev)`）后重试 |
+| 挂载返回 `-EINVAL` | 分区几何非法（对齐/容量/参数） | 检查 `storage_config.c` 分区表的 offset/size 是否块对齐、≤ 设备容量 |
 | 并发下数据错乱 | 固定锁未初始化 | 确认启动早期调用了 `system_mutex_init()` |
 | 挂载 `-ENOSPC` | `SYS_MUTEX_POOL_SIZE` 不足 | 需 ≥ `VFS_MAX_MOUNTS + 1`（含核心锁） |
 

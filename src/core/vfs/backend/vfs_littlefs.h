@@ -63,6 +63,16 @@ extern "C"
      */
     int vfs_littlefs_format(vfs_mount_t *mp);
 
+    /**
+     * @brief 直接按分区切片格式化 littlefs（破坏性；无需先挂载）
+     *
+     * 解决"未格式化分区挂载失败 → 拿不到 vfs_mount_t → 无法格式化"的鸡生蛋问题：
+     * 出厂/首次上电 provisioning 先按分区格式化，再挂载。
+     * @param bdev 分区切片（不能为 NULL）
+     * @return 0 成功；-EINVAL 参数错，-ENOSPC 无空闲挂载槽，< 0 lfs 错误码
+     */
+    int vfs_littlefs_format_bdev(const vfs_bdev_t *bdev);
+
 #ifdef __cplusplus
 }
 #endif

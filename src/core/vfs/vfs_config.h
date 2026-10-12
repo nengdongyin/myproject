@@ -40,6 +40,11 @@
 #define VFS_MAX_BDEVS         8
 #endif
 
+/** @brief 最大物理存储设备（介质）数上限（如整块 flash / 整张 SD；每设备可切多个 bdev） */
+#ifndef VFS_MAX_STORAGES
+#define VFS_MAX_STORAGES      4
+#endif
+
 /** @brief 文件名最大长度（不含 '\\0'） */
 #ifndef VFS_NAME_MAX
 #define VFS_NAME_MAX          63

@@ -43,8 +43,8 @@ static int fal_storage_erase(vfs_storage_t *s, uint32_t off, size_t n)
 /** @brief 取得（或创建）某 FAL flash 设备对应的持久 vfs_storage */
 static vfs_storage_t *fal_storage_get(const struct fal_flash_dev *dev)
 {
-    /** @brief 持久 vfs_storage 池（函数内静态，生命周期同进程） */
-    static vfs_storage_t s_pool[VFS_MAX_BDEVS];
+    /** @brief 持久 vfs_storage 池（每物理设备一项；函数内静态，生命周期同进程） */
+    static vfs_storage_t s_pool[VFS_MAX_STORAGES];
     /** @brief 已创建的 vfs_storage 个数 */
     static int s_n;
 
@@ -53,7 +53,7 @@ static vfs_storage_t *fal_storage_get(const struct fal_flash_dev *dev)
         if (strcmp(s_pool[i].name, dev->name) == 0)
             return &s_pool[i];
     }
-    if (s_n >= VFS_MAX_BDEVS)
+    if (s_n >= VFS_MAX_STORAGES)
         return NULL;
 
     vfs_storage_t *s = &s_pool[s_n++];

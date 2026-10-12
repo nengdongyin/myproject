@@ -1,16 +1,22 @@
 /**
  * @file rawflash.h
- * @brief 通用块区存储核心 —— 掉电安全的静态块区读写（可独立于 VFS 使用）
+ * @brief 通用块区存储核心 —— 掉电安全的静态块区读写（不依赖 VFS 核心）
  *
  * 本模块把"一个分区切片（@ref vfs_bdev_t）+ 一段数据容量"当作一个掉电安全的
  * 顺序读写块区：数据区顺序写入，末尾擦除块存 footer（长度 + CRC，双份冗余），
  * **写意图以 close 落 footer 为提交点**，故数据写一半掉电时 footer 无效、整区
  * 视为空（不读到半截脏数据）。
  *
- * @section standalone 独立性
- * 本核心只依赖"介质/分区切片层"（vfs_bdev_t 及其块/字节访问），**不依赖 VFS
- * 核心**（无 vfs_file_t / vfs_mount_t / 句柄池 / 挂载点）。因此它既能被 VFS 的
- * rawflash 后端薄适配，也可脱离 VFS 直接使用（如存配置/日志 blob）。
+ * @section dependency 依赖边界
+ * 本核心**不依赖 VFS 核心逻辑**：不使用 vfs_file_t / vfs_mount_t / 句柄池 /
+ * 挂载点。但它依赖"块设备抽象层"（@ref vfs_bdev_t 及其块/字节访问，见
+ * vfs_bdev.h，进而引入 storage_drv.h）——二者均为纯数据结构、不含 VFS 核心符号。
+ * 因此本核心既能被 VFS 的 rawflash 后端薄适配，也可在**接受该块设备抽象层**的
+ * 前提下脱离 VFS 核心单独使用（如存配置 / 日志 blob）。
+ *
+ * @note 若要连块设备抽象层也一并去掉（真正零 VFS 依赖），需为本核心引入自有的
+ *       设备接口类型并加一层适配；当前有意不这样，以避免与 vfs_storage_t /
+ *       vfs_bdev_t 重复定义同一抽象。
  *
  * @section layout 布局
  * @verbatim

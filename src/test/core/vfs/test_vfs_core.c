@@ -132,10 +132,42 @@ static int mock_unlink(vfs_mount_t *mp, const char *rel)
     return 0;
 }
 
+static int mock_truncate(vfs_file_t *f, off_t len)
+{
+    mock_handle_t *h = (mock_handle_t *)f->priv;
+    if (!h)
+        return -EBADF;
+    if (len < 0)
+        return -EINVAL;
+    if (len > MOCK_FILE_CAP)
+        len = MOCK_FILE_CAP;
+    g_len = (int)len;
+    if (h->cursor > g_len)
+        h->cursor = g_len;
+    return 0;
+}
+
 /* 故意不含 VFS_CAP_APPEND，用于验证 caps 前置校验 */
 static const vfs_fs_ops_t mock_ops = {
     .name = "mock",
     .caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_SEEK | VFS_CAP_TRUNCATE,
+    .mount = mock_mount,
+    .unmount = mock_unmount,
+    .open = mock_open,
+    .read = mock_read,
+    .write = mock_write,
+    .lseek = mock_lseek,
+    .close = mock_close,
+    .tell = mock_tell,
+    .truncate = mock_truncate,
+    .stat = mock_stat,
+    .unlink = mock_unlink,
+};
+
+/* 不含 truncate 能力/回调，用于验证 vfs_truncate 的 caps 前置校验 */
+static const vfs_fs_ops_t mock_ops_no_trunc = {
+    .name = "mock_no_trunc",
+    .caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_SEEK,
     .mount = mock_mount,
     .unmount = mock_unmount,
     .open = mock_open,
@@ -163,12 +195,14 @@ static void core_setup(void)
     vfs_deinit();          /* 清空核心状态（幂等安全） */
     TEST_ASSERT_EQUAL_INT(0, vfs_init());
     TEST_ASSERT_EQUAL_INT(0, vfs_register(VFS_FSTYPE_EXTERNAL_BASE, &mock_ops));
+    TEST_ASSERT_EQUAL_INT(0, vfs_register(VFS_FSTYPE_EXTERNAL_BASE + 1, &mock_ops_no_trunc));
 
     static const vfs_mount_cfg_t mnts[] = {
-        {"/mnt", VFS_FSTYPE_EXTERNAL_BASE, NULL, 0, NULL},
-        {"/ro",  VFS_FSTYPE_EXTERNAL_BASE, NULL, VFS_MNT_RO, NULL},
+        {"/mnt",    VFS_FSTYPE_EXTERNAL_BASE,     NULL, 0, NULL},
+        {"/ro",     VFS_FSTYPE_EXTERNAL_BASE,     NULL, VFS_MNT_RO, NULL},
+        {"/ntrunc", VFS_FSTYPE_EXTERNAL_BASE + 1, NULL, 0, NULL},
     };
-    TEST_ASSERT_EQUAL_INT(0, vfs_mount_table(mnts, 2));
+    TEST_ASSERT_EQUAL_INT(0, vfs_mount_table(mnts, 3));
 }
 
 static void core_teardown(void)
@@ -182,7 +216,7 @@ static void core_teardown(void)
 
 static void test_mount_called(void)
 {
-    TEST_ASSERT_EQUAL_INT(2, g_mount_calls);
+    TEST_ASSERT_EQUAL_INT(3, g_mount_calls);
 }
 
 static void test_open_ok(void)
@@ -341,6 +375,81 @@ static void test_unlink_root_rejected(void)
 }
 
 /* ================================================================
+ *  Case: vfs_truncate
+ * ================================================================ */
+
+static void test_truncate_shrinks_file(void)
+{
+    vfs_fd_t fd = vfs_open("/mnt/f", VFS_O_RDWR);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_INT(4, (int)vfs_write(fd, "abcd", 4));
+    TEST_ASSERT_EQUAL_INT(0, vfs_truncate(fd, 2));
+
+    TEST_ASSERT_EQUAL_INT(0, (int)vfs_lseek(fd, 0, VFS_SEEK_SET));
+    char buf[8] = {0};
+    TEST_ASSERT_EQUAL_INT(2, (int)vfs_read(fd, buf, sizeof(buf)));
+    TEST_ASSERT_EQUAL_MEMORY("ab", buf, 2);
+    vfs_close(fd);
+
+    vfs_stat_t st;
+    TEST_ASSERT_EQUAL_INT(0, vfs_stat("/mnt/f", &st));
+    TEST_ASSERT_EQUAL_UINT32(2, st.size);
+}
+
+static void test_truncate_requires_write_intent(void)
+{
+    vfs_fd_t fd = vfs_open("/mnt/f", VFS_O_RDONLY);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_INT(-EINVAL, vfs_truncate(fd, 0));
+    vfs_close(fd);
+}
+
+static void test_truncate_bad_fd(void)
+{
+    TEST_ASSERT_EQUAL_INT(-EBADF, vfs_truncate(-1, 0));
+    TEST_ASSERT_EQUAL_INT(-EBADF, vfs_truncate(9999, 0));
+}
+
+static void test_truncate_negative_len(void)
+{
+    vfs_fd_t fd = vfs_open("/mnt/f", VFS_O_RDWR);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_INT(-EINVAL, vfs_truncate(fd, -1));
+    vfs_close(fd);
+}
+
+static void test_truncate_unsupported_backend(void)
+{
+    vfs_fd_t fd = vfs_open("/ntrunc/f", VFS_O_RDWR);
+    TEST_ASSERT_TRUE(fd >= 0);
+    TEST_ASSERT_EQUAL_INT(-ENOTSUP, vfs_truncate(fd, 0));
+    vfs_close(fd);
+
+    /* 后端无 TRUNCATE 能力时，O_TRUNC 打开同样被 caps 拦截 */
+    TEST_ASSERT_EQUAL_INT(-ENOTSUP, vfs_open("/ntrunc/f", VFS_O_RDWR | VFS_O_TRUNC));
+}
+
+/* ================================================================
+ *  Case: vfs_mount_table_ex
+ * ================================================================ */
+
+static void test_mount_table_ex_results(void)
+{
+    static const vfs_mount_cfg_t mnts[] = {
+        {"/mnt2", VFS_FSTYPE_EXTERNAL_BASE, NULL, 0, NULL}, /* 新挂载点：成功 */
+        {"/mnt",  VFS_FSTYPE_EXTERNAL_BASE, NULL, 0, NULL}, /* 重复：-EEXIST */
+    };
+    int rc[2] = {0, 0};
+    int last = vfs_mount_table_ex(mnts, 2, rc);
+    TEST_ASSERT_EQUAL_INT(-EEXIST, last);
+    TEST_ASSERT_EQUAL_INT(0, rc[0]);
+    TEST_ASSERT_EQUAL_INT(-EEXIST, rc[1]);
+
+    /* 旧接口等价于 rc_out=NULL */
+    TEST_ASSERT_EQUAL_INT(-EEXIST, vfs_mount_table(mnts, 2));
+}
+
+/* ================================================================
  *  Runner
  * ================================================================ */
 
@@ -370,6 +479,14 @@ int vfs_core_run_all_tests(void)
     RUN_TEST(test_stat_file_reports_size);
     RUN_TEST(test_unlink_file);
     RUN_TEST(test_unlink_root_rejected);
+
+    RUN_TEST(test_truncate_shrinks_file);
+    RUN_TEST(test_truncate_requires_write_intent);
+    RUN_TEST(test_truncate_bad_fd);
+    RUN_TEST(test_truncate_negative_len);
+    RUN_TEST(test_truncate_unsupported_backend);
+
+    RUN_TEST(test_mount_table_ex_results);
 
     return UNITY_END();
 }

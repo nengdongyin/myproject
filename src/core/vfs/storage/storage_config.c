@@ -205,3 +205,11 @@ void storage_config_deinit(void)
 {
     vfs_deinit();
 }
+
+int storage_config_format(const char *bdev_name)
+{
+    const vfs_bdev_t *bd = vfs_bdev_find(bdev_name);
+    if (!bd)
+        return -ENOENT;
+    return vfs_littlefs_format_bdev(bd);
+}

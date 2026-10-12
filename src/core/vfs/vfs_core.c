@@ -403,7 +403,8 @@ static int mount_one(const vfs_mount_cfg_t *cfg)
     mp->fstype = cfg->fstype;
     mp->fs = ops;
     mp->flags = cfg->flags;
-    mp->fs_ctx = (void *)cfg->fs_data; /* backend 可在 mount() 覆盖 */
+    mp->fs_data = cfg->fs_data; /* [in]  装配层配置：mount 只读 */
+    mp->fs_ctx = NULL;          /* [out] backend 运行时实例：mount 填充 */
     mp->storage_dev = bdev_find(cfg->bdev_name);
 
     /* 每挂载点锁 */
@@ -607,6 +608,11 @@ const vfs_bdev_t *vfs_bdev_find(const char *name)
 
 int vfs_mount_table(const vfs_mount_cfg_t *tbl, size_t n)
 {
+    return vfs_mount_table_ex(tbl, n, NULL);
+}
+
+int vfs_mount_table_ex(const vfs_mount_cfg_t *tbl, size_t n, int *rc_out)
+{
     if (!tbl)
         return -EINVAL;
 
@@ -614,6 +620,8 @@ int vfs_mount_table(const vfs_mount_cfg_t *tbl, size_t n)
     for (size_t i = 0; i < n; i++)
     {
         int rc = mount_one(&tbl[i]);
+        if (rc_out)
+            rc_out[i] = rc;
         if (rc < 0)
             last = rc; /* 记录，但继续尝试其余（部分失败不致命） */
     }
@@ -870,6 +878,27 @@ ssize_t vfs_pread(vfs_fd_t fd, void *buf, size_t n, off_t off)
         return seek_rc;
     }
     ssize_t rc = h->fs->read(&h->fobj, buf, n);
+    mp_unlock(h->mp);
+    return rc;
+}
+
+int vfs_truncate(vfs_fd_t fd, off_t len)
+{
+    vfs_handle_t *h = handle_get(fd, VFS_KIND_FILE);
+    if (!h)
+        return -EBADF;
+    /* 语义对齐 ftruncate：fd 须以写意图打开；len 非负 */
+    if (!flags_is_write(h->oflags))
+        return -EINVAL;
+    if (len < 0)
+        return -EINVAL;
+    if (h->mp->flags & VFS_MNT_RO)
+        return -EROFS;
+    if (!(h->fs->caps & VFS_CAP_TRUNCATE) || !h->fs->truncate)
+        return -ENOTSUP;
+
+    mp_lock(h->mp);
+    int rc = h->fs->truncate(&h->fobj, len);
     mp_unlock(h->mp);
     return rc;
 }

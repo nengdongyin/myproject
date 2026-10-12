@@ -24,7 +24,10 @@ typedef struct
     const vfs_bdev_t *bdev;                    /**< 对应的分区切片 */
     uint8_t read_buffer[VFS_LFS_CACHE_SIZE];   /**< littlefs 读 cache 缓冲 */
     uint8_t prog_buffer[VFS_LFS_CACHE_SIZE];   /**< littlefs 编程 cache 缓冲 */
-    uint8_t lookahead_buffer[VFS_LFS_LOOKAHEAD]; /**< littlefs lookahead 缓冲 */
+    /** littlefs lookahead 缓冲（等字节）。littlefs 内部按 uint32_t 访问 lookahead
+     *  位图（lfs_alloc），故用 uint32_t[] 声明由编译器强制 4 字节对齐，
+     *  避免非对齐 32 位访问在 Cortex-M0 等平台上总线错误 */
+    uint32_t lookahead_buffer[VFS_LFS_LOOKAHEAD / 4];
 } lfs_mnt_t;
 
 typedef struct
@@ -260,9 +263,8 @@ static int lfs_vfs_unmount(vfs_mount_t *mp)
  *          避免与 mount 并发借用同一槽。
  * @return 0 成功；-EINVAL 无 bdev，-ENOSPC 无空闲槽，< 0 lfs 错误码
  */
-int vfs_littlefs_format(vfs_mount_t *mp)
+int vfs_littlefs_format_bdev(const vfs_bdev_t *bdev)
 {
-    const vfs_bdev_t *bdev = mp->storage_dev;
     if (!bdev)
         return -EINVAL;
 
@@ -285,6 +287,14 @@ int vfs_littlefs_format(vfs_mount_t *mp)
     int rc = lfs_to_errno(lfs_format(&m->lfs, &m->cfg));
     m->used = 0; /* 释放借用槽 */
     return rc;
+}
+
+int vfs_littlefs_format(vfs_mount_t *mp)
+{
+    const vfs_bdev_t *bdev = mp->storage_dev;
+    if (!bdev)
+        return -EINVAL;
+    return vfs_littlefs_format_bdev(bdev);
 }
 
 /**

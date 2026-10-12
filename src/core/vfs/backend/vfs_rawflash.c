@@ -125,7 +125,7 @@ static const vfs_rawflash_entry_t *raw_entry_find(const vfs_rawflash_vol_t *vol,
  */
 static int raw_mount(vfs_mount_t *mp)
 {
-    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)mp->fs_ctx;
+    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)mp->fs_data;
     if (!vol || !vol->entries || vol->count == 0)
         return -EINVAL;
 
@@ -159,7 +159,7 @@ static int raw_unmount(vfs_mount_t *mp)
  */
 static int raw_open(vfs_file_t *f, const char *rel, int flags)
 {
-    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)f->mp->fs_ctx;
+    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)f->mp->fs_data;
     const vfs_rawflash_entry_t *e = raw_entry_find(vol, rel);
     if (!e)
         return -ENOENT; /* 未注册文件 → 打开失败 */
@@ -276,7 +276,7 @@ static int raw_close(vfs_file_t *f)
  */
 static int raw_stat(vfs_mount_t *mp, const char *rel, vfs_stat_t *st)
 {
-    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)mp->fs_ctx;
+    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)mp->fs_data;
     const vfs_rawflash_entry_t *e = raw_entry_find(vol, rel);
     if (!e)
         return -ENOENT;
@@ -292,7 +292,7 @@ static int raw_stat(vfs_mount_t *mp, const char *rel, vfs_stat_t *st)
  */
 static int raw_unlink(vfs_mount_t *mp, const char *rel)
 {
-    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)mp->fs_ctx;
+    const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)mp->fs_data;
     const vfs_rawflash_entry_t *e = raw_entry_find(vol, rel);
     if (!e)
         return -ENOENT;
@@ -318,7 +318,7 @@ static int raw_opendir(vfs_dir_t *d, const char *rel)
         if (!g_raw_dirs[i].used)
         {
             g_raw_dirs[i].used = 1;
-            g_raw_dirs[i].vol = (const vfs_rawflash_vol_t *)d->mp->fs_ctx;
+            g_raw_dirs[i].vol = (const vfs_rawflash_vol_t *)d->mp->fs_data;
             g_raw_dirs[i].idx = 0;
             system_unlock(SYS_LOCK_FILE);
             d->priv = &g_raw_dirs[i];

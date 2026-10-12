@@ -177,9 +177,11 @@ extern "C"
     } vfs_dir_t;
 
     /**
-     * @brief 挂载点（backend 可见：读 fs_ctx / storage_dev / flags）
+     * @brief 挂载点（backend 可见：读 fs_data / fs_ctx / storage_dev / flags）
      *
-     * @note fs_ctx 由 backend 在 mount() 中填充；core 只负责在 unmount() 后释放槽位。
+     * @note 两个 void* 字段各司其职、互不重叠：
+     *       - @c fs_data 为 [in]：装配层传入的 backend 初始化数据，mount 只读；
+     *       - @c fs_ctx  为 [out]：backend 运行时实例，由 mount 填充、unmount 释放。
      */
     typedef struct vfs_mount
     {
@@ -187,7 +189,8 @@ extern "C"
         size_t mnt_len;               /**< 挂载点长度（core 计算） */
         uint8_t fstype;               /**< vfs_fstype_t */
         const struct vfs_fs_ops *fs;  /**< 后端虚函数表（core 填入） */
-        void *fs_ctx;                 /**< backend 私有：lfs_t* / FATFS* / 表 */
+        const void *fs_data;          /**< [in]  装配层传入的 backend 初始化数据（mount 只读） */
+        void *fs_ctx;                 /**< [out] backend 运行时实例（mount 填充，unmount 释放） */
         const vfs_bdev_t *storage_dev;/**< 挂载源（rawflash 可空） */
         uint8_t flags;                /**< VFS_MNT_* */
         void *lock;                   /**< 每挂载点锁句柄（core 内部使用） */
@@ -207,7 +210,7 @@ extern "C"
         uint32_t caps;    /**< VFS_CAP_* 位集合 */
 
         /* ---- 文件系统生命周期 ---- */
-        int (*mount)(vfs_mount_t *mp);   /**< 建 mp->fs_ctx；可 NULL */
+        int (*mount)(vfs_mount_t *mp);   /**< 读 mp->fs_data、建 mp->fs_ctx；可 NULL */
         int (*unmount)(vfs_mount_t *mp); /**< 释放 mp->fs_ctx；可 NULL */
 
         /* ---- 文件操作（open/read/write/lseek/close 必需） ---- */
@@ -339,10 +342,22 @@ extern "C"
     int vfs_mount_table(const vfs_mount_cfg_t *tbl, size_t n);
 
     /**
+     * @brief 批量挂载静态表并输出逐项结果
+     * @param tbl    挂载配置数组（不能为 NULL）
+     * @param n      数组元素个数
+     * @param rc_out 输出各条目结果（长度 ≥ n；可为 NULL，NULL 时等价 vfs_mount_table）
+     * @return 0 全部成功，否则最后一个失败的错误码
+     * @note 部分失败不致命：失败条目记录到 rc_out[i] 后继续处理其余条目。
+     */
+    int vfs_mount_table_ex(const vfs_mount_cfg_t *tbl, size_t n, int *rc_out);
+
+    /**
      * @brief 动态挂载单个卷
      * @param cfg 挂载配置（不能为 NULL）
      * @return 0 成功；< 0 负 errno
      * @note 未开 VFS_ENABLE_DYNAMIC_MOUNT 时返回 -ENOTSUP（静态表仍可用）
+     * @note 并发：本接口与 vfs_unmount 仅限启动/关闭阶段单线程调用；运行期与
+     *       文件操作（vfs_open 等）并发不受保护。
      */
     int vfs_mount(const vfs_mount_cfg_t *cfg);
 
@@ -351,6 +366,7 @@ extern "C"
      * @param mnt_point 挂载点绝对路径，如 "/app"
      * @return 0 成功；-ENOENT 不存在，-EBUSY 仍有打开句柄，< 0 其他负 errno
      * @note 未开 VFS_ENABLE_DYNAMIC_MOUNT 时返回 -ENOTSUP
+     * @note 并发：仅限启动/关闭阶段单线程调用（见 vfs_mount）。
      */
     int vfs_unmount(const char *mnt_point);
 
@@ -428,6 +444,17 @@ extern "C"
      * @note 与 POSIX pread 语义不同：**会改变文件当前偏移**。连续按偏移读时请递增 off。
      */
     ssize_t vfs_pread(vfs_fd_t fd, void *buf, size_t n, off_t off);
+
+    /**
+     * @brief 截断/扩展打开的文件到 len 字节（对齐 POSIX ftruncate）
+     * @details 前置校验：fd 须以写意图打开（否则 -EINVAL）；len < 0 → -EINVAL；
+     *          只读挂载点 → -EROFS；后端无 VFS_CAP_TRUNCATE 或无 truncate 回调 →
+     *          -ENOTSUP。后端可只支持截断到 0（如 rawflash，其余长度 -ENOTSUP）。
+     * @param fd  文件描述符（须以写意图打开）
+     * @param len 目标长度（字节）
+     * @return 0 成功；< 0 负 errno
+     */
+    int vfs_truncate(vfs_fd_t fd, off_t len);
 
 /* ================================================================
  *  文件系统级操作
