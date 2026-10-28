@@ -145,6 +145,11 @@ extern "C"
 
     /**
      * @brief App 参数写入回调 (与 IP write 回调语义对称)
+     *
+     * @attention 回调执行期间缓存已先行更新为新值 (含 BLOB/STRING):
+     *   回调内 param_read / param_save_one 均反映新值。
+     *   回调返回非 OK 时缓存保持新值不回滚 (有意语义)。
+     *
      * @param param_id 参数 ID
      * @param value    待写入的新值
      * @return PARAM_OK 表示接受，其他值表示拒绝
@@ -356,6 +361,121 @@ extern "C"
         PARAM_ENTRY_HEAD();
         uint16_t max_len; /**< 最大字符数 (不含结尾 '\\0') */
     } param_string_entry_t;
+
+/**
+ * @name 参数条目定义核心宏 (框架内部)
+ *
+ * App / IP 两套公开宏 (PARAM_UINT / PARAM_IP_UINT 等) 的共享初始化器。
+ * 唯一差异 (行为决定者) 为 vtable 指针，由调用方通过 _vtbl 传入:
+ *   App → &app_vtable, IP → &ip_vtable
+ *
+ * @note 应用层代码严禁直接使用本组宏。请使用 PARAM_UINT /
+ *       PARAM_IP_UINT 等类型化公开宏。
+ * @{
+ */
+
+/** @brief 数值范围型核心宏 (UINT) */
+#define PARAM_ENTRY_RANGE_UINT(_vtbl, _name, _id, _flags, _def, _min, _max) \
+    static param_range_entry_t _name = {                                    \
+        .base = {(_id), (_vtbl)},                                           \
+        .type = PARAM_TYPE_UINT,                                            \
+        .flags = (_flags),                                                  \
+        .dirty = 0,                                                         \
+        .has_range = ((_min) < (_max)),                                     \
+        .cache = {.u32 = (_def)},                                           \
+        .default_val = {.u32 = (_def)},                                     \
+        .min = {.u32 = (_min)},                                             \
+        .max = {.u32 = (_max)},                                             \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief 数值范围型核心宏 (INT) */
+#define PARAM_ENTRY_RANGE_INT(_vtbl, _name, _id, _flags, _def, _min, _max) \
+    static param_range_entry_t _name = {                                   \
+        .base = {(_id), (_vtbl)},                                          \
+        .type = PARAM_TYPE_INT,                                            \
+        .flags = (_flags),                                                 \
+        .dirty = 0,                                                        \
+        .has_range = ((_min) < (_max)),                                    \
+        .cache = {.i32 = (_def)},                                          \
+        .default_val = {.i32 = (_def)},                                    \
+        .min = {.i32 = (_min)},                                            \
+        .max = {.i32 = (_max)},                                            \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief 数值范围型核心宏 (FLOAT) */
+#define PARAM_ENTRY_RANGE_FLOAT(_vtbl, _name, _id, _flags, _def, _min, _max) \
+    static param_range_entry_t _name = {                                     \
+        .base = {(_id), (_vtbl)},                                            \
+        .type = PARAM_TYPE_FLOAT,                                            \
+        .flags = (_flags),                                                   \
+        .dirty = 0,                                                          \
+        .has_range = ((_min) < (_max)),                                      \
+        .cache = {.f32 = (_def)},                                            \
+        .default_val = {.f32 = (_def)},                                      \
+        .min = {.f32 = (_min)},                                              \
+        .max = {.f32 = (_max)},                                              \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief 枚举型核心宏 */
+#define PARAM_ENTRY_ENUM(_vtbl, _name, _id, _flags, _def, _vals, _cnt) \
+    static param_enum_entry_t _name = {                                \
+        .base = {(_id), (_vtbl)},                                      \
+        .type = PARAM_TYPE_ENUM,                                       \
+        .flags = (_flags),                                             \
+        .dirty = 0,                                                    \
+        .cache = {.i32 = (_def)},                                      \
+        .default_val = {.i32 = (_def)},                                \
+        .enum_values = (_vals),                                        \
+        .enum_count = (_cnt),                                          \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief 布尔型核心宏 */
+#define PARAM_ENTRY_BOOL(_vtbl, _name, _id, _flags, _def) \
+    static param_bool_entry_t _name = {                  \
+        .base = {(_id), (_vtbl)},                        \
+        .type = PARAM_TYPE_BOOL,                         \
+        .flags = (_flags),                               \
+        .dirty = 0,                                      \
+        .cache = {.b = (_def)},                          \
+        .default_val = {.b = (_def)},                    \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief BLOB 型核心宏 */
+#define PARAM_ENTRY_BLOB(_vtbl, _name, _id, _flags, _def_ptr, _size) \
+    static param_blob_entry_t _name = {                              \
+        .base = {(_id), (_vtbl)},                                    \
+        .type = PARAM_TYPE_BLOB,                                     \
+        .flags = (_flags),                                           \
+        .dirty = 0,                                                  \
+        .cache = {.ptr = (_def_ptr)},                                \
+        .default_val = {.ptr = (_def_ptr)},                          \
+        .blob_size = (_size),                                        \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief STRING 型核心宏 (缓存指向调用方静态缓冲区, 长 max_len+1) */
+#define PARAM_ENTRY_STRING(_vtbl, _name, _id, _flags, _def_ptr, _max_len) \
+    static param_string_entry_t _name = {                                \
+        .base = {(_id), (_vtbl)},                                        \
+        .type = PARAM_TYPE_STRING,                                       \
+        .flags = (_flags),                                               \
+        .dirty = 0,                                                      \
+        .cache = {.ptr = (_def_ptr)},                                    \
+        .default_val = {.ptr = (_def_ptr)},                              \
+        .max_len = (_max_len),                                           \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @brief EXEC 命令型核心宏 */
+#define PARAM_ENTRY_EXEC(_vtbl, _name, _id) \
+    static param_exec_entry_t _name = {     \
+        .base = {(_id), (_vtbl)},           \
+        .type = PARAM_TYPE_EXEC,            \
+        .flags = PARAM_FLAG_EXEC,           \
+        .dirty = 0,                         \
+        .cache = {.u32 = 0},                \
+        .default_val = {.u32 = 0},          \
+        PARAM_DEBUG_NAME_INIT(_name)}
+
+/** @} */
 
     /**
      * @brief 持久化后端驱动接口

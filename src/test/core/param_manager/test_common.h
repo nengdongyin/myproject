@@ -171,6 +171,16 @@ extern "C"
     int mock_ip_init_ok(void *drv);
 
     /* ================================================================
+     *  回读 mock — 验证"值类型缓存先行": 回调执行期间 param_read_cache
+     *  应返回本次写入的新值
+     * ================================================================ */
+    extern param_value_t g_apply_seen_cache;   /**< apply 回调内读到的缓存值 */
+    extern param_value_t g_ip_write_seen_cache; /**< driver write 回调内读到的缓存值 */
+
+    int mock_apply_readback(void *ctx, uint32_t param_id, param_value_t value);
+    int mock_ip_write_readback(void *drv, uint32_t param_id, param_value_t value);
+
+    /* ================================================================
      *  参数条目重置 — 条目是 static，跨测试需要手动恢复 cache
      * ================================================================ */
     void test_reset_entry(param_entry_t *e);

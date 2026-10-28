@@ -163,38 +163,50 @@ void test_register_duplicate_param_across_modules(void) {
 }
 
 /* ================================================================
- *  IP 位图边界
+ *  IP 参数数上限 (无 64 位图限制, 受全局哈希表约束)
  * ================================================================ */
-void test_ip_max_64_params(void) {
-    static param_entry_head_t ip_arr[64];
-    static param_entry_t *ip_table[64];
-    for (int i = 0; i < 64; i++) {
+void test_ip_over_64_params_ok(void) {
+    static param_entry_head_t ip_arr[100];
+    static param_entry_t *ip_table[100];
+    for (int i = 0; i < 100; i++) {
         memset(&ip_arr[i], 0, sizeof(ip_arr[i]));
         ip_arr[i].base.param_id = MAKE_PARAM_ID(TEST_MODULE_IP2, i);
         ip_arr[i].base.vtable   = &ip_vtable;
         ip_arr[i].type          = PARAM_TYPE_UINT;
-        ip_arr[i].cache.u32     = i;
-        ip_arr[i].default_val.u32 = i;
+        ip_arr[i].cache.u32     = (uint32_t)i;
+        ip_arr[i].default_val.u32 = (uint32_t)i;
         ip_table[i] = &ip_arr[i].base;
     }
     IP_DRIVER_DEFINE(big_ip, TEST_MODULE_IP2, "BigIP", NULL, NULL, NULL, NULL, NULL, NULL);
-    TEST_ASSERT_PARAM_OK(ip_driver_register(&big_ip_instance, ip_table, 64));
+    TEST_ASSERT_PARAM_OK(ip_driver_register(&big_ip_instance, ip_table, 100));
+
+    /* 验证 local_id ≥ 64 的参数可正常标脏/清脏 (旧 64-bit 位图实现会丢位/UB) */
+    param_value_t v = { .u32 = 12345 };
+    TEST_ASSERT_PARAM_OK(param_write(MAKE_PARAM_ID(TEST_MODULE_IP2, 99), v));
+    param_stats_t stats;
+    param_get_stats(&stats);
+    TEST_ASSERT_EQUAL_UINT16(1, stats.dirty_count);
+    TEST_ASSERT_PARAM_OK(param_flush());
+    param_get_stats(&stats);
+    TEST_ASSERT_EQUAL_UINT16(0, stats.dirty_count);
 }
 
-void test_ip_too_many_params(void) {
-    static param_entry_head_t ip_arr[65];
-    static param_entry_t *ip_table[65];
-    for (int i = 0; i < 65; i++) {
+void test_ip_over_hash_capacity(void) {
+    enum { N = PARAM_HASH_SIZE + 1 };
+    static param_entry_head_t ip_arr[N];
+    static param_entry_t *ip_table[N];
+    for (int i = 0; i < N; i++) {
         memset(&ip_arr[i], 0, sizeof(ip_arr[i]));
         ip_arr[i].base.param_id = MAKE_PARAM_ID(TEST_MODULE_IP2, i);
         ip_arr[i].base.vtable   = &ip_vtable;
-        ip_arr[i].cache.u32     = i;
-        ip_arr[i].default_val.u32 = i;
+        ip_arr[i].type          = PARAM_TYPE_UINT;
+        ip_arr[i].cache.u32     = (uint32_t)i;
+        ip_arr[i].default_val.u32 = (uint32_t)i;
         ip_table[i] = &ip_arr[i].base;
     }
     IP_DRIVER_DEFINE(big_ip, TEST_MODULE_IP2, "BigIP", NULL, NULL, NULL, NULL, NULL, NULL);
-    TEST_ASSERT_PARAM_ERR(ip_driver_register(&big_ip_instance, ip_table, 65),
-                          PARAM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_PARAM_ERR(ip_driver_register(&big_ip_instance, ip_table, N),
+                          PARAM_ERR_NO_MEMORY);
 }
 
 void run_test_boundary(void)
@@ -217,6 +229,6 @@ void run_test_boundary(void)
     RUN_TEST(test_register_null_entries);
     RUN_TEST(test_register_zero_count);
     RUN_TEST(test_register_duplicate_param_across_modules);
-    RUN_TEST(test_ip_max_64_params);
-    RUN_TEST(test_ip_too_many_params);
+    RUN_TEST(test_ip_over_64_params_ok);
+    RUN_TEST(test_ip_over_hash_capacity);
 }

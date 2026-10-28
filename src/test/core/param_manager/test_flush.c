@@ -77,7 +77,7 @@ void test_flush_ip_writes_hardware(void) {
     TEST_ASSERT_EQUAL_UINT32(700, g_ip_write_last_value.u32);
 }
 
-void test_flush_clears_ip_dirty_map(void) {
+void test_flush_clears_ip_dirty(void) {
     register_all();
 
     param_value_t v = { .u32 = 800 };
@@ -88,6 +88,7 @@ void test_flush_clears_ip_dirty_map(void) {
     param_stats_t stats;
     param_get_stats(&stats);
     TEST_ASSERT_EQUAL_UINT16(0, stats.dirty_count);
+    TEST_ASSERT_DIRTY(&fipu.base, 0);
 }
 
 void test_flush_multiple_ip_params(void) {
@@ -129,7 +130,7 @@ void run_test_flush(void)
     RUN_TEST(test_flush_with_dirty_applet);
     RUN_TEST(test_flush_skips_clean_modules);
     RUN_TEST(test_flush_ip_writes_hardware);
-    RUN_TEST(test_flush_clears_ip_dirty_map);
+    RUN_TEST(test_flush_clears_ip_dirty);
     RUN_TEST(test_flush_multiple_ip_params);
     RUN_TEST(test_flush_applet_then_ip_order);
 }

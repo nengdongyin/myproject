@@ -68,10 +68,11 @@ extern "C" {
 #define PARAM_HASH_SIZE 256
 #endif
 
-/** @brief IP 模块最大参数数 (dirty 位图宽度) */
-#ifndef IP_DIRTY_MAP_BITS
-#define IP_DIRTY_MAP_BITS 64
-#endif
+/** @brief IP 模块参数数上限
+ *
+ * 无独立位图限制 (条目级 dirty 标志追踪)。每模块实际上限 =
+ * min(local_id 16-bit 空间, 全局哈希表 PARAM_HASH_SIZE, count 类型宽度)。
+ * 全系统参数总数 (App + IP) 受 PARAM_HASH_SIZE 约束。 */
 
 /** @brief 裸机模式静态内存池大小 (字节) */
 #ifndef PARAM_PORT_POOL_SIZE

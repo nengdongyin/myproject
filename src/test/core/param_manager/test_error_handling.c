@@ -145,8 +145,9 @@ void test_apply_cb_returns_error(void) {
     int ret = param_write(TID_APPLET_UINT, v);
     TEST_ASSERT_PARAM_ERR(ret, PARAM_ERR_INVALID_ID);
 
+    /* 缓存先行且不回滚: 拒绝后缓存保持新值 */
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(42, v.u32);
     test_applet_module.write = mock_apply_ok;
 }
 

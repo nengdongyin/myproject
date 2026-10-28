@@ -30,7 +30,8 @@ static param_module_t *app_find(uint16_t m_id)
 /* ================================================================
  *  app_vtable 虚函数实现
  *
- *  控制策略: pre_write → apply → cache_update → mark_dirty
+ *  控制策略: pre_write → cache_update → apply → mark_dirty
+ *            (缓存先行, 拒绝不回滚 — 有意语义)
  *  数据通路: g_param_data_ops[t].xxx()
  * ================================================================ */
 
@@ -76,13 +77,19 @@ static int app_write(param_entry_t *e, param_value_t value)
 
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
+    /* 缓存先行 (有意不回滚): 回调执行期间缓存已为新值,
+       回调内 param_read / param_save_one 均作用于新值 (含 BLOB/STRING)。
+       回调拒绝时缓存保持新值, 仅不标记 dirty。 */
+    system_lock(SYS_LOCK_PARAM);
+    g_param_data_ops[t].cache_update(e, value);
+    system_unlock(SYS_LOCK_PARAM);
+
     if (m->write) {
         int ret = m->write(m->ctx, e->param_id, value);
         if (ret != PARAM_OK) return ret;
     }
 
     system_lock(SYS_LOCK_PARAM);
-    g_param_data_ops[t].cache_update(e, value);
     param_entry_mark_dirty(e);
     system_unlock(SYS_LOCK_PARAM);
 
@@ -137,10 +144,14 @@ static int app_write_immediate(param_entry_t *e, param_value_t value)
 
     if (!m->write) return PARAM_ERR_NOT_FOUND;
 
+    /* 缓存先行 (有意不回滚, 与 app_write 同语义) */
+    system_lock(SYS_LOCK_PARAM);
+    g_param_data_ops[t].cache_update(e, value);
+    system_unlock(SYS_LOCK_PARAM);
+
     int ret = m->write(m->ctx, e->param_id, value);
     if (ret == PARAM_OK) {
         system_lock(SYS_LOCK_PARAM);
-        g_param_data_ops[t].cache_update(e, value);
         param_entry_clear_dirty(e);
         system_unlock(SYS_LOCK_PARAM);
     }

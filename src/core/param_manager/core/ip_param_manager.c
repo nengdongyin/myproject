@@ -1,17 +1,17 @@
 /**
  * @file ip_param_manager.c
- * @brief IP 参数子系统实现 — 基于 driver 回调 + 64-bit dirty_map + BLOB/STRING 支持
+ * @brief IP 参数子系统实现 — 基于 driver 回调 + 条目级 dirty 标志 + BLOB/STRING 支持
  *
  * IP 参数不直接操作硬件寄存器。所有硬件访问通过 inst->read / inst->write
  * 回调完成，硬件地址/偏移/位宽由 driver 内部封装。
  *
- * dirty 追踪采用 64-bit 位图:
- *   - inst->dirty_map 的 bit[i] 对应第 i 个参数 (0-indexed)
- *   - 所有参数 clean 时 dirty_map==0 且 node.dirty==0
- *   - flush 按位遍历 dirty_map，批量写入后清零
+ * dirty 追踪采用条目级 dirty 标志 (与 App 模块同构):
+ *   - 每个参数条目携带自身 dirty 标志 (param_entry_head_t::dirty)
+ *   - 所有参数 clean 时 node.dirty==0
+ *   - flush 遍历参数表检查条目 dirty，写入成功后清除
  *
  * 控制策略 (IP 独有):
- *   - dirty: 位图精确追踪
+ *   - dirty: 条目级 dirty 标志追踪
  *   - flush: 逐参数 write，可选 flush 批量后处理
  *
  * pre_write / cache_update / read / save / load / reset
@@ -44,7 +44,7 @@ static ip_instance_t *ip_find(uint16_t ip_id)
 /* ================================================================
  *  ip_vtable 虚函数实现
  *
- *  控制策略: 无校验 → cache_update → 置 dirty_map 位
+ *  控制策略: 无校验 → cache_update → 置条目级 dirty 标志
  *  数据通路: g_param_data_ops[t].xxx()
  * ================================================================ */
 
@@ -127,10 +127,17 @@ static int ip_write_immediate(param_entry_t *e, param_value_t value)
 
     if (!inst->write) return PARAM_ERR_NOT_FOUND;
 
+    /* 缓存先行 (有意不回滚): driver write 回调执行期间缓存已为新值,
+       回调内 param_read / param_save_one 均作用于新值 (如 sensor
+       驱动 write 内 param_save_one 持久化最新值)。硬件写入失败时
+       缓存保持新值不回滚。 */
+    system_lock(SYS_LOCK_PARAM);
+    g_param_data_ops[t].cache_update(e, value);
+    system_unlock(SYS_LOCK_PARAM);
+
     int ret = inst->write(inst->driver, e->param_id, value);
     if (ret == PARAM_OK) {
         system_lock(SYS_LOCK_PARAM);
-        g_param_data_ops[t].cache_update(e, value);
         param_entry_clear_dirty(e);
         system_unlock(SYS_LOCK_PARAM);
     }
@@ -201,13 +208,9 @@ static int ip_flush_one(param_entry_t *e)
     ip_instance_t *inst = ip_find((uint16_t)PARAM_MODULE_ID(e->param_id));
     if (!inst || !inst->write) return PARAM_ERR_NOT_FOUND;
 
-    uint16_t lid = PARAM_LOCAL_ID(e->param_id);
-    if (!((inst->dirty_map >> lid) & 1)) return PARAM_OK;
+    if (!entry_dirty(e)) return PARAM_OK;
 
-    int ret = _ip_flush_write_entry(e, inst);
-    if (ret == PARAM_OK)
-        inst->dirty_map &= ~(1ULL << lid);
-    return ret;
+    return _ip_flush_write_entry(e, inst);
 }
 
 static int ip_param_load(param_entry_t *e)
@@ -230,15 +233,9 @@ static int ip_param_reset(param_entry_t *e)
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
-    int ret = g_param_data_ops[t].reset(e);
-
-    ip_instance_t *inst = ip_find((uint16_t)PARAM_MODULE_ID(e->param_id));
-    if (inst) {
-        inst->dirty_map &= ~(1ULL << PARAM_LOCAL_ID(e->param_id));
-        if (inst->dirty_map == 0)
-            inst->node.dirty = 0;
-    }
-    return ret;
+    /* 条目级 dirty 由 g_param_data_ops[t].reset 清除;
+       模块级 dirty 由调用方 (param_reset_all → vtable->init) 重新建立 */
+    return g_param_data_ops[t].reset(e);
 }
 
 /* ================================================================
@@ -265,64 +262,61 @@ const param_vtable_t ip_vtable = {
 
 static void ip_module_mark_dirty(param_module_node_t *m, uint16_t local_id)
 {
-    ip_instance_t *inst = (ip_instance_t *)m;
+    (void)local_id;
     m->dirty = 1;
-    if (local_id < IP_DIRTY_MAP_BITS)
-        inst->dirty_map |= (1ULL << local_id);
 }
 
 static void ip_module_clear_dirty(param_module_node_t *m, uint16_t local_id)
 {
-    ip_instance_t *inst = (ip_instance_t *)m;
-    if (local_id < IP_DIRTY_MAP_BITS) {
-        inst->dirty_map &= ~(1ULL << local_id);
-        if (inst->dirty_map == 0)
-            m->dirty = 0;
+    (void)local_id;
+    uint8_t has_dirty = 0;
+    for (uint16_t i = 0; i < m->param_count; i++) {
+        param_entry_t *pe = m->table[i];
+        if (pe && entry_dirty(pe)) { has_dirty = 1; break; }
     }
+    if (!has_dirty) m->dirty = 0;
 }
 
 static int ip_module_flush(param_module_node_t *m)
 {
     ip_instance_t *inst = (ip_instance_t *)m;
-    if (inst->dirty_map == 0) return PARAM_OK;
+    if (!m->dirty) return PARAM_OK;
 
     int last_err = PARAM_OK;
 
     for (uint16_t i = 0; i < m->param_count; i++) {
         param_entry_t *e = m->table[i];
-        if (!e)
-            continue;
-
-        uint16_t lid = PARAM_LOCAL_ID(e->param_id);
-        if (!((inst->dirty_map >> lid) & 1))
+        if (!e || !entry_dirty(e))
             continue;
 
         if (!inst->write) {
             /* 驱动无 write 回调: 清除 dirty 避免死循环 */
-            inst->dirty_map &= ~(1ULL << lid);
             param_entry_clear_dirty(e);
             continue;
         }
 
         int ret = _ip_flush_write_entry(e, inst);
-        if (ret == PARAM_OK) {
-            inst->dirty_map &= ~(1ULL << lid);
-        } else {
+        if (ret != PARAM_OK) {
             last_err = ret;
             /* 永久清除 dirty: write 失败重试无意义,
                下次 param_write 会重新标脏触发 flush */
-            inst->dirty_map &= ~(1ULL << lid);
             param_entry_clear_dirty(e);
         }
     }
 
     if (inst->flush) {
-        int ret = inst->flush(inst->driver, inst->dirty_map);
+        int ret = inst->flush(inst->driver);
         if (ret != PARAM_OK)
             last_err = ret;
     }
 
-    if (inst->dirty_map == 0)
+    /* 逐参数 flush 后若已无 dirty 条目则清模块级 dirty */
+    uint8_t has_dirty = 0;
+    for (uint16_t i = 0; i < m->param_count; i++) {
+        param_entry_t *e = m->table[i];
+        if (e && entry_dirty(e)) { has_dirty = 1; break; }
+    }
+    if (!has_dirty)
         m->dirty = 0;
 
     return last_err;
@@ -330,15 +324,11 @@ static int ip_module_flush(param_module_node_t *m)
 
 static void ip_module_deinit(param_module_node_t *m)
 {
-    ip_instance_t *inst = (ip_instance_t *)m;
-    inst->dirty_map = 0;
     m->initialized = 0;
 }
 
 static void ip_module_reset(param_module_node_t *m)
 {
-    ip_instance_t *inst = (ip_instance_t *)m;
-    inst->dirty_map = 0;
     m->dirty = 0;
 }
 
@@ -348,16 +338,14 @@ static int ip_module_init(param_module_node_t *m)
 
     /* 将所有参数标记为 dirty，确保默认值可被 flush 下发硬件。
      * 即使不调用 param_load_all()，param_flush() 也能生效。 */
-    inst->dirty_map = 0;
+    uint8_t any = 0;
     for (uint16_t i = 0; i < m->param_count; i++) {
         if (m->table[i]) {
             param_entry_mark_dirty(m->table[i]);
-            if (i < IP_DIRTY_MAP_BITS)
-                inst->dirty_map |= (1ULL << i);
+            any = 1;
         }
     }
-    if (inst->dirty_map != 0)
-        m->dirty = 1;
+    m->dirty = any;
 
     if (inst->init) {
         int ret = inst->init(inst->driver);
@@ -395,7 +383,6 @@ int ip_driver_register(ip_instance_t *inst,
                        uint16_t count)
 {
     if (!inst || !entries || count == 0) return PARAM_ERR_INVALID_ID;
-    if (count > IP_DIRTY_MAP_BITS) return PARAM_ERR_OUT_OF_RANGE;
 
     inst->node.vtable = &ip_module_vtable;
 

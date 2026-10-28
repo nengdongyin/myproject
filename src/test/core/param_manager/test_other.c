@@ -158,6 +158,30 @@ void test_write_immediate_ip(void) {
     TEST_ASSERT_DIRTY(&oipu.base, 0);
 }
 
+void test_write_immediate_ip_cb_sees_new_cache(void) {
+    test_ip_instance.write = mock_ip_write_readback;
+    register_all();
+
+    param_value_t v = { .u32 = 888 };
+    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_IP_UINT, v));
+    /* 值类型缓存先行: driver write 回调执行期间缓存已是新值 */
+    TEST_ASSERT_EQUAL_UINT32(888, g_ip_write_seen_cache.u32);
+    test_ip_instance.write = mock_ip_write_ok;
+}
+
+void test_write_immediate_ip_fails_keeps_cache(void) {
+    test_ip_instance.write = mock_ip_write_fail;
+    register_all();
+
+    param_value_t v = { .u32 = 555 };
+    TEST_ASSERT_PARAM_ERR(param_write_immediate(TID_IP_UINT, v), PARAM_ERR_NOT_FOUND);
+    /* 缓存先行且不回滚: 硬件写入失败后缓存保持新值, 不标记 dirty */
+    param_read(TID_IP_UINT, &v);
+    TEST_ASSERT_EQUAL_UINT32(555, v.u32);
+    TEST_ASSERT_DIRTY(&oipu.base, 0);
+    test_ip_instance.write = mock_ip_write_ok;
+}
+
 void test_write_immediate_ip_no_write_cb(void) {
     test_ip_instance.write = NULL;
     register_all();
@@ -339,6 +363,8 @@ void run_test_other(void)
     RUN_TEST(test_module_foreach_count);
     RUN_TEST(test_write_immediate_applet);
     RUN_TEST(test_write_immediate_ip);
+    RUN_TEST(test_write_immediate_ip_cb_sees_new_cache);
+    RUN_TEST(test_write_immediate_ip_fails_keeps_cache);
     RUN_TEST(test_write_immediate_ip_no_write_cb);
     RUN_TEST(test_write_raw_uint);
     RUN_TEST(test_write_raw_too_long);

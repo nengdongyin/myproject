@@ -165,69 +165,23 @@ extern "C"
  * @param _max   最大值 (若 _min >= _max 则不启用范围校验)
  */
 #define PARAM_UINT(_name, _id, _flags, _def, _min, _max) \
-    static param_range_entry_t _name = {                 \
-        .base = {(_id), &app_vtable},                    \
-        .type = PARAM_TYPE_UINT,                         \
-        .flags = (_flags),                               \
-        .dirty = 0,                                      \
-        .has_range = ((_min) < (_max)),                  \
-        .cache = {.u32 = (_def)},                        \
-        .default_val = {.u32 = (_def)},                  \
-        .min = {.u32 = (_min)},                          \
-        .max = {.u32 = (_max)},                          \
-        PARAM_DEBUG_NAME_INIT(_name)}
+    PARAM_ENTRY_RANGE_UINT(&app_vtable, _name, _id, _flags, _def, _min, _max)
 
 /** @brief 定义 INT 类型参数 */
 #define PARAM_INT(_name, _id, _flags, _def, _min, _max) \
-    static param_range_entry_t _name = {                \
-        .base = {(_id), &app_vtable},                   \
-        .type = PARAM_TYPE_INT,                         \
-        .flags = (_flags),                              \
-        .dirty = 0,                                     \
-        .has_range = ((_min) < (_max)),                 \
-        .cache = {.i32 = (_def)},                       \
-        .default_val = {.i32 = (_def)},                 \
-        .min = {.i32 = (_min)},                         \
-        .max = {.i32 = (_max)},                         \
-        PARAM_DEBUG_NAME_INIT(_name)}
+    PARAM_ENTRY_RANGE_INT(&app_vtable, _name, _id, _flags, _def, _min, _max)
 
 /** @brief 定义 FLOAT 类型参数 */
 #define PARAM_FLOAT(_name, _id, _flags, _def, _min, _max) \
-    static param_range_entry_t _name = {                  \
-        .base = {(_id), &app_vtable},                     \
-        .type = PARAM_TYPE_FLOAT,                         \
-        .flags = (_flags),                                \
-        .dirty = 0,                                       \
-        .has_range = ((_min) < (_max)),                   \
-        .cache = {.f32 = (_def)},                         \
-        .default_val = {.f32 = (_def)},                   \
-        .min = {.f32 = (_min)},                           \
-        .max = {.f32 = (_max)},                           \
-        PARAM_DEBUG_NAME_INIT(_name)}
+    PARAM_ENTRY_RANGE_FLOAT(&app_vtable, _name, _id, _flags, _def, _min, _max)
 
 /** @brief 定义 ENUM 类型参数 */
 #define PARAM_ENUM(_name, _id, _flags, _def, _vals, _cnt) \
-    static param_enum_entry_t _name = {                   \
-        .base = {(_id), &app_vtable},                     \
-        .type = PARAM_TYPE_ENUM,                          \
-        .flags = (_flags),                                \
-        .dirty = 0,                                       \
-        .cache = {.i32 = (_def)},                         \
-        .default_val = {.i32 = (_def)},                   \
-        .enum_values = (_vals),                           \
-        .enum_count = (_cnt),                             \
-        PARAM_DEBUG_NAME_INIT(_name)}
+    PARAM_ENTRY_ENUM(&app_vtable, _name, _id, _flags, _def, _vals, _cnt)
 
 /** @brief 定义 BOOL 类型参数 */
 #define PARAM_BOOL(_name, _id, _flags, _def) \
-    static param_bool_entry_t _name = {      \
-        .base = {(_id), &app_vtable},        \
-        .type = PARAM_TYPE_BOOL,             \
-        .flags = (_flags),                   \
-        .dirty = 0,                          \
-        .cache = {.b = (_def)},              \
-        .default_val = {.b = (_def)},        \
-        PARAM_DEBUG_NAME_INIT(_name)}
+    PARAM_ENTRY_BOOL(&app_vtable, _name, _id, _flags, _def)
 
 /**
  * @brief 定义 BLOB 类型参数
@@ -239,15 +193,7 @@ extern "C"
  * @param _size    blob 大小
  */
 #define PARAM_BLOB(_name, _id, _flags, _def_ptr, _size) \
-    static param_blob_entry_t _name = {                 \
-        .base = {(_id), &app_vtable},                   \
-        .type = PARAM_TYPE_BLOB,                        \
-        .flags = (_flags),                              \
-        .dirty = 0,                                     \
-        .cache = {.ptr = (_def_ptr)},                   \
-        .default_val = {.ptr = (_def_ptr)},             \
-        .blob_size = (_size),                           \
-        PARAM_DEBUG_NAME_INIT(_name)}
+    PARAM_ENTRY_BLOB(&app_vtable, _name, _id, _flags, _def_ptr, _size)
 
 /**
  * @brief 定义 STRING 类型参数
@@ -262,15 +208,7 @@ extern "C"
  * @param _max_len 最大字符数 (不含 '\\0')
  */
 #define PARAM_STRING(_name, _id, _flags, _def, _max_len) \
-    static param_string_entry_t _name = {                \
-        .base = {(_id), &app_vtable},                    \
-        .type = PARAM_TYPE_STRING,                       \
-        .flags = (_flags),                               \
-        .dirty = 0,                                      \
-        .cache = {.ptr = (char *)(_def)},                \
-        .default_val = {.ptr = (char *)(_def)},          \
-        .max_len = (_max_len),                           \
-        PARAM_DEBUG_NAME_INIT(_name)}
+    PARAM_ENTRY_STRING(&app_vtable, _name, _id, _flags, (char *)(_def), _max_len)
 
 /**
  * @brief 定义 App EXEC 命令
@@ -283,15 +221,8 @@ extern "C"
  * @param _name 命令变量名
  * @param _id   命令 ID (MAKE_PARAM_ID 风格)
  */
-#define PARAM_EXEC(_name, _id)          \
-    static param_exec_entry_t _name = { \
-        .base = {(_id), &app_vtable},   \
-        .type = PARAM_TYPE_EXEC,        \
-        .flags = PARAM_FLAG_EXEC,       \
-        .dirty = 0,                     \
-        .cache = {.u32 = 0},            \
-        .default_val = {.u32 = 0},      \
-        PARAM_DEBUG_NAME_INIT(_name)}
+#define PARAM_EXEC(_name, _id)      \
+    PARAM_ENTRY_EXEC(&app_vtable, _name, _id)
 
     /** @} */
 

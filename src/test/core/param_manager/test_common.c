@@ -30,6 +30,9 @@ int g_ip_write_call_count;
 int g_ip_write_last_ret;
 param_value_t g_ip_write_last_value;
 
+param_value_t g_apply_seen_cache;
+param_value_t g_ip_write_seen_cache;
+
 /* ================================================================
  *  Mock Storage
  * ================================================================ */
@@ -350,6 +353,27 @@ int mock_ip_init_ok(void *drv)
 {
     (void)drv;
     g_init_call_count++;
+    return PARAM_OK;
+}
+
+int mock_apply_readback(void *ctx, uint32_t param_id, param_value_t value)
+{
+    (void)ctx;
+    g_apply_call_count++;
+    g_apply_last_id = param_id;
+    g_apply_last_value = value;
+    g_apply_last_ret = PARAM_OK;
+    param_read_cache(param_id, &g_apply_seen_cache);
+    return PARAM_OK;
+}
+
+int mock_ip_write_readback(void *drv, uint32_t param_id, param_value_t value)
+{
+    (void)drv;
+    g_ip_write_call_count++;
+    g_ip_write_last_value = value;
+    g_ip_write_last_ret = PARAM_OK;
+    param_read_cache(param_id, &g_ip_write_seen_cache);
     return PARAM_OK;
 }
 

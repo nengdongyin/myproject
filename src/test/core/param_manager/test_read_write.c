@@ -176,9 +176,20 @@ void test_write_apply_rejects(void) {
     register_params();
     param_value_t v = { .u32 = 42 };
     TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_INVALID_ID);
+    /* 缓存先行且不回滚: 拒绝后缓存保持新值, 但不标记 dirty */
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(42, v.u32);
     TEST_ASSERT_DIRTY(&tu32.base, 0);
+    test_applet_module.write = mock_apply_ok;
+}
+
+void test_write_cb_sees_new_cache(void) {
+    test_applet_module.write = mock_apply_readback;
+    register_params();
+    param_value_t v = { .u32 = 150 };
+    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
+    /* 值类型缓存先行: 回调执行期间缓存已是新值 */
+    TEST_ASSERT_EQUAL_UINT32(150, g_apply_seen_cache.u32);
     test_applet_module.write = mock_apply_ok;
 }
 
@@ -284,6 +295,7 @@ void run_test_read_write(void)
     RUN_TEST(test_write_bool_valid);
     RUN_TEST(test_write_triggers_apply_cb);
     RUN_TEST(test_write_apply_rejects);
+    RUN_TEST(test_write_cb_sees_new_cache);
     RUN_TEST(test_write_readonly);
     RUN_TEST(test_write_non_existent);
     RUN_TEST(test_write_not_initialized);

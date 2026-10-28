@@ -106,7 +106,7 @@ void test_reset_all_clears_all_dirty(void) {
     TEST_ASSERT_EQUAL_UINT32(500, v.u32);
 }
 
-void test_reset_all_ip_dirty_map_cleared(void) {
+void test_reset_all_ip_dirty_cleared(void) {
     register_all();
 
     param_value_t v = { .f32 = 5.0f };
@@ -118,7 +118,7 @@ void test_reset_all_ip_dirty_map_cleared(void) {
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 2.0f, v.f32);
 }
 
-void test_reset_one_clears_ip_dirty_map(void) {
+void test_reset_one_ip_marks_dirty(void) {
     register_all();
 
     param_value_t v = { .u32 = 999 };
@@ -153,7 +153,7 @@ void run_test_reset(void)
     RUN_TEST(test_reset_one_float);
     RUN_TEST(test_reset_one_not_found);
     RUN_TEST(test_reset_all_clears_all_dirty);
-    RUN_TEST(test_reset_all_ip_dirty_map_cleared);
-    RUN_TEST(test_reset_one_clears_ip_dirty_map);
+    RUN_TEST(test_reset_all_ip_dirty_cleared);
+    RUN_TEST(test_reset_one_ip_marks_dirty);
     RUN_TEST(test_reset_blob);
 }
