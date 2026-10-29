@@ -5,9 +5,9 @@
  * @details
  * 本文件实现 param_storage_drv_t 接口的 FlashDB 适配层。
  * 支持两种编译模式:
- *   - USE_FLASHDB=1: 完整 FlashDB 后端 — 多实例工厂、分区选择、
+ *   - PARAM_FLASHDB_ENABLE=1: 完整 FlashDB 后端 — 多实例工厂、分区选择、
  *     启动分区回退、空分区检测、KV 读写擦除
- *   - USE_FLASHDB=0: 空操作 stub — 所有操作返回 -1，用于编译验证
+ *   - PARAM_FLASHDB_ENABLE=0: 空操作 stub — 所有操作返回 -1，用于编译验证
  *
  * FlashDB 模式下采用工厂模式管理多存储实例:
  *   - g_ctx[MAX_INSTANCES] 静态池，按分区名查找/创建
@@ -23,10 +23,10 @@
 #include <stdio.h>
 #include <string.h>
 
-#if !USE_FLASHDB
+#if !PARAM_FLASHDB_ENABLE
 
 /* ================================================================
- *  USE_FLASHDB=0: 空操作 stub — 所有持久化操作返回 -1
+ *  PARAM_FLASHDB_ENABLE=0: 空操作 stub — 所有持久化操作返回 -1
  * ================================================================ */
 
 /** @brief stub: 加载操作始终返回"不存在" */
@@ -107,7 +107,7 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
 #else
 
 /* ================================================================
- *  USE_FLASHDB=1: 完整 FlashDB 后端实现
+ *  PARAM_FLASHDB_ENABLE=1: 完整 FlashDB 后端实现
  * ================================================================ */
 
 #include "flashdb.h"

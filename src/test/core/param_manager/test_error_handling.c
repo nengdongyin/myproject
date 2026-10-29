@@ -110,6 +110,47 @@ void test_flush_ip_write_cb_fails(void) {
 }
 
 /* ================================================================
+ *  P0-3: IP flush 失败保留 dirty, 下次 param_flush 自动重试
+ * ================================================================ */
+void test_flush_ip_fail_keeps_dirty_and_retries(void) {
+    PARAM_IP_UINT(rpu, MAKE_PARAM_ID(TEST_MODULE_IP2, 0),
+                  PARAM_FLAG_PERSIST, 0, 0, 1000);
+    PARAM_TABLE(retry_params, &rpu.base);
+    IP_DRIVER_DEFINE(retry_ip, TEST_MODULE_IP2, "RetryIP",
+                     NULL, NULL, NULL, mock_ip_write_retry, NULL, NULL);
+
+    ip_driver_register(&retry_ip_instance, retry_params,
+                       PARAM_COUNT(retry_params));
+    test_reset_entry(&rpu.base);
+
+    param_value_t v = { .u32 = 777 };
+    param_write(MAKE_PARAM_ID(TEST_MODULE_IP2, 0), v);
+
+    /* 第一次 flush: 硬件写失败 → 返回错误, 条目 dirty 保留 */
+    mock_ip_reset();
+    mock_ip_set_fail_remaining(1);
+    int ret = param_flush();
+    TEST_ASSERT_PARAM_ERR(ret, PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_DIRTY(&rpu.base, 1);
+
+    /* 缓存保持新值 (不回滚) */
+    param_value_t cached;
+    param_read_cache(MAKE_PARAM_ID(TEST_MODULE_IP2, 0), &cached);
+    TEST_ASSERT_EQUAL_UINT32(777, cached.u32);
+
+    /* 第二次 flush: 自动重试成功 → dirty 清除, 硬件收敛到缓存值 */
+    mock_ip_reset();
+    TEST_ASSERT_PARAM_OK(param_flush());
+    TEST_ASSERT_EQUAL_INT(1, g_ip_write_call_count);
+    TEST_ASSERT_EQUAL_UINT32(777, g_ip_write_last_value.u32);
+    TEST_ASSERT_DIRTY(&rpu.base, 0);
+
+    param_stats_t stats;
+    param_get_stats(&stats);
+    TEST_ASSERT_EQUAL_UINT16(0, stats.dirty_count);
+}
+
+/* ================================================================
  *  flush integrity check
  * ================================================================ */
 void test_flush_integrity_all_covered(void) {
@@ -219,6 +260,7 @@ void run_test_error_handling(void)
     RUN_TEST(test_api_no_init_exec);
     RUN_TEST(test_flush_applet_cb_fails);
     RUN_TEST(test_flush_ip_write_cb_fails);
+    RUN_TEST(test_flush_ip_fail_keeps_dirty_and_retries);
     RUN_TEST(test_flush_integrity_all_covered);
     RUN_TEST(test_flush_integrity_unordered_module);
     RUN_TEST(test_apply_cb_returns_error);

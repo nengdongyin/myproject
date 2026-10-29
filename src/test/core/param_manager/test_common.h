@@ -40,6 +40,7 @@ extern "C"
 #define TID_IP_FLOAT MAKE_PARAM_ID(TEST_MODULE_IP, 1)
 #define TID_IP_BOOL MAKE_PARAM_ID(TEST_MODULE_IP, 2)
 #define TID_IP_RDONLY MAKE_PARAM_ID(TEST_MODULE_IP, 3)
+#define TID_IP_EXEC MAKE_PARAM_ID(TEST_MODULE_IP, 4)
 
 /* ================================================================
  *  测试参数定义宏 (无范围, 可用于各类测试)
@@ -162,12 +163,17 @@ extern "C"
     extern int g_ip_write_call_count;
     extern int g_ip_write_last_ret;
     extern param_value_t g_ip_write_last_value;
+    extern uint32_t g_ip_write_last_id;
+    extern int g_ip_write_fail_remaining; /**< >0: 接下来 N 次写回调返回失败 (P0-3 重试测试用) */
 
     void mock_ip_reset(void);
+    void mock_ip_set_fail_remaining(int n);
 
     int mock_ip_read(void *drv, uint32_t param_id, param_value_t *value);
     int mock_ip_write_ok(void *drv, uint32_t param_id, param_value_t value);
+    int mock_ip_write_record(void *drv, uint32_t param_id, param_value_t value);
     int mock_ip_write_fail(void *drv, uint32_t param_id, param_value_t value);
+    int mock_ip_write_retry(void *drv, uint32_t param_id, param_value_t value);
     int mock_ip_init_ok(void *drv);
 
     /* ================================================================

@@ -452,7 +452,12 @@ extern "C"
         .blob_size = (_size),                                        \
         PARAM_DEBUG_NAME_INIT(_name)}
 
-/** @brief STRING 型核心宏 (缓存指向调用方静态缓冲区, 长 max_len+1) */
+/**
+ * @brief STRING 型核心宏 (缓存指向调用方静态缓冲区, 长 max_len+1)
+ *
+ * @attention cache 与 default_val 共享同一指针: 单缓冲配置下 reset
+ *   无法恢复默认 (自拷贝被跳过)。
+ */
 #define PARAM_ENTRY_STRING(_vtbl, _name, _id, _flags, _def_ptr, _max_len) \
     static param_string_entry_t _name = {                                \
         .base = {(_id), (_vtbl)},                                        \
@@ -807,6 +812,10 @@ extern "C"
      *
      * 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，对每个 dirty 模块调用 module->vtable->flush。
      * 即使某个模块 flush 失败，仍会继续处理后续模块。
+     *
+     * @note 失败重试语义: flush 失败的参数保留 dirty 标记 (缓存不回滚)，
+     *   下次调用 param_flush() 会自动重试，直到硬件收敛到缓存值。
+     *   App 模块 flush 回调失败时同样保留 dirty。
      * @return PARAM_OK 全部成功，或最后一个失败的错误码
      */
     int param_flush(void);

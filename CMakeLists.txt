@@ -47,7 +47,7 @@ target_include_directories(app PRIVATE
     src/camera/drivers/ip/histogram
 )
 
-target_compile_definitions(app PRIVATE USE_FLASHDB)
+target_compile_definitions(app PRIVATE PARAM_FLASHDB_ENABLE=1)
 
 target_sources(app PRIVATE
       src/app/main.c

@@ -23,10 +23,10 @@
 
 #include "param_storage_iniparser.h"
 
-#if !USE_INIPARSER
+#if !PARAM_INIPARSER_ENABLE
 
 /* ================================================================
- *  USE_INIPARSER=0: 空操作 stub
+ *  PARAM_INIPARSER_ENABLE=0: 空操作 stub
  * ================================================================ */
 
 static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l)
@@ -661,4 +661,4 @@ const param_storage_drv_t *param_storage_iniparser_get_driver(const char *base_d
     return NULL;
 }
 
-#endif /* USE_INIPARSER */
+#endif /* PARAM_INIPARSER_ENABLE */

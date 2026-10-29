@@ -41,6 +41,18 @@ static ip_instance_t *ip_find(uint16_t ip_id)
     return NULL;
 }
 
+/**
+ * @brief 判断 IP 条目是否应参与硬件下发
+ *
+ * READONLY (硬件状态/计数器) 与 EXEC (命令) 条目只走读/命令路径，
+ * 永不进入写硬件路径。init 标脏、load 标脏与 flush 循环均以此
+ * 过滤，保证这两类条目不会被当作寄存器值写回 FPGA。
+ */
+static bool ip_entry_is_writable(const param_entry_t *e)
+{
+    return !(entry_flags(e) & (PARAM_FLAG_READONLY | PARAM_FLAG_EXEC));
+}
+
 /* ================================================================
  *  ip_vtable 虚函数实现
  *
@@ -210,6 +222,12 @@ static int ip_flush_one(param_entry_t *e)
 
     if (!entry_dirty(e)) return PARAM_OK;
 
+    /* READONLY/EXEC 永不写硬件 (与 ip_module_flush 同规则) */
+    if (!ip_entry_is_writable(e)) {
+        param_entry_clear_dirty(e);
+        return PARAM_OK;
+    }
+
     return _ip_flush_write_entry(e, inst);
 }
 
@@ -219,7 +237,7 @@ static int ip_param_load(param_entry_t *e)
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
     int ret = g_param_data_ops[t].load(e);
-    if (ret >= 0) {
+    if (ret >= 0 && ip_entry_is_writable(e)) {
         param_entry_mark_dirty(e);
         param_module_node_t *m = param_module_find((uint16_t)PARAM_MODULE_ID(e->param_id));
         if (m && m->vtable && m->vtable->mark_dirty)
@@ -262,7 +280,18 @@ const param_vtable_t ip_vtable = {
 
 static void ip_module_mark_dirty(param_module_node_t *m, uint16_t local_id)
 {
-    (void)local_id;
+    /* READONLY/EXEC 条目永不写硬件: 模块级 dirty 一并跳过。
+       防御 param_load_one 等外部调用点对非可写条目的标记
+       (否则会出现"模块 dirty 但零条目 dirty"的假脏状态,
+       触发一次空 flush)。 */
+    for (uint16_t i = 0; i < m->param_count; i++) {
+        param_entry_t *e = m->table[i];
+        if (e && PARAM_LOCAL_ID(e->param_id) == local_id) {
+            if (!ip_entry_is_writable(e))
+                return;
+            break;
+        }
+    }
     m->dirty = 1;
 }
 
@@ -289,6 +318,13 @@ static int ip_module_flush(param_module_node_t *m)
         if (!e || !entry_dirty(e))
             continue;
 
+        /* 防御: READONLY/EXEC 条目正常流程不会标脏 (init/load 已过滤)，
+           若被外部路径误标脏则在此清除并跳过，绝不写回硬件 */
+        if (!ip_entry_is_writable(e)) {
+            param_entry_clear_dirty(e);
+            continue;
+        }
+
         if (!inst->write) {
             /* 驱动无 write 回调: 清除 dirty 避免死循环 */
             param_entry_clear_dirty(e);
@@ -298,9 +334,12 @@ static int ip_module_flush(param_module_node_t *m)
         int ret = _ip_flush_write_entry(e, inst);
         if (ret != PARAM_OK) {
             last_err = ret;
-            /* 永久清除 dirty: write 失败重试无意义,
-               下次 param_write 会重新标脏触发 flush */
-            param_entry_clear_dirty(e);
+            /* 保留 dirty: 缓存已先行更新为新值 (有意不回滚)，
+               硬件写入失败时不清脏，下次 param_flush() 自动重试，
+               避免缓存与硬件静默分叉。调用者通过 param_flush
+               返回的错误码与 flush_error_count 感知失败。
+               与 app_module_flush 失败语义对齐 (App flush 回调
+               失败同样保留 dirty)。 */
         }
     }
 
@@ -336,11 +375,13 @@ static int ip_module_init(param_module_node_t *m)
 {
     ip_instance_t *inst = (ip_instance_t *)m;
 
-    /* 将所有参数标记为 dirty，确保默认值可被 flush 下发硬件。
-     * 即使不调用 param_load_all()，param_flush() 也能生效。 */
+    /* 将所有可写参数标记为 dirty，确保默认值可被 flush 下发硬件。
+     * 即使不调用 param_load_all()，param_flush() 也能生效。
+     * READONLY (硬件状态) 与 EXEC (命令) 条目永不进入写硬件路径，
+     * 不标脏。 */
     uint8_t any = 0;
     for (uint16_t i = 0; i < m->param_count; i++) {
-        if (m->table[i]) {
+        if (m->table[i] && ip_entry_is_writable(m->table[i])) {
             param_entry_mark_dirty(m->table[i]);
             any = 1;
         }

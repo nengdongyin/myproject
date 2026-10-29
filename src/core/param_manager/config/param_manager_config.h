@@ -46,7 +46,7 @@ extern "C" {
 #endif
 
 /** @brief 启用 iniparser 存储后端 (需链接 iniparser 库)
- *  1=开 0=关。与 USE_FLASHDB 互斥，同时为 1 时编译报错*/
+ *  1=开 0=关。与 PARAM_FLASHDB_ENABLE 互斥，同时为 1 时编译报错*/
 
 #ifndef PARAM_INIPARSER_ENABLE
 #define PARAM_INIPARSER_ENABLE 0

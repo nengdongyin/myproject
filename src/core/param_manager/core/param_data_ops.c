@@ -298,10 +298,13 @@ static int value_type_reset(param_entry_t *e)
 static int blob_reset(param_entry_t *e)
 {
     param_blob_entry_t *be = (param_blob_entry_t *)e;
-    if (be->blob_size > 0 && be->default_val.ptr)
-        memcpy(be->cache.ptr, be->default_val.ptr, be->blob_size);
-    else if (be->blob_size > 0)
+    if (be->blob_size > 0 && be->default_val.ptr) {
+        /* src==dst 时跳过: 单缓冲配置下自拷贝属未定义行为且无法恢复默认 */
+        if (be->cache.ptr != be->default_val.ptr)
+            memcpy(be->cache.ptr, be->default_val.ptr, be->blob_size);
+    } else if (be->blob_size > 0) {
         memset(be->cache.ptr, 0, be->blob_size);
+    }
     param_entry_clear_dirty(e);
     return PARAM_OK;
 }
@@ -310,8 +313,12 @@ static int string_reset(param_entry_t *e)
 {
     param_string_entry_t *se = (param_string_entry_t *)e;
     if (se->max_len > 0 && se->default_val.ptr) {
-        strncpy((char *)se->cache.ptr, (const char *)se->default_val.ptr, se->max_len);
-        ((char *)se->cache.ptr)[se->max_len] = '\0';
+        /* src==dst 时跳过: 单缓冲配置 (PARAM_STRING 外部缓冲 / IP) 下
+           自拷贝属未定义行为且默认已丢失, 仅清 dirty 保持现状 */
+        if (se->cache.ptr != se->default_val.ptr) {
+            strncpy((char *)se->cache.ptr, (const char *)se->default_val.ptr, se->max_len);
+            ((char *)se->cache.ptr)[se->max_len] = '\0';
+        }
     } else if (se->max_len > 0) {
         ((char *)se->cache.ptr)[0] = '\0';
     }
