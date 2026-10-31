@@ -535,10 +535,15 @@ extern "C"
     };
 
     /**
-     * @brief App 模块 (模块基类派生)
+     * @brief 模块实例 (App 与 IP 共用, 模块基类派生)
      *
-     * 回调与 IP 模块的 driver 回调语义对称:
+     * App 与 IP 共用此唯一结构体定义 (IP 侧以别名 ip_instance_t 引用,
+     * 见 ip_param_manager.h)。回调语义两侧对称:
      *   read  (NULL=直接返缓存) / write / flush / init / exec
+     *
+     * ctx 字段的双重语义:
+     *   - App 模块: 业务实例私有上下文
+     *   - IP 模块:  driver 私有数据指针
      */
     struct param_module
     {
@@ -548,7 +553,7 @@ extern "C"
         param_flush_fn flush;     /**< 刷入硬件的回调 */
         param_init_fn init;       /**< 模块初始化回调 */
         param_exec_fn exec;       /**< 模块命令执行回调 */
-        void *ctx;                /**< 模块私有上下文 */
+        void *ctx;                /**< 模块私有上下文 (IP 侧: driver 私有数据) */
     };
 
     /**
@@ -813,10 +818,16 @@ extern "C"
      * 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，对每个 dirty 模块调用 module->vtable->flush。
      * 即使某个模块 flush 失败，仍会继续处理后续模块。
      *
+     * @note 锁粒度: 全局锁仅用于快照 dirty 模块指针,
+     *   所有 vtable->flush 回调 (含驱动 write / 总线访问) 均在锁外执行。
+     *   因此回调内可安全调用 param_read / param_read_cache / param_save_one
+     *   等加锁 API, 也不会因慢速总线写阻塞其他任务的参数访问。
+     *   但回调内不得递归调用 param_flush (返回 PARAM_ERR_BUSY)。
      * @note 失败重试语义: flush 失败的参数保留 dirty 标记 (缓存不回滚)，
      *   下次调用 param_flush() 会自动重试，直到硬件收敛到缓存值。
      *   App 模块 flush 回调失败时同样保留 dirty。
-     * @return PARAM_OK 全部成功，或最后一个失败的错误码
+     * @return PARAM_OK 全部成功，或最后一个失败的错误码,
+     *         PARAM_ERR_BUSY 已有 flush 在进行中
      */
     int param_flush(void);
 
@@ -899,6 +910,10 @@ extern "C"
 
     /**
      * @brief 遍历参数
+     *
+     * @note 回调在**锁外**执行 (两阶段: 锁内只快照模块指针),
+     *   因此回调内可安全调用 param_read / param_write / param_save_one
+     *   等加锁 API, 不会自死锁。
      * @param module_id 指定模块 ID (0 表示遍历所有模块)
      * @param cb        回调函数
      * @param user_data 用户上下文
@@ -985,6 +1000,65 @@ int param_migrate_storage(const param_storage_drv_t *storage,
                               const param_migrate_entry_t *table,
                               uint16_t count);
 /** @} */ /* migration */
+
+/**
+ * @name 模块实例定义核心宏 (框架内部)
+ *
+ * PARAM_MODULE_DEFINE / IP_DRIVER_DEFINE 与 PARAM_MODULE_INIT /
+ * IP_DRIVER_INIT 的共享初始化器。唯一行为差异 (vtable / 注册函数 /
+ * 变量名) 由调用方通过参数注入, 与 PARAM_ENTRY_* 核心宏同模式。
+ *
+ * @note 应用层代码严禁直接使用本组宏。请使用 PARAM_MODULE_DEFINE /
+ *       IP_DRIVER_DEFINE / PARAM_MODULE_INIT / IP_DRIVER_INIT。
+ * @{
+ */
+
+/**
+ * @brief 模块实例定义核心宏 (框架内部)
+ *
+ * @param _vtbl     模块级 vtable (&app_module_vtable / &ip_module_vtable)
+ * @param _var      生成的实例变量名 (包装宏负责 _module/_instance 后缀)
+ * @param _mod_id   模块 ID
+ * @param _label    模块调试名称
+ * @param _ctx      模块私有上下文 (App: 业务实例 / IP: driver 数据)
+ * @param _init_fn  初始化回调 (可 NULL)
+ * @param _read_fn  read 回调 (可 NULL = 直接返缓存)
+ * @param _write_fn write 回调 (可 NULL)
+ * @param _exec_fn  exec 命令回调 (可 NULL)
+ * @param _flush_fn flush 回调
+ */
+#define PARAM_MODULE_DEFINE_CORE(_vtbl, _var, _mod_id, _label, _ctx,            \
+                                 _init_fn, _read_fn, _write_fn, _exec_fn, _flush_fn) \
+    static param_module_t _var = {                                              \
+        .node = {                                                               \
+            .module_id = (_mod_id),                                             \
+            .name = (_label),                                                   \
+            .vtable = (_vtbl),                                                  \
+        },                                                                      \
+        .ctx = (_ctx),                                                          \
+        .init = (_init_fn),                                                     \
+        .read = (_read_fn),                                                     \
+        .write = (_write_fn),                                                   \
+        .exec = (_exec_fn),                                                     \
+        .flush = (_flush_fn),                                                   \
+    }
+
+/**
+ * @brief 模块注册函数核心宏 (框架内部)
+ *
+ * @param _reg_fn    注册函数 (param_module_register / ip_driver_register)
+ * @param _init_name 生成的注册函数名
+ * @param _inst_var  模块实例变量名
+ * @param _entries   参数表数组
+ */
+#define PARAM_MODULE_INIT_CORE(_reg_fn, _init_name, _inst_var, _entries)        \
+    void _init_name(void)                                                       \
+    {                                                                           \
+        _reg_fn(&_inst_var, (_entries),                                         \
+                sizeof(_entries) / sizeof((_entries)[0]));                      \
+    }
+
+/** @} */
 
 /**
  * @brief 定义参数表 (静态数组)

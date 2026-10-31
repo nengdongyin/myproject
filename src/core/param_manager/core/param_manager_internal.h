@@ -34,12 +34,19 @@ extern "C"
      *      这意味着 vtable->write 返回 与 mark_dirty 之间存在窗口:
      *      多线程并发写入同一参数时，notify 可能收到中间值。
      *      notify 回调的实现者应将收到的值视为 best-effort 快照。
-     *   4. apply / exec / notify 回调在锁外执行，以避免死锁
-     *      (回调中可能递归调用 param_write)。回调实现者需自行处理
-     *      防重入。
-     *   5. 初始化 (param_init) 和反初始化 (param_deinit) 假定单线程
+     *   4. apply / exec / notify / flush / foreach 回调一律在锁外执行，
+     *      以避免死锁 (回调中可能递归调用 param_write / param_save_one)。
+     *      回调实现者需自行处理防重入。
+     *   5. flush (param_flush) 与遍历类 API (param_foreach /
+     *      param_module_foreach) 均为两阶段: 锁内只快照模块指针
+     *      (每批 PARAM_MODULE_BATCH_MAX 个, 超出分批续扫), 锁外执行回调。
+     *      IP 层脏位采用 take-and-clear (锁内 "取缓存快照 + 清脏",
+     *      锁外写硬件, 失败回滚脏位), 因此 flush 回调内可安全调用
+     *      param_read / param_save_one 等加锁 API; 但不得在回调内再调
+     *      param_flush (返回 BUSY)。
+     *   6. 初始化 (param_init) 和反初始化 (param_deinit) 假定单线程
      *      调用；init 不加锁，deinit 加锁以安全清理。
-     *   6. 模块注册 (param_module_register_node) 全程持锁以保证
+     *   7. 模块注册 (param_module_register_node) 全程持锁以保证
      *      哈希表 + 链表插入的原子性。
      */
 
@@ -86,7 +93,12 @@ extern "C"
     /** 模块遍历回调 */
     typedef void (*param_module_iter_fn)(param_module_node_t *m, void *ctx);
 
-    /** @brief 遍历所有已注册模块节点 */
+    /**
+     * @brief 遍历所有已注册模块节点
+     *
+     * @note 回调在锁外执行 (锁内只快照模块指针), 回调内可安全调用
+     *       param_* 加锁 API。
+     */
     void param_module_foreach(param_module_iter_fn cb, void *ctx);
 
     /**
@@ -108,6 +120,53 @@ extern "C"
     int param_module_register(param_module_t *module,
                               param_entry_t **entries,
                               uint16_t count);
+
+    /* ================================================================
+     *  vtable 基类实现 — App/IP 共用 (定义于 param_manager.c)
+     *
+     *  两级虚函数的默认实现, 由 app_vtable / ip_vtable 及
+     *  app_module_vtable / ip_module_vtable 常量引用。差异部分
+     *  (模块级 flush / init 通路) 保留在各子系统实现文件。
+     * ================================================================ */
+
+    /** @brief 条目是否可写 (READONLY/EXEC 永不进入写路径, App/IP 通用) */
+    bool param_entry_is_writable(const param_entry_t *e);
+
+    /** @brief 按模块 ID 查找模块节点 (带 vtable 类型校验, 原 app_find/ip_find 合一) */
+    param_module_t *param_module_find_typed(uint16_t module_id,
+                                            const param_module_vtable_t *vt);
+
+    /* ---- 参数级基类实现 ---- */
+    /** @brief 读取: read 回调优先, 失败回退缓存 */
+    int param_entry_read(param_entry_t *e, param_value_t *value);
+    /** @brief 写入 (无 apply): 更新缓存 + 标脏 */
+    int param_entry_write(param_entry_t *e, param_value_t value);
+    /** @brief 写入 (带 apply): 缓存先行 + 模块业务回调, 拒绝不标脏 */
+    int param_entry_write_apply(param_entry_t *e, param_value_t value);
+    /** @brief 立即写入: EXEC 路由 / 写回调后清脏 */
+    int param_entry_write_immediate(param_entry_t *e, param_value_t value);
+    /** @brief 原始字节流写入 (委托 param_entry_write) */
+    int param_entry_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len);
+    /** @brief 原始字节流写入 (委托 param_entry_write_apply) */
+    int param_entry_write_raw_apply(param_entry_t *e, const uint8_t *data, uint16_t len);
+    /** @brief 加载: data_ops.load, 不标脏 */
+    int param_entry_load(param_entry_t *e);
+    /** @brief 重置: data_ops.reset */
+    int param_entry_reset(param_entry_t *e);
+    /** @brief 条目级 flush 空实现 (App flush 槽位) */
+    int param_entry_flush_nop(param_entry_t *e);
+
+    /* ---- 模块级基类实现 ---- */
+    /** @brief 模块标脏 (过滤 READONLY/EXEC 条目) */
+    void param_module_mark_dirty(param_module_node_t *m, uint16_t local_id);
+    /** @brief 模块清脏 (无脏条目时清模块级标志) */
+    void param_module_clear_dirty(param_module_node_t *m, uint16_t local_id);
+    /** @brief 模块命令执行 (委托 exec 回调) */
+    int param_module_exec(param_module_node_t *m, uint32_t cmd_id, param_value_t arg);
+    /** @brief 模块重置 (清模块级 dirty) */
+    void param_module_reset(param_module_node_t *m);
+    /** @brief 模块去初始化 */
+    void param_module_deinit(param_module_node_t *m);
 
     /* ================================================================
      *  内联访问器 — 统一参数条目字段访问 (仅框架内部使用)

@@ -96,7 +96,15 @@ void test_reset_all_clears_all_dirty(void) {
 
     TEST_ASSERT_PARAM_OK(param_reset_all());
 
+    /* reset_all 的 INIT 阶段会调用 ip_module_init, 按设计把 IP 可写
+       参数重新标脏 (恢复出厂后默认值仍需下发 FPGA)。此处 dirty_count
+       应为 IP 可写参数数 (ripu + ripf = 2), 而非 0。 */
     param_stats_t stats;
+    param_get_stats(&stats);
+    TEST_ASSERT_EQUAL_UINT16(2, stats.dirty_count);
+
+    /* 一次 flush 把默认值下发硬件后, 脏位全部收敛 */
+    TEST_ASSERT_PARAM_OK(param_flush());
     param_get_stats(&stats);
     TEST_ASSERT_EQUAL_UINT16(0, stats.dirty_count);
 

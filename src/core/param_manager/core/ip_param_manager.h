@@ -25,91 +25,45 @@ extern "C"
      *   - 参数条目前 sizeof(param_entry_head_t) 字节与 param_entry_head_t 布局一致，可使用统一访问器
      *   - 无独立参数数上限: 受 local_id 16-bit 空间与全局哈希表 PARAM_HASH_SIZE 约束
      *   - dirty 追踪使用条目级 dirty 标志 (param_entry_head_t::dirty)，与 App 模块同构
+     *
+     * IP Driver 回调契约 (回调类型 param_read_fn / param_write_fn /
+     * param_flush_fn / param_init_fn / param_exec_fn 定义于 param_manager.h,
+     * 与 App 共用; 以下契约语义 IP 独有):
+     *   - read:  仅当确实从硬件寄存器取得有效值时才允许返回 PARAM_OK
+     *            (框架无条件回写缓存, 返回 OK 但 value 无效将污染缓存);
+     *            未取得硬件值必须返回错误, 框架回退缓存值。
+     *   - write: 执行期间缓存已先行更新为新值 (immediate 与 flush 路径一致),
+     *            回调内 param_read / param_save_one 反映新值; 硬件写失败
+     *            缓存保持新值不回滚 (有意语义)。
+     *            回调在所有路径均锁外执行 (P1-6), 可安全调用加锁 API;
+     *            但仍不得在回调内调用 param_flush(), 也不建议回调内做
+     *            param_save_one 持久化 (每次下发写一次 Flash, 寿命消耗大)。
+     *   - flush: 在逐参数 write 全部调用之后触发, 可执行批量操作 (如
+     *            I2C burst write); 无脏位图参数, 需要批量信息时自行
+     *            查询参数缓存。
      */
 
-    typedef struct ip_instance ip_instance_t;
+    /** IP 实例类型 — App 与 IP 共用的模块实例结构体别名 (定义见 param_manager.h) */
+    typedef struct param_module ip_instance_t;
 
-    /**
-     * @brief IP Driver 读回调
+    /* ================================================================
+     *  回调类型 (与 app_param_manager.h 对应位置对称)
      *
-     * @attention 仅当确实从硬件寄存器取得有效值时才允许返回 PARAM_OK:
-     *   框架对返回值无条件回写缓存, 返回 PARAM_OK 但 value 未填有效值
-     *   将污染缓存并可能被持久化。未取得硬件值时必须返回错误,
-     *   框架会回退到缓存值。
-     *
-     * @param driver   driver 私有数据指针
-     * @param param_id 全局唯一参数 ID (MAKE_PARAM_ID 风格)
-     * @param value    [out] 读出的值
-     * @return PARAM_OK 成功
-     */
-    typedef int (*ip_read_fn)(void *driver, uint32_t param_id, param_value_t *value);
+     *  IP 侧无独立回调类型定义: 与 App 共用 param_read_fn /
+     *  param_write_fn / param_flush_fn / param_init_fn / param_exec_fn
+     *  (定义于 param_manager.h)。IP 独有的回调契约见本文件头部
+     *  "IP Driver 回调契约" 小节。
+     * ================================================================ */
 
-    /**
-     * @brief IP Driver 写回调
+    /* ================================================================
+     *  实例/模块结构体 (与 app_param_manager.h 对应位置对称)
      *
-     * @attention 回调执行期间缓存已先行更新为新值 (含 BLOB/STRING,
-     *   immediate 与 flush 路径一致): 回调内 param_read /
-     *   param_save_one 均反映新值。硬件写入失败时缓存保持新值
-     *   不回滚 (有意语义)。
-     *
-     * @attention param_flush 全程持全局锁调用本回调: 若移植层
-     *   system_lock 非可重入 (如 Zephyr k_mutex / FreeRTOS 普通互斥量),
-     *   回调内再调用 param_save_one / param_read_cache 等加锁 API
-     *   会自死锁。持久化请移至 flush 之后统一处理, 或确认锁可重入。
-     *
-     * @param driver   driver 私有数据指针
-     * @param param_id 全局唯一参数 ID
-     * @param value    待写入的值
-     * @return PARAM_OK 成功
-     */
-    typedef int (*ip_write_fn)(void *driver, uint32_t param_id, param_value_t value);
-
-    /**
-     * @brief IP Driver 批量 flush 回调 (可选)
-     *
-     * 在逐参数 write 全部调用之后触发。
-     * 驱动可在此执行批量操作 (如 I2C burst write)。
-     * 置 NULL 时仅走 write 逐参数路径。
-     *
-     * @note 回调不带脏位图参数: 脏追踪由条目级 dirty 标志承担，
-     *       驱动需要批量信息时应自行查询参数缓存。
-     *
-     * @param driver    driver 私有数据指针
-     * @return PARAM_OK 成功
-     */
-    typedef int (*ip_flush_fn)(void *driver);
-
-    /**
-     * @brief IP Driver 初始化回调
-     * @param driver driver 私有数据指针
-     * @return PARAM_OK 成功
-     */
-    typedef int (*ip_init_fn)(void *driver);
-
-    /**
-     * @brief IP Driver 命令执行回调
-     * @param driver   driver 私有数据指针
-     * @param param_id 命令 ID
-     * @param arg      命令参数
-     * @return PARAM_OK 成功
-     */
-    typedef int (*ip_exec_fn)(void *driver, uint32_t param_id, param_value_t arg);
-
-    /**
-     * @brief IP 实例 (嵌入 param_module_node 作为统一链表节点)
-     *
-     * 与 App 模块共用单条全局链表，通过 ip_module_vtable 区分行为。
-     */
-    struct ip_instance
-    {
-        param_module_node_t node; /**< 基类链表节点 */
-        void *driver;             /**< driver 私有数据 */
-        ip_read_fn read;          /**< 读硬件回调 */
-        ip_write_fn write;        /**< 写硬件回调 */
-        ip_flush_fn flush;        /**< 批量 flush 回调 (NULL 回退 write) */
-        ip_init_fn init;          /**< 初始化回调 */
-        ip_exec_fn exec;          /**< 命令执行回调 */
-    };
+     *  IP 实例无独立结构体定义: ip_instance_t 为 struct param_module
+     *  的别名 (定义于 param_manager.h)，两子系统共用同一份布局:
+     *   - node    基类链表节点
+     *   - read / write / flush / init / exec   回调组
+     *   - ctx     私有上下文 (IP 侧语义为 driver 私有数据指针)
+     * ================================================================ */
 
     /**
      * @brief 注册 IP Driver 及其参数表
@@ -126,47 +80,6 @@ extern "C"
     int ip_driver_register(ip_instance_t *inst,
                            param_entry_t **entries,
                            uint16_t count);
-
-    /**
-     * @brief IP 读写动作类型
-     */
-    typedef enum
-    {
-        IP_READ = 0,
-        IP_WRITE = 1
-    } ip_action_t;
-
-    /**
-     * @brief IP 控制接口 (调试用) — 直接向 driver 发起读/写
-     *
-     * 绕过参数缓存，直接与 driver 通信。仅支持 1/2/4 字节传输。
-     *
-     * @attention 调试接口, 绕过缓存且不预更新: driver 回调内
-     *            param_read / param_save_one 看到的是上一已接受值。
-     *
-     * @param ip_id    IP 模块 ID
-     * @param local_id 局部参数 ID
-     * @param data     数据缓冲区
-     * @param len      数据长度 (1/2/4)
-     * @param action   IP_READ 或 IP_WRITE
-     * @return PARAM_OK 成功，或错误码
-     */
-    int ip_control(uint16_t ip_id, uint16_t local_id, uint8_t *data,
-                   uint8_t len, ip_action_t action);
-
-/**
- * @brief IP 读快捷宏
- * @sa ip_control(ip_id, local_id, data, len, IP_READ)
- */
-#define ip_read(ip_id, local_id, data, len) \
-    ip_control(ip_id, local_id, data, len, IP_READ)
-
-/**
- * @brief IP 写快捷宏
- * @sa ip_control(ip_id, local_id, data, len, IP_WRITE)
- */
-#define ip_write(ip_id, local_id, data, len) \
-    ip_control(ip_id, local_id, data, len, IP_WRITE)
 
 /**
  * @name IP 参数条目定义宏
@@ -273,19 +186,8 @@ extern "C"
  * @param _fl      flush 回调 (可 NULL, 回退逐参数 write)
  */
 #define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, _drv, _init, _rd, _wr, _exec, _fl) \
-    static ip_instance_t _ip_name##_instance = {                                      \
-        .node = {                                                                     \
-            .module_id = (_ip_id),                                                    \
-            .name = (_label),                                                         \
-            .vtable = &ip_module_vtable,                                              \
-        },                                                                            \
-        .driver = (_drv),                                                             \
-        .read = (_rd),                                                                \
-        .write = (_wr),                                                               \
-        .exec = (_exec),                                                              \
-        .flush = (_fl),                                                               \
-        .init = (_init),                                                              \
-    }
+    PARAM_MODULE_DEFINE_CORE(&ip_module_vtable, _ip_name##_instance,                   \
+                             _ip_id, _label, _drv, _init, _rd, _wr, _exec, _fl)
 
 /**
  * @brief 定义 IP Driver 注册函数
@@ -294,12 +196,19 @@ extern "C"
  * @param _entries 参数表数组
  */
 #define IP_DRIVER_INIT(_ip_name, _entries)                            \
-    void _ip_name##_init(void)                                        \
-    {                                                                 \
-        ip_driver_register(&_ip_name##_instance,                      \
-                           (_entries),                                \
-                           sizeof(_entries) / sizeof((_entries)[0])); \
-    }
+    PARAM_MODULE_INIT_CORE(ip_driver_register,                        \
+                           _ip_name##_init,                           \
+                           _ip_name##_instance,                       \
+                           _entries)
+
+    /* ================================================================
+     *  编译器段自动注册
+     *
+     *  IP 侧暂无自动注册内容 (与 app_param_manager.h 对应位置对称):
+     *  App 侧的 param_module_reg_t / PARAM_MODULE_REGISTER /
+     *  param_modules_register_all 位于 app_param_manager.h 末尾;
+     *  IP driver 目前通过 IP_DRIVER_INIT 手动调用注册。
+     * ================================================================ */
 
 #ifdef __cplusplus
 }

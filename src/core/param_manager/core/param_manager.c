@@ -34,6 +34,7 @@ static struct {
     const param_storage_drv_t *storage;   /**< 持久化后端驱动 */
     param_entry_t *hash[PARAM_HASH_SIZE]; /**< 参数哈希表 */
     uint8_t initialized : 1;              /**< 初始化标志 */
+    uint8_t flushing : 1;                 /**< flush 进行中 (阶段 2 锁外执行期间为 1) */
     param_stats_t stats;                  /**< 统计信息 */
     param_notify_fn notify_cb;            /**< 参数变化通知回调 (可为 NULL) */
 } g_pm;
@@ -443,6 +444,325 @@ int param_module_register(param_module_t *module,
                           uint16_t count)
 {
     return param_module_register_node(&module->node, entries, count);
+}
+
+/* ================================================================
+ *  vtable 基类实现 — App/IP 共用的两级虚函数默认实现
+ *
+ *  App 与 IP 的唯一结构性差异收敛为:
+ *   - 参数级: write 是否携带 apply 回调 (write_apply vs write)
+ *   - 模块级: flush / init 两条通路 (保留在 app/ip 各自实现文件)
+ *  其余槽位 (read / write / write_immediate / write_raw / load /
+ *  reset / mark_dirty / clear_dirty / exec / reset / deinit) 均为
+ *  共用实现, 在此定义一次, 由两侧 vtable 常量引用。
+ * ================================================================ */
+
+/**
+ * @brief 判断参数条目是否可写 (READONLY/EXEC 条目永不进入写路径)
+ *
+ * App/IP 通用语义: READONLY (硬件状态/计数器) 与 EXEC (命令) 条目
+ * 只走读/命令路径, 永不进入写路径。init 标脏、load 标脏、flush
+ * 循环与模块级 mark_dirty 均以此过滤。
+ */
+bool param_entry_is_writable(const param_entry_t *e)
+{
+    return !(entry_flags(e) & (PARAM_FLAG_READONLY | PARAM_FLAG_EXEC));
+}
+
+/**
+ * @brief 按模块 ID 查找模块节点 (带 vtable 类型校验)
+ *
+ * 原 app_find / ip_find 合一: 调用方传入期望的模块级 vtable,
+ * 防御"参数条目与模块注册类型错配"的配置错误。
+ */
+param_module_t *param_module_find_typed(uint16_t module_id,
+                                        const param_module_vtable_t *vt)
+{
+    param_module_node_t *node = param_module_find(module_id);
+    if (node && node->vtable == vt)
+        return (param_module_t *)node;
+    return NULL;
+}
+
+/**
+ * @brief 按参数条目查找所属模块 — 条目 vtable 决定期望的模块类型
+ */
+static param_module_t *param_entry_module(const param_entry_t *e)
+{
+    const param_module_vtable_t *expect =
+        (e->vtable == &ip_vtable) ? &ip_module_vtable : &app_module_vtable;
+    return param_module_find_typed((uint16_t)PARAM_MODULE_ID(e->param_id),
+                                   expect);
+}
+
+/* ---- 参数级基类实现 ---- */
+
+int param_entry_read(param_entry_t *e, param_value_t *value)
+{
+    param_module_t *m = param_entry_module(e);
+
+    /* 阶段 1: 优先通过 read 回调获取实时值。成功则回写缓存并返回。
+       (App: 业务实时计算/硬件查询; IP: driver 硬件寄存器读取) */
+    if (m && m->read) {
+        /* 防御性清零: 回调未处理该 id 却返回 PARAM_OK 时,
+           输出参数不会携带栈上随机值污染 cache */
+        memset(value, 0, sizeof(*value));
+        int ret = m->read(m->ctx, e->param_id, value);
+        if (ret == PARAM_OK) {
+            param_type_t t = entry_type(e);
+            if (t < PARAM_TYPE_COUNT) {
+                system_lock(SYS_LOCK_PARAM);
+                g_param_data_ops[t].cache_update(e, *value);
+                system_unlock(SYS_LOCK_PARAM);
+            }
+            return PARAM_OK;
+        }
+    }
+
+    /* 阶段 2: 无回调 / 回调失败 / 硬件未就绪 → 静默回退缓存
+       (有意的优雅降级, 调用者无法区分此值与新鲜值) */
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+    return g_param_data_ops[t].read(e, value);
+}
+
+/**
+ * @brief 参数写入基类实现 — pre_write → 缓存更新 + 标脏 (无 apply)
+ *
+ * IP 的 write / write_cache 与 App 的 write_cache 均指向本实现。
+ */
+int param_entry_write(param_entry_t *e, param_value_t value)
+{
+    param_module_t *m = param_entry_module(e);
+    if (!m) return PARAM_ERR_NOT_FOUND;
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+
+    if (entry_flags(e) & PARAM_FLAG_EXEC)
+        return param_entry_is_exec(e) ? PARAM_ERR_READONLY : PARAM_ERR_TYPE_MISMATCH;
+
+    if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
+
+    if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
+
+    system_lock(SYS_LOCK_PARAM);
+    g_param_data_ops[t].cache_update(e, value);
+    param_entry_mark_dirty(e);
+    system_unlock(SYS_LOCK_PARAM);
+    return PARAM_OK;
+}
+
+/**
+ * @brief 参数写入 (带 apply) — 基类写入 + 模块业务回调
+ *
+ * App 独有: 缓存先行更新后调用模块 write 回调 (校验/拒绝/副作用),
+ * 回调返回非 OK 时缓存保持新值仅不标脏 (有意语义)。
+ */
+int param_entry_write_apply(param_entry_t *e, param_value_t value)
+{
+    param_module_t *m = param_entry_module(e);
+    if (!m) return PARAM_ERR_NOT_FOUND;
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+
+    if (entry_flags(e) & PARAM_FLAG_EXEC)
+        return param_entry_is_exec(e) ? PARAM_ERR_READONLY : PARAM_ERR_TYPE_MISMATCH;
+
+    if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
+
+    if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
+
+    /* 缓存先行 (有意不回滚): 回调执行期间缓存已为新值,
+       回调内 param_read / param_save_one 均作用于新值 (含 BLOB/STRING)。
+       回调拒绝时缓存保持新值, 仅不标记 dirty。 */
+    system_lock(SYS_LOCK_PARAM);
+    g_param_data_ops[t].cache_update(e, value);
+    system_unlock(SYS_LOCK_PARAM);
+
+    if (m->write) {
+        int ret = m->write(m->ctx, e->param_id, value);
+        if (ret != PARAM_OK) return ret;
+    }
+
+    system_lock(SYS_LOCK_PARAM);
+    param_entry_mark_dirty(e);
+    system_unlock(SYS_LOCK_PARAM);
+
+    return PARAM_OK;
+}
+
+int param_entry_write_immediate(param_entry_t *e, param_value_t value)
+{
+    param_module_t *m = param_entry_module(e);
+    if (!m) return PARAM_ERR_NOT_FOUND;
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+
+    if (entry_flags(e) & PARAM_FLAG_EXEC) {
+        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
+        if (m->exec) {
+            int ret = m->exec(m->ctx, e->param_id, value);
+            if (ret == PARAM_OK) {
+                system_lock(SYS_LOCK_PARAM);
+                param_entry_clear_dirty(e);
+                system_unlock(SYS_LOCK_PARAM);
+            }
+            return ret;
+        }
+        return PARAM_ERR_NOT_FOUND;
+    }
+
+    if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
+
+    if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
+
+    if (!m->write) return PARAM_ERR_NOT_FOUND;
+
+    /* 缓存先行 (有意不回滚): 回调执行期间缓存已为新值。
+       回调语义由模块类型决定 (App: apply 校验; IP: driver 直通硬件),
+       失败不清脏、错误码上抛。 */
+    system_lock(SYS_LOCK_PARAM);
+    g_param_data_ops[t].cache_update(e, value);
+    system_unlock(SYS_LOCK_PARAM);
+
+    int ret = m->write(m->ctx, e->param_id, value);
+    if (ret == PARAM_OK) {
+        system_lock(SYS_LOCK_PARAM);
+        param_entry_clear_dirty(e);
+        system_unlock(SYS_LOCK_PARAM);
+    }
+    return ret;
+}
+
+/** @brief write_raw 公共主体 — EXEC 路由 / BLOB 长度校验 / 值类型转换 + 委托 write_fn */
+static int param_entry_write_raw_to(param_entry_t *e, const uint8_t *data, uint16_t len,
+                                    int (*write_fn)(param_entry_t *, param_value_t))
+{
+    param_module_t *m = param_entry_module(e);
+    if (!m) return PARAM_ERR_NOT_FOUND;
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+
+    if (entry_flags(e) & PARAM_FLAG_EXEC) {
+        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
+        if (m->exec) {
+            param_value_t arg = { .ptr = (void *)data };
+            int ret = m->exec(m->ctx, e->param_id, arg);
+            if (ret == PARAM_OK) {
+                system_lock(SYS_LOCK_PARAM);
+                param_entry_clear_dirty(e);
+                system_unlock(SYS_LOCK_PARAM);
+            }
+            return ret;
+        }
+        return PARAM_ERR_NOT_FOUND;
+    }
+
+    if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
+
+    if (t == PARAM_TYPE_BLOB) {
+        param_blob_entry_t *be = (param_blob_entry_t *)e;
+        if (len != be->blob_size) return PARAM_ERR_OUT_OF_RANGE;
+        param_value_t value = { .ptr = (void *)data };
+        return write_fn(e, value);
+    }
+    if (t == PARAM_TYPE_STRING) {
+        /* STRING 无需检查 len (由 cache_update_string 自动截断) */
+        param_value_t value = { .ptr = (void *)data };
+        return write_fn(e, value);
+    }
+    /* 值类型 (UINT/INT/FLOAT/BOOL/ENUM) 处理 */
+    if (len == 0 || len > sizeof(param_value_t)) return PARAM_ERR_TYPE_MISMATCH;
+
+    param_value_t value;
+    memset(&value, 0, sizeof(value));
+    memcpy(&value, data, len);
+
+    return write_fn(e, value);
+}
+
+/** @brief 原始字节流写入 — 委托基类写入 (IP write_raw 槽位) */
+int param_entry_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len)
+{
+    return param_entry_write_raw_to(e, data, len, param_entry_write);
+}
+
+/** @brief 原始字节流写入 — 委托带 apply 的写入 (App write_raw 槽位) */
+int param_entry_write_raw_apply(param_entry_t *e, const uint8_t *data, uint16_t len)
+{
+    return param_entry_write_raw_to(e, data, len, param_entry_write_apply);
+}
+
+int param_entry_load(param_entry_t *e)
+{
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+    return g_param_data_ops[t].load(e);
+}
+
+int param_entry_reset(param_entry_t *e)
+{
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+    return g_param_data_ops[t].reset(e);
+}
+
+/** @brief 条目级 flush 空实现 (App flush 槽位: App 无硬件, 条目级 flush 为 no-op) */
+int param_entry_flush_nop(param_entry_t *e)
+{
+    (void)e;
+    return PARAM_OK;
+}
+
+/* ---- 模块级基类实现 ---- */
+
+void param_module_mark_dirty(param_module_node_t *m, uint16_t local_id)
+{
+    /* READONLY/EXEC 条目永不进入写路径: 模块级 dirty 一并跳过。
+       防御外部调用点对非可写条目的标记 (否则会出现"模块 dirty
+       但零条目 dirty"的假脏状态, 触发一次空 flush)。 */
+    for (uint16_t i = 0; i < m->param_count; i++) {
+        param_entry_t *e = m->table[i];
+        if (e && PARAM_LOCAL_ID(e->param_id) == local_id) {
+            if (!param_entry_is_writable(e))
+                return;
+            break;
+        }
+    }
+    m->dirty = 1;
+}
+
+void param_module_clear_dirty(param_module_node_t *m, uint16_t local_id)
+{
+    (void)local_id;
+    uint8_t has_dirty = 0;
+    for (uint16_t i = 0; i < m->param_count; i++) {
+        param_entry_t *pe = m->table[i];
+        if (pe && entry_dirty(pe)) { has_dirty = 1; break; }
+    }
+    if (!has_dirty) m->dirty = 0;
+}
+
+int param_module_exec(param_module_node_t *m, uint32_t cmd_id, param_value_t arg)
+{
+    param_module_t *mod = (param_module_t *)m;
+    if (mod->exec)
+        return mod->exec(mod->ctx, cmd_id, arg);
+    return PARAM_ERR_NOT_FOUND;
+}
+
+void param_module_reset(param_module_node_t *m)
+{
+    m->dirty = 0;
+}
+
+void param_module_deinit(param_module_node_t *m)
+{
+    m->initialized = 0;
 }
 
 /* ================================================================
@@ -899,36 +1219,108 @@ int param_exec(uint32_t cmd_id, void *user_arg)
 }
 
 /**
+ * @brief 模块链表快照的批容量上限
+ *
+ * 栈上指针数组容量, 不是模块总数上限: param_flush / param_foreach /
+ * param_module_foreach 均按此容量分批 —— 每批在锁内只快照指针,
+ * 锁外执行回调, 处理完重新进锁续扫 (cursor 游标)。
+ * 因此栈占用有界，而模块数无上限。
+ */
+#define PARAM_MODULE_BATCH_MAX 8
+
+/**
  * @brief 将所有模块的 dirty 参数刷入硬件
  *
- * 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，对每个 dirty 模块调用 module->vtable->flush。
- * 即使某个模块 flush 失败，仍会继续处理后续模块，错误计数累加到 flush_error_count。
+ * @details
+ * 两阶段执行 (与 param_load_all 的锁策略对齐), 全局锁只保护框架状态,
+ * **不覆盖任何用户回调或硬件访问**:
  *
- * @return PARAM_OK 全部成功，或最后一个失败的错误码
+ *   **阶段 1 (锁内)**: 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，
+ *     仅把 dirty 模块的**指针**快照到栈上数组，不执行任何回调。
+ *     单批容量 PARAM_MODULE_BATCH_MAX，超出则分批: 每批处理完重新进锁
+ *     续扫 (cursor 游标)，因此栈占用有界、模块数无上限。
+ *
+ *   **阶段 2 (锁外)**: 逐模块调用 module->vtable->flush。所有硬件访问与
+ *     用户回调均在此阶段执行 —— 期间其他任务可正常调用 param_read /
+ *     param_write / param_save_one 等加锁 API，不会被一次慢速总线写
+ *     阻塞; 回调内也不会因重入全局锁而自死锁 (非递归 mutex 语义)。
+ *
+ * 并发语义:
+ *   - 同一时刻只允许一个 flusher (g_pm.flushing)。回调内递归调用
+ *     param_flush() 返回 PARAM_ERR_BUSY，而不是死锁或无限递归。
+ *   - 阶段 2 期间被并发置脏的参数/模块由下一轮 param_flush 补发:
+ *     脏位清理采用 take-and-clear (锁内"取值 + 清脏"原子完成),
+ *     新脏位不会被本次 flush 吞掉。
+ *
+ * 即使某个模块 flush 失败，仍会继续处理后续模块，
+ * 错误计数累加到 flush_error_count。
+ *
+ * @return PARAM_OK 全部成功，或最后一个失败的错误码，
+ *         PARAM_ERR_BUSY 已有 flush 在进行中
  */
 int param_flush(void)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
 
-    int last_err = PARAM_OK;
-
+    /* ---- 阶段 0 (锁内): 单 flusher 互斥 ---- */
     system_lock(SYS_LOCK_PARAM);
+    if (g_pm.flushing) {
+        system_unlock(SYS_LOCK_PARAM);
+        return PARAM_ERR_BUSY;
+    }
+    g_pm.flushing = 1;
+    system_unlock(SYS_LOCK_PARAM);
 
-    param_module_node_t *m = g_pm.module_head;
-    while (m) {
-        if (m->dirty && m->vtable && m->vtable->flush) {
-            int ret = m->vtable->flush(m);
+    int last_err = PARAM_OK;
+    uint16_t err_count = 0;
+    uint16_t cursor = 0; /* 链表游标: 已快照过的节点数 */
+
+    for (;;) {
+        param_module_node_t *batch[PARAM_MODULE_BATCH_MAX];
+        uint16_t n = 0;
+        uint16_t pos = 0;
+        uint8_t more = 0;
+
+        /* ---- 阶段 1 (锁内): 只收集 dirty 模块指针, 不执行回调 ---- */
+        system_lock(SYS_LOCK_PARAM);
+        for (param_module_node_t *m = g_pm.module_head; m; m = m->next, pos++) {
+            if (pos < cursor)
+                continue;
+            if (n >= PARAM_MODULE_BATCH_MAX) {
+                more = 1; /* 本批已满, 下一轮从当前节点续扫 */
+                break;
+            }
+            if (m->dirty && m->vtable && m->vtable->flush)
+                batch[n++] = m;
+        }
+        cursor = pos;
+        system_unlock(SYS_LOCK_PARAM);
+
+        /* ---- 阶段 2 (锁外): 执行用户回调 / 硬件访问 ---- */
+        for (uint16_t i = 0; i < n; i++) {
+            int ret = batch[i]->vtable->flush(batch[i]);
             if (ret != PARAM_OK) {
                 last_err = ret;
-                if (g_pm.stats.flush_error_count < UINT16_MAX)
-                    g_pm.stats.flush_error_count++;
+                if (err_count < UINT16_MAX)
+                    err_count++;
             }
         }
-        m = m->next;
+
+        if (!more)
+            break;
     }
 
+    /* ---- 阶段 3 (锁内): 回写统计 + 释放 flusher ---- */
+    system_lock(SYS_LOCK_PARAM);
+    if (err_count) {
+        uint32_t sum = (uint32_t)g_pm.stats.flush_error_count + err_count;
+        g_pm.stats.flush_error_count =
+            (sum > UINT16_MAX) ? UINT16_MAX : (uint16_t)sum;
+    }
+    g_pm.flushing = 0;
     system_unlock(SYS_LOCK_PARAM);
+
     return last_err;
 }
 
@@ -1417,6 +1809,20 @@ void param_clear_stats(void)
 /**
  * @brief 遍历指定模块或全部模块的参数条目
  *
+ * @details
+ * 两阶段执行, 用户回调在**锁外**调用 (与 param_flush 同策略):
+ *   阶段 1 (锁内): 把目标模块的**指针**快照到栈上数组 (每批
+ *     PARAM_MODULE_BATCH_MAX 个, 超出分批续扫);
+ *   阶段 2 (锁外): 遍历各模块的 table 调用 cb。
+ *     m->table / m->param_count 在注册后不可变, 且条目均为静态对象,
+ *     所以锁外遍历安全。
+ *
+ * 因此回调内可安全调用 param_read / param_write / param_save_one 等
+ * 加锁 API, 不会自死锁。
+ *
+ * @note 与旧实现的差异: 遍历期间新注册的模块不一定被本次遍历覆盖
+ *       (旧实现持锁，同样存在此语义，只是窗口不同)。
+ *
  * @param module_id 模块 ID (0 表示全部)
  * @param cb        回调，返回 false 终止遍历
  * @param user_data 用户上下文
@@ -1425,24 +1831,48 @@ void param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data)
 {
     if (!g_pm.initialized || !cb)
         return;
-    system_lock(SYS_LOCK_PARAM);
 
-    param_module_node_t *m = g_pm.module_head;
-    while (m) {
-        if (module_id == 0 || m->module_id == module_id) {
-            for (uint16_t i = 0; i < m->param_count; i++) {
-                param_entry_t *e = m->table[i];
+    uint16_t cursor = 0; /* 链表游标: 已快照过的节点数 */
+    uint8_t stop = 0;
+
+    while (!stop) {
+        param_module_node_t *batch[PARAM_MODULE_BATCH_MAX];
+        uint16_t n = 0;
+        uint16_t pos = 0;
+        uint8_t more = 0;
+
+        /* ---- 阶段 1 (锁内): 只收集模块指针 ---- */
+        system_lock(SYS_LOCK_PARAM);
+        for (param_module_node_t *m = g_pm.module_head; m; m = m->next, pos++) {
+            if (pos < cursor)
+                continue;
+            if (n >= PARAM_MODULE_BATCH_MAX) {
+                more = 1;
+                break;
+            }
+            if (module_id == 0 || m->module_id == module_id)
+                batch[n++] = m;
+        }
+        cursor = pos;
+        system_unlock(SYS_LOCK_PARAM);
+
+        /* ---- 阶段 2 (锁外): 逐条目调用用户回调 ---- */
+        for (uint16_t i = 0; i < n && !stop; i++) {
+            param_module_node_t *m = batch[i];
+            for (uint16_t k = 0; k < m->param_count; k++) {
+                param_entry_t *e = m->table[k];
                 if (!e)
                     continue;
                 if (!cb(e, user_data)) {
-                    system_unlock(SYS_LOCK_PARAM);
-                    return;
+                    stop = 1;
+                    break;
                 }
             }
         }
-        m = m->next;
+
+        if (!more)
+            break;
     }
-    system_unlock(SYS_LOCK_PARAM);
 }
 
 /**
@@ -1514,18 +1944,47 @@ void param_validate_all(void)
     system_unlock(SYS_LOCK_PARAM);
 }
 
-/** @brief 遍历所有已注册模块节点 */
+/**
+ * @brief 遍历所有已注册模块节点
+ *
+ * @details
+ * 两阶段执行: 锁内只快照模块指针 (每批 PARAM_MODULE_BATCH_MAX 个),
+ * 锁外调用 cb。因此 cb 内可安全调用 param_* 加锁 API。
+ */
 void param_module_foreach(param_module_iter_fn cb, void *ctx)
 {
     if (!g_pm.initialized || !cb)
         return;
-    system_lock(SYS_LOCK_PARAM);
-    param_module_node_t *m = g_pm.module_head;
-    while (m) {
-        cb(m, ctx);
-        m = m->next;
+
+    uint16_t cursor = 0; /* 链表游标: 已快照过的节点数 */
+
+    for (;;) {
+        param_module_node_t *batch[PARAM_MODULE_BATCH_MAX];
+        uint16_t n = 0;
+        uint16_t pos = 0;
+        uint8_t more = 0;
+
+        /* ---- 阶段 1 (锁内): 只收集模块指针 ---- */
+        system_lock(SYS_LOCK_PARAM);
+        for (param_module_node_t *m = g_pm.module_head; m; m = m->next, pos++) {
+            if (pos < cursor)
+                continue;
+            if (n >= PARAM_MODULE_BATCH_MAX) {
+                more = 1;
+                break;
+            }
+            batch[n++] = m;
+        }
+        cursor = pos;
+        system_unlock(SYS_LOCK_PARAM);
+
+        /* ---- 阶段 2 (锁外): 调用用户回调 ---- */
+        for (uint16_t i = 0; i < n; i++)
+            cb(batch[i], ctx);
+
+        if (!more)
+            break;
     }
-    system_unlock(SYS_LOCK_PARAM);
 }
 
 #if PARAM_MODULE_AUTO_REGISTER_ENABLE

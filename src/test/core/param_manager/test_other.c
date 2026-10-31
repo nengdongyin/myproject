@@ -353,17 +353,15 @@ void test_string_save_load(void) {
 }
 
 /* ================================================================
- *  P0-5: PARAM_STRING (外部缓冲) / PARAM_STRING_LITERAL (字面量)
+ *  P0-5: PARAM_STRING (外部缓冲)
  * ================================================================ */
 #define MACRO_STR_MODULE 0xF6u
-#define TID_MACRO_STR_LIT MAKE_PARAM_ID(MACRO_STR_MODULE, 0)
 #define TID_MACRO_STR_PTR MAKE_PARAM_ID(MACRO_STR_MODULE, 1)
 
-PARAM_STRING_LITERAL(ms_lit, TID_MACRO_STR_LIT, PARAM_FLAG_PERSIST, "def", 16);
 static char g_ms_ptr_buf[8] = "ptrdef";
 PARAM_STRING(ms_ptr, TID_MACRO_STR_PTR, PARAM_FLAG_PERSIST, g_ms_ptr_buf, 7);
 
-PARAM_TABLE(macro_str_params, &ms_lit.base, &ms_ptr.base);
+PARAM_TABLE(macro_str_params, &ms_ptr.base);
 PARAM_MODULE_DEFINE(macro_str_mod, MACRO_STR_MODULE, "MacroStrMod",
                     NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
 
@@ -371,30 +369,6 @@ static void register_macro_str(void)
 {
     param_module_register(&macro_str_mod_module, macro_str_params,
                           PARAM_COUNT(macro_str_params));
-}
-
-void test_string_macro_literal_safe(void) {
-    register_macro_str();
-
-    char buf[32];
-    TEST_ASSERT_PARAM_OK(param_read_string(TID_MACRO_STR_LIT, buf, sizeof(buf)));
-    TEST_ASSERT_EQUAL_STRING("def", buf);
-
-    /* 写入宏生成的静态可写缓存 (旧实现缓存指向 .rodata 字面量会 fault) */
-    TEST_ASSERT_PARAM_OK(param_write_string(TID_MACRO_STR_LIT, "hello"));
-    TEST_ASSERT_PARAM_OK(param_read_string(TID_MACRO_STR_LIT, buf, sizeof(buf)));
-    TEST_ASSERT_EQUAL_STRING("hello", buf);
-
-    /* 超长截断到 max_len */
-    TEST_ASSERT_PARAM_OK(param_write_string(TID_MACRO_STR_LIT,
-                                            "0123456789abcdefXYZ"));
-    TEST_ASSERT_PARAM_OK(param_read_string(TID_MACRO_STR_LIT, buf, sizeof(buf)));
-    TEST_ASSERT_EQUAL_STRING("0123456789abcdef", buf);
-
-    /* reset 从独立 default 缓冲区恢复默认值 */
-    TEST_ASSERT_PARAM_OK(param_reset_one(TID_MACRO_STR_LIT));
-    TEST_ASSERT_PARAM_OK(param_read_string(TID_MACRO_STR_LIT, buf, sizeof(buf)));
-    TEST_ASSERT_EQUAL_STRING("def", buf);
 }
 
 void test_string_macro_ptr_buffer_reset_no_ub(void) {
@@ -435,6 +409,5 @@ void run_test_other(void)
     RUN_TEST(test_string_write_read);
     RUN_TEST(test_string_truncation);
     RUN_TEST(test_string_save_load);
-    RUN_TEST(test_string_macro_literal_safe);
     RUN_TEST(test_string_macro_ptr_buffer_reset_no_ub);
 }
