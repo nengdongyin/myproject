@@ -40,10 +40,9 @@ extern "C"
 /**
  * @name App 参数条目定义宏
  *
- * 每个宏定义一个 static 的 xxx_entry_t 变量，编译期 .data/.bss 中初始化为零，
- * 其余字段 (cache / default_val / range 等) 由宏参数填入。
- *
- * @note 所有宏定义均声明为 static 变量，不占用可写内存。
+ * 每个宏定义一个 static 的 xxx_entry_t 变量 (位于 .data/.bss, 由宏参数
+ * 完成编译期初始化, 无运行时构造)。条目由 PARAM_TABLE 收集后随模块注册,
+ * 框架不产生任何动态分配。
  * @{
  */
 

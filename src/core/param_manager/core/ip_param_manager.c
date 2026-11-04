@@ -58,9 +58,8 @@ static int ip_param_load(param_entry_t *e)
  *      下一轮 param_flush 会再次下发。
  *   2. **锁外写硬件**: inst->write() 是用户回调，期间允许其调用
  *      param_read / param_read_cache / param_save_one 等加锁 API。
- *      (旧实现全程持全局锁调用回调，在非递归 mutex 上会自死锁)
  *   3. **失败回滚脏位 (锁内)**: 硬件写失败恢复 dirty，下次
- *      param_flush() 自动重试 (缓存不回滚，有意语义)。
+ *      param_flush() 自动重试 (缓存不回滚)。
  *
  * @param e    参数条目
  * @param inst IP 实例
@@ -144,8 +143,8 @@ static int ip_module_flush(param_module_node_t *m)
     /* 逐条 take-and-clear + 锁外写硬件 (见 _ip_flush_write_entry)。
        非脏条目由该函数在锁内快速返回 PARAM_OK。
 
-       m->dirty 在锁外读取 (param_flush 阶段 2 已不持锁) 属于 benign
-       竞争: 最坏情况是多扫一遍全 clean 的参数表。 */
+       模块级 m->dirty 的读写在锁外存在 benign 竞争 (置位由持锁的
+       写路径完成), 最坏情况是多扫一遍全 clean 的参数表。 */
     for (uint16_t i = 0; i < m->param_count; i++) {
         param_entry_t *e = m->table[i];
         if (!e)
@@ -155,11 +154,10 @@ static int ip_module_flush(param_module_node_t *m)
         if (ret != PARAM_OK) {
             last_err = ret;
             /* 脏位已在 _ip_flush_write_entry 内回滚: 缓存已先行更新为
-               新值 (有意不回滚), 硬件写入失败时保持脏, 下次 param_flush()
+               新值 (不回滚), 硬件写入失败时保持脏, 下次 param_flush()
                自动重试, 避免缓存与硬件静默分叉。调用者通过 param_flush
                返回的错误码与 flush_error_count 感知失败。
-               与 app_module_flush 失败语义对齐 (App flush 回调
-               失败同样保留 dirty)。 */
+               App 模块 flush 回调失败时同样保留 dirty。 */
         }
     }
 
@@ -172,7 +170,7 @@ static int ip_module_flush(param_module_node_t *m)
     }
 
     /* 锁内重算模块级 dirty: 逐条刷入后若已无脏条目则清模块脏位。
-       阶段 2 期间被并发置脏的条目会让 has_dirty 为真, 模块保持脏,
+       本轮 flush 期间被并发置脏的条目会让 has_dirty 为真, 模块保持脏,
        下一轮 param_flush 继续下发 —— 新值不会被吞掉 */
     uint8_t has_dirty = 0;
     system_lock(SYS_LOCK_PARAM);
@@ -229,6 +227,7 @@ const param_vtable_t ip_vtable = {
     .save             = param_vtable_save,
     .load             = ip_param_load,
     .reset            = param_entry_reset,
+    .module_vtable    = &ip_module_vtable,
 };
 
 const param_module_vtable_t ip_module_vtable = {

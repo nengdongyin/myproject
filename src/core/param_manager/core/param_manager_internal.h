@@ -132,7 +132,7 @@ extern "C"
     /** @brief 条目是否可写 (READONLY/EXEC 永不进入写路径, App/IP 通用) */
     bool param_entry_is_writable(const param_entry_t *e);
 
-    /** @brief 按模块 ID 查找模块节点 (带 vtable 类型校验, 原 app_find/ip_find 合一) */
+    /** @brief 按模块 ID 查找模块节点 (带 vtable 类型校验, 防条目与模块注册类型错配) */
     param_module_t *param_module_find_typed(uint16_t module_id,
                                             const param_module_vtable_t *vt);
 

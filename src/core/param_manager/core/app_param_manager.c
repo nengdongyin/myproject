@@ -27,8 +27,7 @@ static int app_module_flush(param_module_node_t *m)
     param_module_t *mod = (param_module_t *)m;
 
     /* take-and-clear (锁内): 先清脏再回调 —— 若回调执行期间有并发
-       param_write 重新标脏, 新脏位不会被本次清理覆盖
-       (旧实现先回调后清脏, 且回调在锁内执行, 会自死锁) */
+       param_write 重新标脏, 新脏位不会被本次清理覆盖 */
     system_lock(SYS_LOCK_PARAM);
     for (uint16_t i = 0; i < m->param_count; i++) {
         param_entry_t *e = m->table[i];
@@ -80,6 +79,7 @@ const param_vtable_t app_vtable = {
     .save             = param_vtable_save,
     .load             = param_entry_load,
     .reset            = param_entry_reset,
+    .module_vtable    = &app_module_vtable,
 };
 
 const param_module_vtable_t app_module_vtable = {

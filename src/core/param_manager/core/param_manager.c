@@ -34,7 +34,7 @@ static struct {
     const param_storage_drv_t *storage;   /**< 持久化后端驱动 */
     param_entry_t *hash[PARAM_HASH_SIZE]; /**< 参数哈希表 */
     uint8_t initialized : 1;              /**< 初始化标志 */
-    uint8_t flushing : 1;                 /**< flush 进行中 (阶段 2 锁外执行期间为 1) */
+    uint8_t flushing : 1;                 /**< flush 进行中 (用户回调锁外执行期间为 1) */
     param_stats_t stats;                  /**< 统计信息 */
     param_notify_fn notify_cb;            /**< 参数变化通知回调 (可为 NULL) */
 } g_pm;
@@ -281,7 +281,7 @@ param_entry_t *param_entry_find(uint32_t param_id)
  *
  * @note 假定系统启动阶段单线程调用，因此不加锁。
  *       反初始化 param_deinit 会加锁以安全清理多线程环境中
- *       可能仍被持有的资源。两函数锁语义不对称是有意设计。
+ *       可能仍被持有的资源。
  *
  * @param storage 持久化后端驱动 (可为 NULL)
  * @param notify  参数变化通知回调 (可为 NULL)
@@ -307,8 +307,7 @@ int param_init(const param_storage_drv_t *storage, param_notify_fn notify)
  * 最后 memset 清零全局状态。
  *
  * @note 加锁以安全清理多线程环境中可能仍被持有的资源。
- *       初始化 param_init 假定单线程调用不加锁，
- *       两函数锁语义不对称是有意设计。
+ *       初始化 param_init 假定单线程调用不加锁。
  */
 void param_deinit(void)
 {
@@ -472,8 +471,8 @@ bool param_entry_is_writable(const param_entry_t *e)
 /**
  * @brief 按模块 ID 查找模块节点 (带 vtable 类型校验)
  *
- * 原 app_find / ip_find 合一: 调用方传入期望的模块级 vtable,
- * 防御"参数条目与模块注册类型错配"的配置错误。
+ * 调用方传入期望的模块级 vtable, 防御"参数条目与模块注册类型错配"
+ * 的配置错误。App/IP 各自以本函数 + 自己的 vtable 完成带类型校验的查找。
  */
 param_module_t *param_module_find_typed(uint16_t module_id,
                                         const param_module_vtable_t *vt)
@@ -485,14 +484,16 @@ param_module_t *param_module_find_typed(uint16_t module_id,
 }
 
 /**
- * @brief 按参数条目查找所属模块 — 条目 vtable 决定期望的模块类型
+ * @brief 按参数条目查找所属模块 — 期望模块类型来自条目 vtable 自带的配对字段
+ *
+ * 依赖方向 (派生 → 基类, 无反向): 各子系统在组装自己的 param_vtable_t
+ * 实例时填入 module_vtable, 基类实现仅跟随该指针完成"条目↔模块"类型
+ * 一致性校验, 不命名任何派生侧的 vtable 符号。
  */
 static param_module_t *param_entry_module(const param_entry_t *e)
 {
-    const param_module_vtable_t *expect =
-        (e->vtable == &ip_vtable) ? &ip_module_vtable : &app_module_vtable;
     return param_module_find_typed((uint16_t)PARAM_MODULE_ID(e->param_id),
-                                   expect);
+                                   e->vtable->module_vtable);
 }
 
 /* ---- 参数级基类实现 ---- */
@@ -556,8 +557,8 @@ int param_entry_write(param_entry_t *e, param_value_t value)
 /**
  * @brief 参数写入 (带 apply) — 基类写入 + 模块业务回调
  *
- * App 独有: 缓存先行更新后调用模块 write 回调 (校验/拒绝/副作用),
- * 回调返回非 OK 时缓存保持新值仅不标脏 (有意语义)。
+ * App 专用槽位: 缓存先行更新后调用模块 write 回调 (校验/拒绝/副作用),
+ * 回调返回非 OK 时缓存保持新值仅不标脏。
  */
 int param_entry_write_apply(param_entry_t *e, param_value_t value)
 {
@@ -574,7 +575,7 @@ int param_entry_write_apply(param_entry_t *e, param_value_t value)
 
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
-    /* 缓存先行 (有意不回滚): 回调执行期间缓存已为新值,
+    /* 缓存先行 (不回滚): 回调执行期间缓存已为新值,
        回调内 param_read / param_save_one 均作用于新值 (含 BLOB/STRING)。
        回调拒绝时缓存保持新值, 仅不标记 dirty。 */
     system_lock(SYS_LOCK_PARAM);
@@ -1819,9 +1820,6 @@ void param_clear_stats(void)
  *
  * 因此回调内可安全调用 param_read / param_write / param_save_one 等
  * 加锁 API, 不会自死锁。
- *
- * @note 与旧实现的差异: 遍历期间新注册的模块不一定被本次遍历覆盖
- *       (旧实现持锁，同样存在此语义，只是窗口不同)。
  *
  * @param module_id 模块 ID (0 表示全部)
  * @param cb        回调，返回 false 终止遍历

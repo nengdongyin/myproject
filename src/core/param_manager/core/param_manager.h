@@ -15,11 +15,28 @@ extern "C"
      * @file param_manager.h
      * @brief 嵌入式内存参数管理器 — 公共接口定义
      *
-     * 设计要点:
-     *   - 基于 vtable 的 OOP-in-C 多态: 模块级和参数级各一套虚函数表
-     *   - 所有参数条目静态定义在编译期 ROM 中，零动态分配
-     *   - 类型分派表完全消除 switch-case 分支
-     *   - App 模块与 IP 模块共用单条链表，通过 vtable 区分行为
+     * @par 架构总览
+     * 两级 vtable 多态 (OOP-in-C):
+     *   - 参数级 param_vtable_t: 每条参数条目携带 vtable 指针, 决定
+     *     读/写/持久化/重置等行为 (App 参数与 IP 参数两套实现);
+     *   - 模块级 param_module_vtable_t: 每个模块携带 vtable 指针,
+     *     决定标脏/flush/init/exec 等行为。
+     *
+     * @par 分层规则 (单一事实来源)
+     *   - 本文件: 共享类型、两级 vtable 结构、公共 API、*_ENTRY / *_CORE
+     *     核心宏 (以参数注入 App/IP 差异, 应用层勿直接使用);
+     *   - param_manager.c: 两级 vtable 的通用实现 (基类);
+     *   - app_param_manager.* / ip_param_manager.*: 各自子系统专属的
+     *     类型别名、包装宏、vtable 常量与差异实现 (派生)。
+     *   依赖方向为 派生 → 基类, 无反向。
+     *
+     * @par 关键设计点
+     *   - 参数条目静态定义, 零动态分配;
+     *   - 类型分派表 (g_param_data_ops / g_param_pre_write) 消除 switch-case;
+     *   - App 与 IP 模块共用统一结构体 param_module 与单条注册链表;
+     *   - 模块级 flush 顺序由 MODULE_INIT_ORDER (module_ids.h) 决定;
+     *   - 持久化经 param_storage_drv_t 后端抽象 (FlashDB / mkv / ini 等),
+     *     支持多分区与版本迁移。
      */
 
 /** @brief 构造 32 位参数 ID (高 16 位 module_id, 低 16 位 local_id) */
@@ -111,10 +128,9 @@ extern "C"
      * @brief 参数变化通知回调
      *
      * 当参数值通过 param_write / param_write_cache / param_write_immediate /
-     * param_write_string 成功写入后调用。
-     * 回调在 vtable->write 的 LOCK/UNLOCK 区域之外执行。
-     * 回调内禁止调用 param_write / param_write_cache / param_write_immediate /
-     * param_write_string，是否防重入由回调实现者自行决定。
+     * param_write_string 成功写入后调用。回调在锁外执行;
+     * 回调内再次调用写入类 API 需由实现者自行处理防重入
+     * (框架不提供递归保护)。
      *
      * @attention 多线程并发写入同一参数时，notify 可能收到中间值
      *   (另一个线程在 notify 发出后立即覆盖了参数值)。
@@ -126,10 +142,10 @@ extern "C"
     typedef void (*param_notify_fn)(uint32_t param_id, param_value_t new_value);
 
     /**
-     * @brief App 参数读取回调
+     * @brief 模块参数读取回调 (App 与 IP 共用)
      *
      * 若提供且返回 PARAM_OK，框架回写缓存后返回。
-     * NULL 或返回错误 → 回退到读取缓存值 (与 IP ip_param_read 对称)。
+     * NULL 或返回错误 → 回退到读取缓存值。
      *
      * @attention 仅当确实从权威源 (硬件寄存器/实时数据) 取得有效值
      *   时才允许返回 PARAM_OK: 框架对返回值无条件回写缓存,
@@ -144,11 +160,15 @@ extern "C"
     typedef int (*param_read_fn)(void *ctx, uint32_t param_id, param_value_t *value);
 
     /**
-     * @brief App 参数写入回调 (与 IP write 回调语义对称)
+     * @brief 模块参数写入回调 (App 与 IP 共用)
+     *
+     * 回调语义随模块类型分派:
+     *   - App 模块: apply 校验/转换, 返回非 OK 拒绝写入;
+     *   - IP 模块:  向硬件下发新值。
      *
      * @attention 回调执行期间缓存已先行更新为新值 (含 BLOB/STRING):
      *   回调内 param_read / param_save_one 均反映新值。
-     *   回调返回非 OK 时缓存保持新值不回滚 (有意语义)。
+     *   回调返回非 OK 时缓存保持新值不回滚。
      *
      * @param param_id 参数 ID
      * @param value    待写入的新值
@@ -158,6 +178,9 @@ extern "C"
 
     /**
      * @brief App 模块 flush 回调 — 将缓存的参数批量写入硬件
+     *
+     * @note 回调在锁外执行, 回调内可安全调用 param_* API;
+     *   回调内对参数的重新写入会保留 dirty, 由下一轮 param_flush 处理。
      * @param ctx 模块注册时提供的上下文指针
      * @return PARAM_OK 成功
      */
@@ -177,7 +200,7 @@ extern "C"
      * 参数时，框架自动路由到此回调。arg 为 param_value_t 联合体，可通过 .u32 / .i32 /
      * .f32 / .b / .ptr 按需取值。
      *
-     * @param ctx      App 模块为 ctx (业务实例), IP 模块为 driver
+     * @param ctx      模块私有上下文 (App: 业务实例 / IP: driver 数据)
      * @param param_id 全局唯一参数 ID (MAKE_PARAM_ID 风格)
      * @param arg      命令参数 (param_value_t 联合体)
      * @return PARAM_OK 成功，其他值表示失败
@@ -218,6 +241,11 @@ extern "C"
      *
      * 全系统仅 2 份实例 (app_vtable / ip_vtable)，存于 .rodata。
      * 所有参数操作 (读/写/立即写/原始写/flush/存/取/重置) 均通过此表分派。
+     *
+     * module_vtable 由各子系统在组装本表时填入 (App→&app_module_vtable,
+     * IP→&ip_module_vtable): 基类实现据此校验"参数条目 ↔ 所属模块"的类型
+     * 一致性, 从而基类代码无需也不得命名任何派生侧的 vtable 符号
+     * (依赖方向: 派生 → 基类, 无反向)。
      */
     typedef struct param_vtable
     {
@@ -229,12 +257,12 @@ extern "C"
          *   - App 参数: 跳过 apply 回调，仅更新缓存 + 标记 dirty
          *   - IP 参数:  与 write 行为相同 (IP 无 apply 回调) */
         int (*write_cache)(param_entry_t *e, param_value_t value);
-        /** 立即写入参数 — 行为取决于模块类型 (有意分裂):
-         *   - IP 参数: 通过 driver->write 直通硬件，更新缓存，不产生 dirty。
-         *              这是真正的"立即" — 硬件寄存器在函数返回时已更新。
+        /** 立即写入参数 — 行为随参数所属模块类型分派:
+         *   - IP 参数: 通过 write 回调直通硬件，更新缓存，不产生 dirty。
+         *              硬件寄存器在函数返回时已更新。
          *   - App 参数: 执行 apply 校验 + 更新缓存 + 清除 dirty，
-         *              不写硬件。App 模块没有硬件，"立即"仅到缓存层。
-         *              硬件生效仍需 param_flush() 触发 IP 模块批量刷入。 */
+         *              不写硬件。App 模块没有硬件，"立即"仅到缓存层，
+         *              硬件生效仍需 param_flush() 触发模块 flush。 */
         int (*write_immediate)(param_entry_t *e, param_value_t value);
         /** 原始字节流写入 */
         int (*write_raw)(param_entry_t *e, const uint8_t *data, uint16_t len);
@@ -246,6 +274,8 @@ extern "C"
         int (*load)(param_entry_t *e);
         /** 重置参数为默认值 */
         int (*reset)(param_entry_t *e);
+        /** 与本参数级 vtable 配对的模块级 vtable (条目↔模块类型一致性校验用) */
+        const param_module_vtable_t *module_vtable;
     } param_vtable_t;
 
     /** App 参数的 vtable 实现 */
@@ -525,7 +555,7 @@ extern "C"
     struct param_module_node
     {
         param_module_node_t *next;           /**< 链表下一节点 */
-        uint16_t module_id;                  /**< 模块 ID (0x01~0xFF) */
+        uint16_t module_id;                  /**< 模块 ID (App 0x01~0x7F, IP 0x80~0xFF, 见 module_ids.h) */
         uint16_t param_count;                /**< 该模块的参数数量 */
         const char *name;                    /**< 模块名称 (调试用) */
         param_entry_t **table;               /**< 参数条目指针数组 */
@@ -818,15 +848,15 @@ extern "C"
      * 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，对每个 dirty 模块调用 module->vtable->flush。
      * 即使某个模块 flush 失败，仍会继续处理后续模块。
      *
-     * @note 锁粒度: 全局锁仅用于快照 dirty 模块指针,
-     *   所有 vtable->flush 回调 (含驱动 write / 总线访问) 均在锁外执行。
-     *   因此回调内可安全调用 param_read / param_read_cache / param_save_one
-     *   等加锁 API, 也不会因慢速总线写阻塞其他任务的参数访问。
-     *   但回调内不得递归调用 param_flush (返回 PARAM_ERR_BUSY)。
+     * @note 锁粒度: 全局锁仅用于快照模块指针, 所有 flush 回调
+     *   (含驱动寄存器写 / 总线访问) 均在锁外执行。回调内可安全调用
+     *   param_read / param_read_cache / param_save_one 等加锁 API,
+     *   慢速总线写也不会阻塞其他任务的参数访问。
+     *   回调内不得递归调用 param_flush。
      * @note 失败重试语义: flush 失败的参数保留 dirty 标记 (缓存不回滚)，
      *   下次调用 param_flush() 会自动重试，直到硬件收敛到缓存值。
      *   App 模块 flush 回调失败时同样保留 dirty。
-     * @return PARAM_OK 全部成功，或最后一个失败的错误码,
+     * @return PARAM_OK 全部成功，或最后一个失败的错误码;
      *         PARAM_ERR_BUSY 已有 flush 在进行中
      */
     int param_flush(void);
@@ -876,7 +906,13 @@ extern "C"
      *  重置
      * ================================================================ */
 
-    /** @brief 重置所有参数为默认值 (default_val) */
+    /**
+     * @brief 重置所有参数为默认值 (default_val)
+     *
+     * 两阶段执行: 先重置全部条目缓存与 dirty, 再按 MODULE_INIT_ORDER
+     * 调用各模块 init。IP 模块的 init 会把其可写参数重新标脏
+     * (默认值仍需下发硬件), 下一次 param_flush() 后收敛清零。
+     */
     int param_reset_all(void);
     /** @brief 重置指定参数为默认值 */
     int param_reset_one(uint32_t param_id);
@@ -911,9 +947,10 @@ extern "C"
     /**
      * @brief 遍历参数
      *
-     * @note 回调在**锁外**执行 (两阶段: 锁内只快照模块指针),
-     *   因此回调内可安全调用 param_read / param_write / param_save_one
-     *   等加锁 API, 不会自死锁。
+     * @note 回调在锁外执行: 回调内可安全调用 param_read / param_write /
+     *   param_save_one 等加锁 API, 不会自死锁。回调收到的条目指针
+     *   生命周期与注册表一致, 其缓存内容为 best-effort 快照
+     *   (可能被并发写改变)。
      * @param module_id 指定模块 ID (0 表示遍历所有模块)
      * @param cb        回调函数
      * @param user_data 用户上下文
@@ -922,7 +959,10 @@ extern "C"
 
     /**
      * @brief 运行时设置参数的范围
-     * @param param_id 参数 ID (仅 App 且 UINT/INT/FLOAT 类型)
+     *
+     * 适用于 UINT/INT/FLOAT 数值参数 (App 与 IP 均可)。若范围收紧导致
+     * 当前缓存越界, 缓存会被裁剪到新范围并按写入路径重新标脏下发。
+     * @param param_id 参数 ID
      * @param min_val  新最小值 (NULL 表示不改)
      * @param max_val  新最大值 (NULL 表示不改)
      * @return PARAM_OK 成功，或错误码
@@ -951,7 +991,7 @@ extern "C"
     /**
      * @brief 迁移转换回调
      *
-     * 框架已从 FlashDB 读旧数据到 old_data[old_len]。
+     * 框架已从存储后端读取旧值到 old_data[old_len]。
      * 回调负责填充 new_id / new_data / new_len。
      *
      * @param old_data  旧值原始字节
