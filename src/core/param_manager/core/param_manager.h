@@ -128,16 +128,24 @@ extern "C"
      * @brief 参数变化通知回调
      *
      * 当参数值通过 param_write / param_write_cache / param_write_immediate /
-     * param_write_string 成功写入后调用。回调在锁外执行;
+     * param_write_raw / param_write_blob / param_write_string / param_update
+     * 成功写入后调用。回调在锁外执行;
      * 回调内再次调用写入类 API 需由实现者自行处理防重入
      * (框架不提供递归保护)。
+     *
+     * @attention new_value 取自写入后的参数缓存 (**生效值**), 不是调用者
+     *   传入的原始值: pre_write 的超范围裁剪与 apply 回调的修正都已体现
+     *   在其中。BLOB/STRING 的 .ptr 指向框架缓存缓冲区 (生命周期覆盖整个
+     *   运行期), 而非调用者的临时缓冲区。
+     *   EXEC 参数经 param_write_raw 触发时缓存不参与, new_value 携带命令
+     *   负载 (与 exec 回调收到的 arg 一致)。
      *
      * @attention 多线程并发写入同一参数时，notify 可能收到中间值
      *   (另一个线程在 notify 发出后立即覆盖了参数值)。
      *   new_value 应视为 best-effort 快照，不应假设其与缓存当前值一致。
      *
      * @param param_id  发生变化的参数 ID
-     * @param new_value 写入后的新值 (best-effort 快照)
+     * @param new_value 写入后的生效值 (best-effort 快照)
      */
     typedef void (*param_notify_fn)(uint32_t param_id, param_value_t new_value);
 

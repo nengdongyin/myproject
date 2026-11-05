@@ -780,6 +780,33 @@ void param_module_deinit(param_module_node_t *m)
     m->initialized = 0;
 }
 
+/**
+ * @brief 通知回调 — 携带缓存中的**生效值**
+ *
+ * pre_write 会裁剪超范围值 (UINT/INT/FLOAT), apply 回调也可能修正值,
+ * 因此调用者传入的原始值不一定等于最终写入缓存的值。notify 必须以
+ * 缓存为准, 否则订阅者会收到一个从未被存储的值。
+ *
+ * 快照在锁内完成, 回调本身在锁外执行 (锁纪律第 4 条: 回调一律锁外)。
+ * BLOB/STRING 的 .ptr 指向框架缓存缓冲区 (生命周期覆盖整个运行期),
+ * 优于调用者传入的瞬态缓冲区。
+ *
+ * @param param_id 参数 ID
+ * @param e        参数条目 (已成功写入)
+ */
+static void param_notify_effective(uint32_t param_id, param_entry_t *e)
+{
+    if (!g_pm.notify_cb)
+        return;
+
+    param_value_t effective;
+    system_lock(SYS_LOCK_PARAM);
+    effective = *entry_cache(e);
+    system_unlock(SYS_LOCK_PARAM);
+
+    g_pm.notify_cb(param_id, effective);
+}
+
 /* ================================================================
  *  读写操作 — vtable 分派
  *
@@ -818,8 +845,8 @@ int param_write(uint32_t param_id, param_value_t value)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
             system_unlock(SYS_LOCK_PARAM);
         }
-        if (g_pm.notify_cb)
-            g_pm.notify_cb(param_id, value);
+        /* 通知生效值而非入参: pre_write 可能已裁剪超范围值 */
+        param_notify_effective(param_id, e);
     }
     return ret;
 }
@@ -847,8 +874,8 @@ int param_write_cache(uint32_t param_id, param_value_t value)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
             system_unlock(SYS_LOCK_PARAM);
         }
-        if (g_pm.notify_cb)
-            g_pm.notify_cb(param_id, value);
+        /* 通知生效值而非入参: pre_write 可能已裁剪超范围值 */
+        param_notify_effective(param_id, e);
     }
     return ret;
 }
@@ -876,8 +903,8 @@ int param_write_immediate(uint32_t param_id, param_value_t value)
             m->vtable->clear_dirty(m, PARAM_LOCAL_ID(param_id));
             system_unlock(SYS_LOCK_PARAM);
         }
-        if (g_pm.notify_cb)
-            g_pm.notify_cb(param_id, value);
+        /* 通知生效值而非入参: pre_write / apply 可能已修正值 */
+        param_notify_effective(param_id, e);
     }
     return ret;
 }
@@ -902,17 +929,23 @@ int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
             system_unlock(SYS_LOCK_PARAM);
         }
-        if (g_pm.notify_cb) {
-            param_value_t change;
-            /* 从 raw data 直接构造 notify 值，避免 param_read
-               对 IP 参数触发硬件重读而返回非写入值。
+        if (param_entry_is_exec(e)) {
+            /* EXEC 不写缓存 (EXEC 类型的 cache_update 为空操作), 不存在
+               "生效值": 通知携带命令负载, 与 exec 回调收到的 arg 一致。
                memset 清零后只填充有效字节，剩余字段为 0 (best-effort)。 */
-            memset(&change, 0, sizeof(change));
-            if (len <= sizeof(param_value_t))
-                memcpy(&change, data, len);
+            param_value_t arg;
+            memset(&arg, 0, sizeof(arg));
+            if (len <= sizeof(arg))
+                memcpy(&arg, data, len);
             else
-                change.ptr = (void *)data;
-            g_pm.notify_cb(param_id, change);
+                arg.ptr = (void *)data;
+            if (g_pm.notify_cb)
+                g_pm.notify_cb(param_id, arg);
+        }
+        else {
+            /* 值类型 / BLOB / STRING: 以缓存生效值为准 (裁剪结果已体现,
+               BLOB/STRING 的 .ptr 指向框架缓存缓冲区而非调用者瞬态缓冲) */
+            param_notify_effective(param_id, e);
         }
     }
     return ret;
@@ -987,8 +1020,9 @@ int param_update(uint32_t param_id)
         m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
         system_unlock(SYS_LOCK_PARAM);
     }
-    if (g_pm.notify_cb)
-        g_pm.notify_cb(param_id, cached);
+    /* 通知生效值而非入参: 快照 cached 是 re-apply 前的旧值,
+       pre_write 裁剪后缓存可能已变化 */
+    param_notify_effective(param_id, e);
 
     return PARAM_OK;
 }
@@ -1199,8 +1233,8 @@ static int param_write_typed_tail(uint32_t param_id, param_entry_t *e)
         m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
         system_unlock(SYS_LOCK_PARAM);
     }
-    if (g_pm.notify_cb)
-        g_pm.notify_cb(param_id, value);
+    /* 通知生效值: BLOB/STRING 的 .ptr 即框架缓存缓冲区 */
+    param_notify_effective(param_id, e);
 
     return PARAM_OK;
 }
