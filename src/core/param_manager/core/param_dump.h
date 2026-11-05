@@ -41,8 +41,8 @@ void param_dump(uint16_t module_id, param_dump_fn cb, void *user_data);
 /**
  * @brief 格式化单个参数条目为一行文本
  *
- * 根据参数类型 (vtable 判断 App/IP) 自动选择格式化器。
- * 若 e 为 NULL 或类型不支持，line[0] 为 '\\0'。
+ * 按 param_type_t 自动选择格式化器 (与条目所属子系统无关)。
+ * 若 e 为 NULL / 未装配 vtable，line[0] 为 '\\0'；类型越界时输出 fallback 行。
  *
  * @param e    参数条目指针
  * @param line 输出缓冲区

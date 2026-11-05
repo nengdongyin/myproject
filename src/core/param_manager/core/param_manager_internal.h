@@ -186,17 +186,16 @@ extern "C"
         PARAM_ENTRY_HEAD();
     } param_entry_head_t;
 
-    /** @brief 判断参数是否为 App 类型 */
-    static inline bool is_app(const param_entry_t *e)
-    {
-        return e && e->vtable == &app_vtable;
-    }
-
-    /** @brief 判断参数是否为 IP 类型 */
-    static inline bool is_ip(const param_entry_t *e)
-    {
-        return e && e->vtable == &ip_vtable;
-    }
+    /* 注: 此处曾提供 is_app() / is_ip() (内部直接比较 &app_vtable / &ip_vtable),
+       它使"基类"内部头文件命名了派生侧符号, 与 param_manager.h 声明的
+       依赖方向 (派生 → 基类, 无反向) 相悖, 已移除。
+       需要判别条目归属时请采用:
+         - 基类实现: 跟随 e->vtable->module_vtable (见 param_entry_module),
+           该指针由派生侧组装 vtable 时填入, 基类只传递、不命名;
+         - 派生侧 / 应用侧 (如 param_dump.c、测试代码): 直接使用
+           &app_vtable / &ip_vtable 或 &app_module_vtable / &ip_module_vtable。
+       格式化与遍历类逻辑不应依赖"条目是 App 还是 IP"— 两者的公共头部
+       与类型分派表完全共享 (见 PARAM_ENTRY_HEAD)。 */
 
     /** @brief 获取参数类型 */
     static inline param_type_t entry_type(const param_entry_t *e)

@@ -5,8 +5,9 @@
  * 采用列对齐的固定宽度格式化方案:
  *   每列有固定宽度 (COL_xxx_W)，内容不足宽度则空格填充，超出则截断。
  *
- * 支持 6 种 App 类型 (UINT/INT/FLOAT/BOOL/ENUM/BLOB) 及 IP 类型的格式化，
- * 通过 g_dump_formatters[PARAM_TYPE_COUNT] 分派表查表调度。
+ * 覆盖全部 8 种 param_type_t (UINT/INT/FLOAT/BOOL/ENUM/BLOB/STRING/EXEC)，
+ * 通过 g_dump_formatters[PARAM_TYPE_COUNT] 分派表查表调度 ——
+ * 分派只看条目类型, 与条目属于 App 还是 IP 无关 (不按 vtable 分流)。
  *
  * 受 PARAM_DUMP_ENABLE 宏控制: 禁用时整个文件为空（仅含 #include）。
  */
@@ -286,36 +287,25 @@ static const param_entry_fmt_fn g_dump_formatters[PARAM_TYPE_COUNT] = {
 };
 
 /**
- * @brief IP 参数格式化 — 与 App 共享 struct 类型的格式化器
+ * @brief 按 param_type_t 分派到对应格式化器 (App / IP 通用)
  *
- * IP 的 UINT/INT/FLOAT/ENUM/BOOL/EXEC 使用与 App 完全相同的结构体
- * (param_range_entry_t / param_enum_entry_t / …)，范围、枚举值均可正确显示。
- * 直接委托给 g_dump_formatters[] 中的 App 格式化器。
- * BLOB/STRING 因无范围语义，保持专用格式化。
+ * 格式化只依赖条目类型, 与条目属于哪个子系统无关: App 与 IP 的
+ * UINT/INT/FLOAT/BOOL/ENUM/EXEC 结构体布局完全一致 (同一 PARAM_ENTRY_HEAD),
+ * BLOB/STRING 亦各有专用格式化器 (无范围语义), 因此不需要也不应
+ * 按 vtable 分流 —— 基类代码不命名派生侧 vtable 符号
+ * (依赖方向: 派生 → 基类)。
  */
-static void fmt_ip(param_entry_t *e, const char *name,
-                   char *line, uint16_t size)
+static void fmt_by_type(param_entry_t *e, const char *name,
+                        char *line, uint16_t size)
 {
     param_type_t t = entry_type(e);
 
-    /* BLOB / STRING — 无范围，专用格式化 */
-    if (t == PARAM_TYPE_BLOB) {
-        fmt_blob(e, name, line, size);
-        return;
-    }
-    if (t == PARAM_TYPE_STRING) {
-        fmt_string(e, name, line, size);
-        return;
-    }
-
-    /* UINT / INT / FLOAT / BOOL / ENUM / EXEC —
-       与 App 同结构体，直接复用 App 格式化器 (含范围显示) */
     if (t < PARAM_TYPE_COUNT && g_dump_formatters[t]) {
         g_dump_formatters[t](e, name, line, size);
         return;
     }
 
-    /* 未知类型 fallback — 类型字段损坏时不应假设 u32 */
+    /* 未知/损坏类型 fallback — 类型字段越界时不应假设 u32 */
     char val[COL_VALUE_W + 1];
     snprintf(val, sizeof(val), "type=%d", (int)t);
     dump_line(e, name, val, NULL, line, size);
@@ -324,23 +314,16 @@ static void fmt_ip(param_entry_t *e, const char *name,
 /**
  * @brief 格式化单个参数条目为一整行文本
  *
- * 根据 vtable 类型 (App/IP) 和 param_type_t 自动分派到对应格式化器。
- * 若 e 为 NULL 或类型不支持，line 输出为空字符串。
+ * 按 param_type_t 分派, 与条目所属子系统无关 (无需判别 App / IP)。
+ * 若 e 为 NULL 或未装配 vtable, line 输出为空字符串;
+ * 类型越界时输出 "type=N" fallback 行。
  */
 void param_dump_entry(param_entry_t *e, char *line, uint16_t size)
-
 {
     line[0] = '\0';
-    if (!e) return;
+    if (!e || !e->vtable) return;
 
-    param_type_t t = entry_type(e);
-    const char *name = param_entry_name(e);
-
-    if (is_app(e) && t < PARAM_TYPE_COUNT && g_dump_formatters[t]) {
-        g_dump_formatters[t](e, name, line, size);
-    } else if (is_ip(e)) {
-        fmt_ip(e, name, line, size);
-    }
+    fmt_by_type(e, param_entry_name(e), line, size);
 }
 
 /** dump 遍历上下文 */
