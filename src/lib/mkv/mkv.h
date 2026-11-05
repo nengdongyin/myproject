@@ -121,7 +121,8 @@ typedef void (*mkv_scan_cb)(uint32_t id, const uint8_t *data, uint16_t len, void
  * @param kv   已初始化实例
  * @param cb   回调
  * @param user 透传
- * @return 0 成功，-1 参数错误
+ * @return 0 成功; 1 存在单条 value 超过内部扫描缓冲 (本次未回调，调用方
+ *         应改用逐条读); -1 参数错误
  */
 int mkv_scan(mkv_t *kv, mkv_scan_cb cb, void *user);
 

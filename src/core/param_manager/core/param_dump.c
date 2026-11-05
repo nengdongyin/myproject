@@ -219,10 +219,10 @@ static void fmt_enum(param_entry_t *e, const char *name,
 }
 
 /**
- * @brief 格式化 BLOB 类型: 显示前 6 字节的十六进制 (空格分隔)
+ * @brief 格式化 BLOB 类型: 显示前 9 字节的十六进制 (空格分隔)
  *
  * 格式: [XXXX] NAME BLOB=sz=N[XX XX XX ...] d=X f=0xXX
- * 每字节两位大写十六进制，空格分隔。若 blob 大小超过 6 则末尾加 "..."
+ * 每字节两位大写十六进制，空格分隔。若 blob 大小超过 9 则末尾加 "..."
  */
 static void fmt_blob(param_entry_t *e, const char *name,
                      char *line, uint16_t size)
@@ -230,6 +230,11 @@ static void fmt_blob(param_entry_t *e, const char *name,
     param_blob_entry_t *be = (param_blob_entry_t *)e;
     const uint8_t *data = (const uint8_t *)entry_cache(e)->ptr;
     char val[72];
+
+    if (!data) {
+        dump_line(e, name, "BLOB=(null)", NULL, line, size);
+        return;
+    }
 
     uint16_t show = be->blob_size < 9u ? be->blob_size : 9u;
     int pos = snprintf(val, sizeof(val), "BLOB=sz=%u[", be->blob_size);

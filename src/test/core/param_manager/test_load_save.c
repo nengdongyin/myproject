@@ -198,8 +198,8 @@ void test_save_blob(void) {
 
     uint8_t data[TEST_BLOB_SIZE];
     memset(data, 0xAB, TEST_BLOB_SIZE);
-    param_value_t v = { .ptr = data };
-    param_write(TID_APPLET_BLOB, v);
+    /* BLOB 走带长度的专用入口 (param_write 拒收 BLOB/STRING) */
+    TEST_ASSERT_PARAM_OK(param_write_blob(TID_APPLET_BLOB, data, sizeof(data)));
 
     TEST_ASSERT_PARAM_OK(param_save_one(TID_APPLET_BLOB));
 }

@@ -225,9 +225,17 @@ static int value_type_load(param_entry_t *e)
     const param_storage_drv_t *storage = param_get_storage();
     if (!storage || !storage->load) return PARAM_ERR_NOT_FOUND;
 
+    /* 先清零再回填: 短记录 (如旧固件按 4 字节写入而本构建为 8 字节)
+       未写满的字节必须为 0, 不能引入未初始化读 */
     param_value_t stored;
+    memset(&stored, 0, sizeof(stored));
+
     int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)&stored, sizeof(stored));
-    if (ret > 0) *entry_cache_ptr(e) = stored;
+    /* 0 / -1 = 键不存在: 保持默认值, 非错误; < -1 = 读取失败, 上抛 */
+    if (ret == 0 || ret == -1) return PARAM_OK;
+    if (ret < 0) return ret;
+    if (ret > (int)sizeof(stored)) return PARAM_ERR_OUT_OF_RANGE;
+    *entry_cache_ptr(e) = stored;
     return ret;
 }
 
@@ -240,7 +248,10 @@ static int blob_load(param_entry_t *e)
 
     param_blob_entry_t *be = (param_blob_entry_t *)e;
     if (!be->cache.ptr || be->blob_size == 0) return PARAM_OK;
-    return storage->load(storage->ctx, e->param_id, (uint8_t *)be->cache.ptr, be->blob_size);
+    int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)be->cache.ptr, be->blob_size);
+    /* 0 / -1 = 键不存在: 保持默认值, 非错误; < -1 = 读取失败, 上抛 */
+    if (ret == 0 || ret == -1) return PARAM_OK;
+    return ret;
 }
 
 static int string_load(param_entry_t *e)
@@ -254,6 +265,8 @@ static int string_load(param_entry_t *e)
     if (!se->cache.ptr || se->max_len == 0) return PARAM_OK;
     int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)se->cache.ptr, se->max_len + 1);
     ((char *)se->cache.ptr)[se->max_len] = '\0';
+    /* 0 / -1 = 键不存在: 保持默认值, 非错误; < -1 = 读取失败, 上抛 */
+    if (ret == 0 || ret == -1) return PARAM_OK;
     return ret;
 }
 
@@ -269,18 +282,45 @@ int param_cache_restore(uint32_t param_id, const uint8_t *data, uint16_t len)
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
-    if (data && len > 0) {
-        param_value_t value;
-        memset(&value, 0, sizeof(value));
-        if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
-            value.ptr = (void *)data;
-        else
-            memcpy(&value, data, len < sizeof(value) ? len : sizeof(value));
-        g_param_data_ops[t].cache_update(e, value);
-    } else {
-        /* 墓碑/删除 → 重置为默认值 */
+    /* 墓碑/删除 → 重置为默认值 */
+    if (!data || len == 0) {
         g_param_data_ops[t].reset(e);
+        return PARAM_OK;
     }
+
+    /* ---- BLOB: 定长, 记录长度必须与条目容量严格一致 ----
+       存储里出现短记录 (旧固件/损坏/格式变更) 时直接拒绝,
+       避免越过 scan 缓冲区读 */
+    if (t == PARAM_TYPE_BLOB) {
+        param_blob_entry_t *be = (param_blob_entry_t *)e;
+        if (!be->cache.ptr || be->blob_size == 0) return PARAM_ERR_NOT_FOUND;
+        if (len != be->blob_size) return PARAM_ERR_OUT_OF_RANGE;
+
+        param_value_t value = { .ptr = (void *)data };
+        g_param_data_ops[t].cache_update(e, value);
+        return PARAM_OK;
+    }
+
+    /* ---- STRING: 长度可变, 按 len 限界拷贝并强制补 '\0' ----
+       记录不含 '\0' 时若直接 strncpy(max_len) 会越过 len 扫描,
+       因此在此按 len 显式定界 */
+    if (t == PARAM_TYPE_STRING) {
+        param_string_entry_t *se = (param_string_entry_t *)e;
+        if (!se->cache.ptr || se->max_len == 0) return PARAM_ERR_NOT_FOUND;
+        if (len > (uint16_t)(se->max_len + 1)) return PARAM_ERR_OUT_OF_RANGE;
+
+        uint16_t n = (len > se->max_len) ? se->max_len : len;
+        if (se->cache.ptr != data)
+            memcpy(se->cache.ptr, data, n);
+        ((char *)se->cache.ptr)[n] = '\0';
+        return PARAM_OK;
+    }
+
+    /* ---- 值类型: 按 len 限界, 剩余字节补 0 (兼容短记录) ---- */
+    param_value_t value;
+    memset(&value, 0, sizeof(value));
+    memcpy(&value, data, len < sizeof(value) ? len : sizeof(value));
+    g_param_data_ops[t].cache_update(e, value);
     return PARAM_OK;
 }
 
@@ -299,7 +339,9 @@ static int blob_reset(param_entry_t *e)
 {
     param_blob_entry_t *be = (param_blob_entry_t *)e;
     if (be->blob_size > 0 && be->default_val.ptr) {
-        /* src==dst 时跳过: 单缓冲配置下自拷贝属未定义行为且无法恢复默认 */
+        /* src==dst 时跳过: BLOB 为单缓冲配置 (cache 与 default 共享,
+           有意不提供双缓冲默认值 — 体积大、收益有限), 自拷贝属
+           未定义行为且无法恢复默认, 仅清 dirty 保持现状 */
         if (be->cache.ptr != be->default_val.ptr)
             memcpy(be->cache.ptr, be->default_val.ptr, be->blob_size);
     } else if (be->blob_size > 0) {

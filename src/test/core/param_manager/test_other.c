@@ -257,8 +257,8 @@ void test_blob_write_read(void) {
                         "BlobMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
     param_module_register(&test_blob_mod_module, entries, 1);
 
-    param_value_t v = { .ptr = data };
-    int ret = param_write(TID_APPLET_BLOB, v);
+    /* BLOB 必须走带长度的专用入口 (param_write 拒收 BLOB/STRING) */
+    int ret = param_write_blob(TID_APPLET_BLOB, data, sizeof(data));
     TEST_ASSERT_PARAM_OK(ret);
 
     TEST_ASSERT_EQUAL_UINT8(0xAB, g_blob_buf_other[0]);
@@ -314,8 +314,7 @@ void test_string_truncation(void) {
     PARAM_MODULE_DEFINE(trunc_mod, STR_TEST_MODULE, "TruncMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
     param_module_register(&trunc_mod_module, trunc_entries, 1);
 
-    param_value_t v = { .ptr = (void *)"HelloWorld" };
-    int ret = param_write(STR_TEST_ID, v);
+    int ret = param_write_string(STR_TEST_ID, "HelloWorld");
     TEST_ASSERT_PARAM_OK(ret);
     TEST_ASSERT_EQUAL_STRING("Hello", buf);
 }
@@ -326,8 +325,7 @@ void test_string_save_load(void) {
     strncpy(g_str_buf, "World", 31);
     g_str_buf[31] = '\0';
 
-    param_value_t wv = { .ptr = g_str_buf };
-    param_write(STR_TEST_ID, wv);
+    TEST_ASSERT_PARAM_OK(param_write_string(STR_TEST_ID, g_str_buf));
     param_save_one(STR_TEST_ID);
 
     param_deinit();
@@ -386,6 +384,147 @@ void test_string_macro_ptr_buffer_reset_no_ub(void) {
     TEST_ASSERT_EQUAL_STRING("newval", buf);
 }
 
+/* ================================================================
+ *  写路径硬化 (P1)
+ *    - union 入口 (param_write/_cache/_immediate) 拒收 BLOB/STRING
+ *    - BLOB 专用入口的长度 / NULL 校验
+ *    - write_raw 与 cache_restore 的 STRING 分支按 len 定界
+ * ================================================================ */
+#define HARDEN_MODULE 0xF7u
+#define HID_U32  MAKE_PARAM_ID(HARDEN_MODULE, 0)
+#define HID_BLOB MAKE_PARAM_ID(HARDEN_MODULE, 1)
+#define HID_STR  MAKE_PARAM_ID(HARDEN_MODULE, 2)
+
+DEF_TEST_UINT(hard_u32, HID_U32, PARAM_FLAG_PERSIST, 7, 0, 100);
+
+static uint8_t g_hard_blob_buf[16];
+static char    g_hard_str_buf[8];
+
+static param_blob_entry_t g_hard_blob = {
+    .base        = { HID_BLOB, &app_vtable },
+    .type        = PARAM_TYPE_BLOB,
+    .flags       = PARAM_FLAG_PERSIST,
+    .dirty       = 0,
+    .cache       = { .ptr = g_hard_blob_buf },
+    .default_val = { .ptr = g_hard_blob_buf },
+    .blob_size   = sizeof(g_hard_blob_buf),
+    PARAM_DEBUG_NAME_INIT(g_hard_blob)
+};
+
+static param_string_entry_t g_hard_str = {
+    .base        = { HID_STR, &app_vtable },
+    .type        = PARAM_TYPE_STRING,
+    .flags       = PARAM_FLAG_PERSIST,
+    .dirty       = 0,
+    .cache       = { .ptr = g_hard_str_buf },
+    .default_val = { .ptr = g_hard_str_buf },
+    .max_len     = sizeof(g_hard_str_buf) - 1,
+    PARAM_DEBUG_NAME_INIT(g_hard_str)
+};
+
+static param_entry_t *g_hard_entries[] = {
+    &hard_u32.base, &g_hard_blob.base, &g_hard_str.base
+};
+
+PARAM_MODULE_DEFINE(hard_mod, HARDEN_MODULE, "HardenMod",
+                    NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+
+static void register_harden(void)
+{
+    int ret = param_module_register(&hard_mod_module, g_hard_entries,
+                                    PARAM_COUNT(g_hard_entries));
+    if (ret != PARAM_ERR_ALREADY_REG)
+        TEST_ASSERT_PARAM_OK(ret);
+    test_reset_entry(&hard_u32.base);
+    test_reset_entry(&g_hard_blob.base);
+    test_reset_entry(&g_hard_str.base);
+}
+
+/* union 入口必须拒收 BLOB/STRING, 值类型不受影响 */
+void test_write_rejects_blob_and_string(void) {
+    register_harden();
+
+    param_value_t v = { .u32 = 0x11223344 };
+    TEST_ASSERT_PARAM_ERR(param_write(HID_BLOB, v), PARAM_ERR_TYPE_MISMATCH);
+    TEST_ASSERT_PARAM_ERR(param_write(HID_STR, v), PARAM_ERR_TYPE_MISMATCH);
+    TEST_ASSERT_PARAM_ERR(param_write_cache(HID_BLOB, v), PARAM_ERR_TYPE_MISMATCH);
+    TEST_ASSERT_PARAM_ERR(param_write_immediate(HID_STR, v), PARAM_ERR_TYPE_MISMATCH);
+
+    /* 类型化 helper 不再能把整数当指针解引用 */
+    TEST_ASSERT_PARAM_ERR(param_write_u32(HID_STR, 0x1234), PARAM_ERR_TYPE_MISMATCH);
+    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_STR, "x", 1), PARAM_ERR_TYPE_MISMATCH);
+    TEST_ASSERT_PARAM_ERR(param_write_string(HID_BLOB, "x"), PARAM_ERR_TYPE_MISMATCH);
+
+    /* 值类型路径不变 */
+    TEST_ASSERT_PARAM_OK(param_write_u32(HID_U32, 42));
+    param_value_t rv;
+    TEST_ASSERT_PARAM_OK(param_read(HID_U32, &rv));
+    TEST_ASSERT_EQUAL_UINT32(42, rv.u32);
+}
+
+/* param_write_blob: NULL / 长度 / 类型校验 */
+void test_write_blob_validates(void) {
+    register_harden();
+
+    uint8_t data[sizeof(g_hard_blob_buf)];
+    memset(data, 0x5A, sizeof(data));
+    memset(g_hard_blob_buf, 0, sizeof(g_hard_blob_buf));
+
+    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_BLOB, NULL, sizeof(data)), PARAM_ERR_INVALID_ID);
+    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_BLOB, data, sizeof(data) - 1), PARAM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_BLOB, data, sizeof(data) + 1), PARAM_ERR_OUT_OF_RANGE);
+
+    /* 被拒绝的写入不得改动缓存 */
+    TEST_ASSERT_EQUAL_UINT8(0, g_hard_blob_buf[0]);
+
+    TEST_ASSERT_PARAM_OK(param_write_blob(HID_BLOB, data, sizeof(data)));
+    TEST_ASSERT_EQUAL_UINT8(0x5A, g_hard_blob_buf[0]);
+    TEST_ASSERT_EQUAL_UINT8(0x5A, g_hard_blob_buf[sizeof(g_hard_blob_buf) - 1]);
+    TEST_ASSERT_DIRTY(&g_hard_blob.base, 1);
+}
+
+/* write_raw 的 STRING 分支按 len 定界 (不得越过 len 扫 '\0') */
+void test_write_raw_string_bounded_by_len(void) {
+    register_harden();
+
+    /* 4 个有效字符后紧跟非 '\0' 填充 — 旧实现 strncpy(max_len) 会把填充也拷进来 */
+    char src[12];
+    memset(src, 'X', sizeof(src));
+    memcpy(src, "abcd", 4);
+    src[sizeof(src) - 1] = '\0';
+
+    TEST_ASSERT_PARAM_OK(param_write_raw(HID_STR, (const uint8_t *)src, 4));
+    TEST_ASSERT_EQUAL_STRING("abcd", g_hard_str_buf);
+}
+
+/* param_cache_restore 按记录 len 校验/定界 */
+void test_cache_restore_checks_record_len(void) {
+    register_harden();
+
+    uint8_t good[sizeof(g_hard_blob_buf)];
+    memset(good, 0x33, sizeof(good));
+    TEST_ASSERT_PARAM_OK(param_write_blob(HID_BLOB, good, sizeof(good)));
+
+    /* BLOB: 短记录 → 拒绝, 缓存保持不变 (旧实现会按 blob_size 越界读) */
+    uint8_t short_rec[4];
+    memset(short_rec, 0x77, sizeof(short_rec));
+    TEST_ASSERT_PARAM_ERR(param_cache_restore(HID_BLOB, short_rec, sizeof(short_rec)),
+                          PARAM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_EQUAL_UINT8(0x33, g_hard_blob_buf[0]);
+    TEST_ASSERT_EQUAL_UINT8(0x33, g_hard_blob_buf[sizeof(g_hard_blob_buf) - 1]);
+
+    /* STRING: 无 '\0' 的短记录按 len 定界拷贝并补 '\0' */
+    TEST_ASSERT_PARAM_OK(param_cache_restore(HID_STR, (const uint8_t *)"xyz", 3));
+    TEST_ASSERT_EQUAL_STRING("xyz", g_hard_str_buf);
+
+    /* 值类型: 短记录补 0, 不引入未初始化读 */
+    uint8_t one = 9;
+    TEST_ASSERT_PARAM_OK(param_cache_restore(HID_U32, &one, sizeof(one)));
+    param_value_t rv;
+    TEST_ASSERT_PARAM_OK(param_read_cache(HID_U32, &rv));
+    TEST_ASSERT_EQUAL_UINT32(9, rv.u32);
+}
+
 void run_test_other(void)
 {
     RUN_TEST(test_set_range_narrows);
@@ -410,4 +549,8 @@ void run_test_other(void)
     RUN_TEST(test_string_truncation);
     RUN_TEST(test_string_save_load);
     RUN_TEST(test_string_macro_ptr_buffer_reset_no_ub);
+    RUN_TEST(test_write_rejects_blob_and_string);
+    RUN_TEST(test_write_blob_validates);
+    RUN_TEST(test_write_raw_string_bounded_by_len);
+    RUN_TEST(test_cache_restore_checks_record_len);
 }

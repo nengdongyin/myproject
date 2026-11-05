@@ -78,6 +78,10 @@ extern "C"
 /**
  * @brief 定义 BLOB 类型参数
  *
+ * @attention 缓存与默认值共享 _def_ptr 指向的单一缓冲区 (单缓冲配置):
+ *   写入后 reset 不会恢复初始默认内容 (自拷贝被跳过)。框架有意不提供
+ *   双缓冲默认值方案 — BLOB 通常体积较大, 双备份的存储收益有限。
+ *
  * @param _name    变量名
  * @param _id      参数 ID
  * @param _flags   属性标志
@@ -88,15 +92,18 @@ extern "C"
     PARAM_ENTRY_BLOB(&app_vtable, _name, _id, _flags, _def_ptr, _size)
 
 /**
- * @brief 定义 STRING 类型参数
+ * @brief 定义 STRING 类型参数 — 缓存指向调用方静态缓冲区
  *
- * 缓冲区大小应为 (max_len + 1)，以容纳结尾 '\\0'。
- * 写入时自动 strncpy 并截断超长字符串。
+ * @attention _def 必须为可写静态字符数组的地址 char[_max_len+1]
+ *   (由调用方初始化默认内容)。严禁传入字符串字面量: 字面量位于
+ *   .rodata, 首次写入将触发写保护故障。
+ *   缓存与默认值共享该缓冲 (单缓冲配置), 写入后 reset 无法恢复
+ *   初始默认内容 (自拷贝被跳过, 仅清 dirty)。
  *
  * @param _name    变量名
  * @param _id      参数 ID
  * @param _flags   属性标志
- * @param _def     默认字符串 (C 字面量)
+ * @param _def     可写静态字符缓冲区地址 (长 _max_len+1, 调用方初始化)
  * @param _max_len 最大字符数 (不含 '\\0')
  */
 #define PARAM_APP_STRING(_name, _id, _flags, _def, _max_len) \

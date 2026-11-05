@@ -672,8 +672,22 @@ static int param_entry_write_raw_to(param_entry_t *e, const uint8_t *data, uint1
         return write_fn(e, value);
     }
     if (t == PARAM_TYPE_STRING) {
-        /* STRING 无需检查 len (由 cache_update_string 自动截断) */
-        param_value_t value = { .ptr = (void *)data };
+        /* 按 len 定界落缓存: cache_update_string 是 strncpy(max_len) 语义,
+           调用者缓冲在 len 内没有 '\0' 时会被越过 len 继续扫描。
+           此处先按 len (且不超 max_len) 拷贝并补 '\0', 再以 "缓存自身"
+           作为源交给 write_fn —— cache_update_string 检测到 src==dst 会
+           跳过自拷贝, pre_write / apply / dirty / notify 语义不变。 */
+        param_string_entry_t *se = (param_string_entry_t *)e;
+        if (!se->cache.ptr || se->max_len == 0) return PARAM_ERR_NOT_FOUND;
+
+        uint16_t n = (len > se->max_len) ? se->max_len : len;
+        system_lock(SYS_LOCK_PARAM);
+        if (se->cache.ptr != (const void *)data)
+            memcpy(se->cache.ptr, data, n);
+        ((char *)se->cache.ptr)[n] = '\0';
+        system_unlock(SYS_LOCK_PARAM);
+
+        param_value_t value = { .ptr = (void *)se->cache.ptr };
         return write_fn(e, value);
     }
     /* 值类型 (UINT/INT/FLOAT/BOOL/ENUM) 处理 */
@@ -788,6 +802,14 @@ int param_write(uint32_t param_id, param_value_t value)
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
+    /* BLOB/STRING 的 payload 经 .ptr 传递, 而 param_value_t 无法携带长度,
+       本路径无法校验源的容量/有效性 (向 STRING 条目写 .u32 会被当成
+       指针解引用)。请使用带长度的专用入口:
+       param_write_blob / param_write_string / param_write_raw */
+    param_type_t t = entry_type(e);
+    if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
+        return PARAM_ERR_TYPE_MISMATCH;
+
     int ret = e->vtable->write(e, value);
     if (ret == PARAM_OK) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
@@ -812,6 +834,11 @@ int param_write_cache(uint32_t param_id, param_value_t value)
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
+    /* 同 param_write: BLOB/STRING 需带长度的专用入口 */
+    param_type_t t = entry_type(e);
+    if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
+        return PARAM_ERR_TYPE_MISMATCH;
+
     int ret = e->vtable->write_cache(e, value);
     if (ret == PARAM_OK) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
@@ -835,6 +862,11 @@ int param_write_immediate(uint32_t param_id, param_value_t value)
     param_entry_t *e = find_entry(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
+
+    /* 同 param_write: BLOB/STRING 需带长度的专用入口 */
+    param_type_t t = entry_type(e);
+    if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
+        return PARAM_ERR_TYPE_MISMATCH;
 
     int ret = e->vtable->write_immediate(e, value);
     if (ret == PARAM_OK) {
@@ -931,15 +963,34 @@ int param_update(uint32_t param_id)
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
 
-    /* 先取缓存快照 (param_read_cache 锁内), 再走 param_write 完整路径
+    /* 先取缓存快照 (param_read_cache 锁内), 再重放完整写入路径
        (pre_write → apply → cache_update → dirty → notify)。
-       注意: 快照与 write 之间非原子, 并发写者可能覆盖此值 */
+       注意: 快照与 write 之间非原子, 并发写者可能覆盖此值。
+       直接走 vtable 而非 param_write: 后者拒绝 BLOB/STRING, 而本
+       函数必须支持它们 (以缓存自身为源的重放, 不涉外部指针) */
     param_value_t cached;
     int ret = param_read_cache(param_id, &cached);
     if (ret != PARAM_OK)
         return ret;
 
-    return param_write(param_id, cached);
+    param_entry_t *e = find_entry(param_id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+
+    ret = e->vtable->write(e, cached);
+    if (ret != PARAM_OK)
+        return ret;
+
+    param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+    if (m && m->vtable && m->vtable->mark_dirty) {
+        system_lock(SYS_LOCK_PARAM);
+        m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
+        system_unlock(SYS_LOCK_PARAM);
+    }
+    if (g_pm.notify_cb)
+        g_pm.notify_cb(param_id, cached);
+
+    return PARAM_OK;
 }
 
 /**
@@ -1124,11 +1175,44 @@ int param_read_string(uint32_t id, char *buf, uint16_t buf_size)
 }
 
 /**
- * @brief STRING 类型写入，委托到 param_write
+ * @brief 带长度 typed 入口的公共尾巴 — 源已校验、缓存已就绪
  *
- * 先校验目标参数类型为 PARAM_TYPE_STRING (防止向非字符串参数
- * 写入指针值导致数据语义错误)，再构造 param_value_t 委托写入。
- * 底层 cache_update_string 自动截断并补 '\0'。
+ * 与 param_write 的差异: 不做 "union 无长度类型" 的拒绕 —— 调用者已用
+ * 专用签名给出长度并校验过源指针。value 传缓存自身指针, 因此
+ * cache_update_* 的 src==dst 分支会跳过自拷贝, 只保留
+ * pre_write / apply / dirty / notify 语义。
+ *
+ * @note apply/notify 收到的 BLOB/STRING 指针是**参数缓存自身**,
+ *       生命周期覆盖整个运行期 (优于原来传调用者的瞬态缓冲)。
+ */
+static int param_write_typed_tail(uint32_t param_id, param_entry_t *e)
+{
+    param_value_t value = { .ptr = entry_cache_ptr(e)->ptr };
+
+    int ret = e->vtable->write(e, value);
+    if (ret != PARAM_OK)
+        return ret;
+
+    param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
+    if (m && m->vtable && m->vtable->mark_dirty) {
+        system_lock(SYS_LOCK_PARAM);
+        m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
+        system_unlock(SYS_LOCK_PARAM);
+    }
+    if (g_pm.notify_cb)
+        g_pm.notify_cb(param_id, value);
+
+    return PARAM_OK;
+}
+
+/**
+ * @brief STRING 类型写入 (带长度语义的专用入口)
+ *
+ * 先校验目标参数类型为 PARAM_TYPE_STRING，再按"最多 max_len + 1 字节"
+ * 有界读取源串 (遇 '\0' 即停) 并截断到 max_len，随后以缓存自身为源
+ * 重放完整写入路径 (pre_write → apply → dirty → notify)。
+ *
+ * @note 不再经 param_write: 后者因无长度信息而拒收 BLOB/STRING。
  */
 int param_write_string(uint32_t id, const char *str)
 {
@@ -1143,8 +1227,63 @@ int param_write_string(uint32_t id, const char *str)
     if (entry_type(e) != PARAM_TYPE_STRING)
         return PARAM_ERR_TYPE_MISMATCH;
 
-    param_value_t value = { .ptr = (void *)str };
-    return param_write(id, value);
+    param_string_entry_t *se = (param_string_entry_t *)e;
+    if (!se->cache.ptr || se->max_len == 0)
+        return PARAM_ERR_NOT_FOUND;
+
+    /* 有界求长: memchr 只扫 max_len + 1 字节, 不依赖 strnlen (非 C17 标准) */
+    uint16_t n = se->max_len;
+    const char *nul = (const char *)memchr(str, '\0', (size_t)se->max_len + 1);
+    if (nul)
+        n = (uint16_t)(nul - str);
+
+    system_lock(SYS_LOCK_PARAM);
+    if (se->cache.ptr != (const void *)str)
+        memcpy(se->cache.ptr, str, n);
+    ((char *)se->cache.ptr)[n] = '\0';
+    system_unlock(SYS_LOCK_PARAM);
+
+    return param_write_typed_tail(id, e);
+}
+
+/**
+ * @brief BLOB 类型写入 (带长度的专用入口)
+ *
+ * BLOB 必须**整块**写: len 与条目 blob_size 不等时直接拒绝, 不做截断/补零
+ * (避免静默损坏)。写入成功后以缓存自身为源重放完整写入路径。
+ *
+ * @param id  参数 ID (类型必须为 PARAM_TYPE_BLOB)
+ * @param buf 源数据 (非 NULL)
+ * @param len 源长度 (必须等于 blob_size)
+ * @return PARAM_OK 成功; PARAM_ERR_INVALID_ID 源为 NULL;
+ *         PARAM_ERR_TYPE_MISMATCH 目标不是 BLOB;
+ *         PARAM_ERR_OUT_OF_RANGE 长度与 blob_size 不符
+ */
+int param_write_blob(uint32_t id, const void *buf, uint16_t len)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+    if (!buf)
+        return PARAM_ERR_INVALID_ID;
+
+    param_entry_t *e = param_entry_find(id);
+    if (!e)
+        return PARAM_ERR_INVALID_ID;
+    if (entry_type(e) != PARAM_TYPE_BLOB)
+        return PARAM_ERR_TYPE_MISMATCH;
+
+    param_blob_entry_t *be = (param_blob_entry_t *)e;
+    if (!be->cache.ptr || be->blob_size == 0)
+        return PARAM_ERR_NOT_FOUND;
+    if (len != be->blob_size)
+        return PARAM_ERR_OUT_OF_RANGE;
+
+    system_lock(SYS_LOCK_PARAM);
+    if (be->cache.ptr != buf)
+        memcpy(be->cache.ptr, buf, len);
+    system_unlock(SYS_LOCK_PARAM);
+
+    return param_write_typed_tail(id, e);
 }
 
 /**
@@ -1587,9 +1726,15 @@ int param_migrate_storage(const param_storage_drv_t *storage,
  *      将存储的值恢复到 entry->cache。仅收集第一个错误码。
  *      (即使某个 entry 加载失败，仍继续加载后续 entry)
  *   2. INIT 阶段: 按链表顺序遍历模块 (即 MODULE_INIT_ORDER)，
- *      对每个模块调用 vtable->init()。通常用于将恢复的缓存值下发到硬件。
+ *      对每个模块调用 vtable->init()。
  *
  * 两阶段分离的意义: 确保 init 回调中通过 param_read() 能读到正确的缓存值。
+ *
+ * 恢复后的生效契约 (全量重初始化模型): 恢复后不逐条 apply/write
+ * (批量加载无可用顺序, 逐条校验会产生假拒绝与 N 次副作用)。
+ * init 回调是批量校验/下发的唯一入口; 未实现 init 的模块其恢复值
+ * 仅回填缓存、不做校验。单参数路径 param_load_one 无 init 阶段,
+ * 以 write 回调作为重新校验入口 —— 两者契约互补。
  *
  * @note 存储后端不可用时跳过 LOAD 阶段, INIT 阶段仍执行
  *       (param_init 允许 storage=NULL 的系统依赖此路径完成模块初始化)。
@@ -1605,33 +1750,42 @@ int param_load_all(void)
     if (g_pm.storage && g_pm.storage->load) {
         system_lock(SYS_LOCK_PARAM);
 
-        /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存 */
-        if (g_pm.storage->load_all) {
-            int ret = g_pm.storage->load_all(g_pm.storage->ctx);
-            if (ret < 0 && first_err == PARAM_OK)
-                first_err = ret;
-        }
+        /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存。
+           返回值: 0 = 全部恢复; >0 = 扫描不完整 (如单条记录超出后端
+           扫描缓冲), 必须走兜底; <0 = 失败 */
+        int batch_ret = g_pm.storage->load_all
+                            ? g_pm.storage->load_all(g_pm.storage->ctx)
+                            : 0;
 
-        /* 第一阶段 (兜底): 逐条加载 — load_all 失败或未实现时回退 */
-        if (!g_pm.storage->load_all || first_err != PARAM_OK) {
+        /* 第一阶段 (兜底): 逐条加载 — 后端未实现批量 / 批量不完整 /
+           批量失败。逐条 load 按条目真实容量读取 (大 BLOB/STRING 也能
+           恢复), 它的结果权威: 成功即视为恢复成功 */
+        if (!g_pm.storage->load_all || batch_ret != 0) {
+            int entry_err = PARAM_OK;
             for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
                 param_entry_t *e = g_pm.hash[i];
                 if (!e)
                     continue;
                 int ret = e->vtable->load(e);
-                if (ret < 0 && first_err == PARAM_OK)
-                    first_err = ret;
+                if (ret < 0 && entry_err == PARAM_OK)
+                    entry_err = ret;
             }
+            first_err = entry_err;
         }
 
         system_unlock(SYS_LOCK_PARAM);
     }
 
-    /* 第二阶段: 按 MODULE_INIT_ORDER 顺序初始化每个模块 */
+    /* 第二阶段: 按 MODULE_INIT_ORDER 顺序初始化每个模块。
+       收集首个 init 失败错误码 (模块 initialized 标志保持 0,
+       可由 param_module_is_initialized 查询) */
     param_module_node_t *m = g_pm.module_head;
     while (m) {
-        if (m->vtable && m->vtable->init)
-            m->vtable->init(m);
+        if (m->vtable && m->vtable->init) {
+            int ret = m->vtable->init(m);
+            if (ret != PARAM_OK && first_err == PARAM_OK)
+                first_err = ret;
+        }
         m = m->next;
     }
 
@@ -1643,6 +1797,8 @@ int param_load_all(void)
  *
  * 加载后调用 vtable->write 使业务逻辑 (apply 回调) 对恢复的值
  * 重新校验，确保多分区切换后参数满足当前约束。
+ * (单参数路径无 init 阶段, write 即恢复后的重新校验入口 —
+ *  与 param_load_all 的批量生效契约互补, 见其文档)
  *
  * @note 此路径直接调用 vtable->write 而非 param_write，
  *       因此不触发 notify 回调。加载/分区切换属于批量恢复操作，

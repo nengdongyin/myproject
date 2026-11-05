@@ -470,7 +470,14 @@ extern "C"
         .default_val = {.b = (_def)},                    \
         PARAM_DEBUG_NAME_INIT(_name)}
 
-/** @brief BLOB 型核心宏 */
+/**
+ * @brief BLOB 型核心宏
+ *
+ * @attention cache 与 default_val 共享 _def_ptr 指向的同一缓冲区
+ *   (单缓冲配置): reset 不恢复默认内容 (自拷贝被跳过)。框架有意
+ *   不提供双缓冲默认值方案 — BLOB 通常体积较大, 双备份的存储
+ *   收益有限。
+ */
 #define PARAM_ENTRY_BLOB(_vtbl, _name, _id, _flags, _def_ptr, _size) \
     static param_blob_entry_t _name = {                              \
         .base = {(_id), (_vtbl)},                                    \
@@ -483,10 +490,12 @@ extern "C"
         PARAM_DEBUG_NAME_INIT(_name)}
 
 /**
- * @brief STRING 型核心宏 (缓存指向调用方静态缓冲区, 长 max_len+1)
+ * @brief STRING 型核心宏 (缓存指向调用方可写静态缓冲区, 长 max_len+1)
  *
- * @attention cache 与 default_val 共享同一指针: 单缓冲配置下 reset
- *   无法恢复默认 (自拷贝被跳过)。
+ * @attention cache 与 default_val 共享同一指针 (单缓冲配置):
+ *   - 调用方必须传入可写静态缓冲区, 严禁字符串字面量 (.rodata
+ *     写入触发写保护故障);
+ *   - reset 无法恢复默认 (自拷贝被跳过)。
  */
 #define PARAM_ENTRY_STRING(_vtbl, _name, _id, _flags, _def_ptr, _max_len) \
     static param_string_entry_t _name = {                                \
@@ -524,11 +533,14 @@ extern "C"
     typedef struct param_storage_drv
     {
         void *ctx; /**< 实例上下文 (传递给所有回调) */
-        /** 加载指定参数的数据。返回实际读取字节数，≤0 表示不存在。 */
+        /** 加载指定参数的数据。返回实际读取字节数; 0 或 -1 = 键不存在
+         *  (框架保持默认值, 不视为错误); < -1 = 读取失败 (错误码上抛)。 */
         int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len);
         /** 批量加载全部参数。NULL=走逐条 load；非 NULL=param_load_all 优先调用。
          *  后端应一次扫描完成所有数据恢复（如通过 param_cache_restore），
-         *  典型场景是追加写日志型存储（mkv）的 O(N²)→O(N) 优化。 */
+         *  典型场景是追加写日志型存储（mkv）的 O(N²)→O(N) 优化。
+         *  返回值约定: 0=全部已恢复；>0=扫描不完整 (如单条记录超出后端扫描
+         *  缓冲，大 BLOB/STRING)，param_load_all 会回退到逐条 load；<0=失败。 */
         int (*load_all)(void *ctx);
         /** 保存指定参数的数据。删除操作请用 delete 回调，不要用 len==0 隐式删除。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
@@ -669,6 +681,14 @@ extern "C"
 
     /**
      * @brief 写入参数 (缓存模式，不立即刷硬件)
+     *
+     * @note 仅适用于值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC)。
+     *   BLOB/STRING 的 payload 经 .ptr 传递, 而 param_value_t 无法携带长度,
+     *   本入口无法校验源的容量/有效性 (向 STRING 条目写 .u32 会被当成
+     *   指针解引用) → 返回 PARAM_ERR_TYPE_MISMATCH。
+     *   请改用带长度的专用入口: param_write_blob / param_write_string /
+     *   param_write_raw。
+     *
      * @param param_id 参数 ID
      * @param value    新值
      * @return PARAM_OK 成功，或错误码
@@ -685,6 +705,8 @@ extern "C"
      *   - App 参数: 跳过 apply，与 param_write 的区别在于不触发业务校验。
      *   - IP 参数:  与 param_write 行为完全相同 (IP 无 apply 回调)。
      *
+     * @note 同 param_write: 不接受 BLOB/STRING (无长度信息)。
+     *
      * @param param_id 参数 ID
      * @param value    新值
      * @return PARAM_OK 成功，或错误码
@@ -698,6 +720,8 @@ extern "C"
      *   - IP 参数: 通过 write 直通硬件，更新缓存，不产生 dirty。
      *   - App 参数: 执行 apply 校验回调，更新缓存并清除 dirty 标记。
      *     注意: App 参数不会写硬件，实际硬件写入由 param_flush() 触发。
+     *
+     * @note 同 param_write: 不接受 BLOB/STRING (无长度信息)。
      *
      * @param param_id 参数 ID
      * @param value    新值
@@ -816,6 +840,21 @@ extern "C"
     /** @brief STRING 类型写入, 超 max_len 自动截断 */
     int param_write_string(uint32_t id, const char *str);
 
+    /**
+     * @brief BLOB 类型写入 (带长度的专用入口)
+     *
+     * BLOB 必须整块写: len 与条目 blob_size 不等时直接拒绝 (不截断/不补零)。
+     * 写入后以缓存自身为源重放完整写入路径 (pre_write → apply → dirty → notify)。
+     *
+     * @param id  参数 ID (类型必须为 PARAM_TYPE_BLOB)
+     * @param buf 源数据 (非 NULL)
+     * @param len 源长度 (必须等于 blob_size)
+     * @return PARAM_OK 成功; PARAM_ERR_INVALID_ID 源为 NULL;
+     *         PARAM_ERR_TYPE_MISMATCH 目标非 BLOB;
+     *         PARAM_ERR_OUT_OF_RANGE 长度不符
+     */
+    int param_write_blob(uint32_t id, const void *buf, uint16_t len);
+
     /** @} */
 
     /* ================================================================
@@ -882,12 +921,24 @@ extern "C"
      * @brief 从持久化存储加载所有参数
      *
      * 两阶段执行:
-     *   - 第一阶段: 遍历哈希表加载所有 entry 的缓存值
-     *   - 第二阶段: 按 MODULE_INIT_ORDER 顺序调用各模块的 init 回调
+     *   - LOAD 阶段: 将存储的值恢复到全部条目的缓存 (仅回填缓存,
+     *     不做逐条校验/下发);
+     *   - INIT 阶段: 按 MODULE_INIT_ORDER 顺序调用各模块的 init 回调。
+     *
+     * @par 恢复后的生效契约 (全量重初始化模型)
+     * 恢复后**不**逐条 apply/write: 批量加载无可用顺序 (LOAD 阶段按
+     * 哈希槽序遍历), 逐条校验会因兄弟参数尚未恢复而产生假拒绝与
+     * N 次副作用。init 回调面对的是完整恢复后的缓存集合, 是批量
+     * 校验/下发 (App 侧 apply) 的唯一入口 —— 在回调中通过
+     * param_read() 即可读取全部已恢复值。
+     * 未实现 init 回调的模块, 其恢复值不做校验 (仅回填缓存)。
+     * 与 param_load_one 对照: 单参数加载无 init 阶段, 因此以 write
+     * 回调作为恢复后的重新校验入口。
+     *
      * @return PARAM_OK 成功，或第一个失败的错误码
      */
     int param_load_all(void);
-    /** @brief 从持久化存储加载单个参数 */
+    /** @brief 从持久化存储加载单个参数 (恢复后经 write 回调重新校验, 见 param_load_all 的生效契约) */
     int param_load_one(uint32_t param_id);
 
     /**
@@ -912,9 +963,13 @@ extern "C"
      * 两阶段执行: 先重置全部条目缓存与 dirty, 再按 MODULE_INIT_ORDER
      * 调用各模块 init。IP 模块的 init 会把其可写参数重新标脏
      * (默认值仍需下发硬件), 下一次 param_flush() 后收敛清零。
+     *
+     * @note BLOB/STRING 为单缓冲配置 (缓存与默认值共享缓冲, 有意
+     *   不提供双缓冲默认值), reset 不恢复其初始默认内容 (自拷贝
+     *   被跳过, 仅清 dirty 保持现状)。
      */
     int param_reset_all(void);
-    /** @brief 重置指定参数为默认值 */
+    /** @brief 重置指定参数为默认值 (BLOB/STRING 单缓冲, 不恢复初始内容, 语义同 param_reset_all) */
     int param_reset_one(uint32_t param_id);
 
     /* ================================================================

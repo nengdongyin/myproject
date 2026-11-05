@@ -395,7 +395,8 @@ int mkv_scan(mkv_t *kv, mkv_scan_cb cb, void *user)
     if (!kv || !kv->initialized || !cb) return -1;
 
     uint32_t off = MKV_SEC_HDR_SIZE;
-    uint8_t buf[128];  /* 栈缓冲区: value >128B 时需多次读取 */
+    uint8_t buf[128];          /* 栈缓冲区: 单条 value 超过此尺寸时本轮不回调 */
+    int incomplete = 0;        /* 存在超大记录 → 返回 >0, 由调用方回退逐条读 */
 
     while (off + MKV_REC_OVERHEAD <= kv->sector_size)
     {
@@ -410,17 +411,21 @@ int mkv_scan(mkv_t *kv, mkv_scan_cb cb, void *user)
         if (vlen == MKV_TOMBSTONE) {
             cb(rid, NULL, 0, user);
         } else if (vlen > 0) {
-            /* 分块读取 value 并直接传给回调 — 不做缓存聚合 */
             if (vlen <= sizeof(buf)) {
                 fal_partition_read(kv->part,
                                    kv->active_base + off + MKV_REC_HEAD_SIZE,
                                    buf, vlen);
                 cb(rid, buf, vlen, user);
+            } else {
+                /* 单条 value 大于扫描缓冲, 无法向回调提供完整数据。
+                   旧实现静默跳过, 导致大 BLOB/STRING "能存不能恢复";
+                   此处置标志, 末尾返回 >0 让调用方改走逐条读 */
+                incomplete = 1;
             }
         }
         off += rec_total(vlen);
     }
-    return 0;
+    return incomplete ? 1 : 0;
 }
 
 int mkv_get(mkv_t *kv, uint32_t id, uint8_t *buf, uint16_t max_len)

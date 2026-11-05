@@ -147,8 +147,7 @@ void test_reset_blob(void) {
 
     uint8_t new_data[TEST_BLOB_SIZE];
     memset(new_data, 0xCC, TEST_BLOB_SIZE);
-    param_value_t v = { .ptr = new_data };
-    param_write(TID_APPLET_BLOB, v);
+    TEST_ASSERT_PARAM_OK(param_write_blob(TID_APPLET_BLOB, new_data, sizeof(new_data)));
 
     TEST_ASSERT_PARAM_OK(param_reset_one(TID_APPLET_BLOB));
 }
