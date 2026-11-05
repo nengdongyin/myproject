@@ -21,6 +21,13 @@ static void register_all(void)
     test_reset_entry(&ou32.base); test_reset_entry(&oi32.base);
     test_reset_entry(&oboo.base);
     test_reset_entry(&oipu.base); test_reset_entry(&oipf.base);
+
+    /* param_set_range 会永久改写静态条目的 min/max/has_range (test_reset_entry
+       只恢复 cache 与 dirty), 这里复位——否则用例结果隐性依赖执行顺序
+       (实测: test_set_range_narrows 把 ou32 收窄到 [50,150] 后再也不会恢复) */
+    ou32.min.u32 = 0;
+    ou32.max.u32 = 200;
+    ou32.has_range = 1;
 }
 
 /* ================================================================
@@ -182,12 +189,72 @@ void test_write_immediate_ip_fails_keeps_cache(void) {
     test_ip_instance.write = mock_ip_write_ok;
 }
 
+/* IP 侧同样: write 是可选钩子, 缺失时"立即"仅到缓存层, 不报错。
+   (旧断言期望 PARAM_ERR_NOT_FOUND —— 那是"只有这一个入口报错"的遗留行为) */
 void test_write_immediate_ip_no_write_cb(void) {
     test_ip_instance.write = NULL;
     register_all();
 
     param_value_t v = { .u32 = 1 };
-    TEST_ASSERT_PARAM_ERR(param_write_immediate(TID_IP_UINT, v), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_IP_UINT, v));
+
+    param_value_t cached;
+    param_read_cache(TID_IP_UINT, &cached);
+    TEST_ASSERT_EQUAL_UINT32(1, cached.u32);
+    TEST_ASSERT_DIRTY(&oipu.base, 0);
+
+    test_ip_instance.write = mock_ip_write_ok; /* 恢复, 不泄漏给后续用例 */
+}
+
+/* App 侧: write 只是可选的校验钩子, 缺失时必须退化为"仅写缓存 + 清 dirty" */
+void test_write_immediate_applet_no_write_cb(void) {
+    param_write_fn saved = test_applet_module.write;
+    test_applet_module.write = NULL;
+    register_all();
+
+    param_value_t v = { .u32 = 42 };
+    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_APPLET_UINT, v)); /* 修复前: NOT_FOUND */
+
+    param_value_t cached;
+    param_read_cache(TID_APPLET_UINT, &cached);
+    TEST_ASSERT_EQUAL_UINT32(42, cached.u32);
+    TEST_ASSERT_DIRTY(&ou32.base, 0); /* 立即写: 已落缓存且清 dirty */
+
+    test_applet_module.write = saved;
+}
+
+/* ================================================================
+ *  notify 回调必须携带"缓存生效值"而非调用者的原始入参
+ * ================================================================ */
+static int g_notify_count;
+static uint32_t g_notify_last_id;
+static param_value_t g_notify_last_value;
+
+static void test_notify_cb(uint32_t param_id, param_value_t new_value)
+{
+    g_notify_count++;
+    g_notify_last_id = param_id;
+    g_notify_last_value = new_value;
+}
+
+void test_notify_reports_clamped_value(void) {
+    param_deinit();
+    param_init(&g_mock_storage, test_notify_cb);
+    register_all();
+
+    g_notify_count = 0;
+    /* ou32 范围为 [0,200]: 写 250 时 pre_write 裁剪为 200,
+       notify 必须报告真正写入缓存的值 */
+    param_value_t v = { .u32 = 250 };
+    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
+
+    TEST_ASSERT_EQUAL_INT(1, g_notify_count);
+    TEST_ASSERT_EQUAL_UINT32(TID_APPLET_UINT, g_notify_last_id);
+    TEST_ASSERT_EQUAL_UINT32(200, g_notify_last_value.u32); /* 修复前: 250 */
+
+    param_value_t cached;
+    param_read_cache(TID_APPLET_UINT, &cached);
+    TEST_ASSERT_EQUAL_UINT32(200, cached.u32);
 }
 
 /* ================================================================
@@ -539,6 +606,8 @@ void run_test_other(void)
     RUN_TEST(test_write_immediate_ip_cb_sees_new_cache);
     RUN_TEST(test_write_immediate_ip_fails_keeps_cache);
     RUN_TEST(test_write_immediate_ip_no_write_cb);
+    RUN_TEST(test_write_immediate_applet_no_write_cb);
+    RUN_TEST(test_notify_reports_clamped_value);
     RUN_TEST(test_write_raw_uint);
     RUN_TEST(test_write_raw_too_long);
     RUN_TEST(test_write_raw_null_data);

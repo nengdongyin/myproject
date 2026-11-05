@@ -154,6 +154,84 @@ void test_load_all_partial_flash(void) {
 }
 
 /* ================================================================
+ *  短记录恢复 — 后端只写实际读到的字节 (模拟真实 Flash, 不主动补零)
+ *
+ *  mock_storage_load 会替调用方把剩余字节清零, 盖上适配层的补零逻辑;
+ *  因此这里换一个"不补零"的 load 实现, 让 value_type_load / blob_load
+ *  的尾部处理真正被覆盖到。
+ * ================================================================ */
+static param_storage_drv_t g_nozero_drv;
+
+static int nozero_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len,
+                       uint16_t *read_len)
+{
+    (void)ctx;
+    for (uint16_t i = 0; i < g_mock_kv_count; i++) {
+        if (g_mock_kv[i].id != id)
+            continue;
+        uint16_t n = (len < g_mock_kv[i].len) ? len : g_mock_kv[i].len;
+        memcpy(data, g_mock_kv[i].data, n); /* 刻意不补零 */
+        if (read_len) *read_len = n;
+        return PARAM_OK;
+    }
+    return PARAM_ERR_NOT_FOUND;
+}
+
+/** @brief 临时把存储后端换成"不补零"版本 (save/erase 等复用 g_mock_storage) */
+static void use_nozero_storage(void)
+{
+    g_nozero_drv = g_mock_storage;
+    g_nozero_drv.load = nozero_load;
+    param_set_storage(&g_nozero_drv);
+}
+
+void test_load_blob_short_record_zeros_tail(void) {
+    register_all();
+
+    /* 缓存先填 0x55, 用于区分"补零"与"残留旧值" */
+    uint8_t old[TEST_BLOB_SIZE];
+    memset(old, 0x55, sizeof(old));
+    TEST_ASSERT_PARAM_OK(param_write_blob(TID_APPLET_BLOB, old, sizeof(old)));
+
+    /* 存储里只有前 16 字节 (短记录: 旧固件 / 数据损坏 / 格式变更) */
+    uint8_t short_rec[16];
+    memset(short_rec, 0xAA, sizeof(short_rec));
+    mock_storage_preset(TID_APPLET_BLOB, short_rec, sizeof(short_rec));
+
+    use_nozero_storage();
+    TEST_ASSERT_PARAM_OK(param_load_one(TID_APPLET_BLOB));
+
+    uint8_t out[TEST_BLOB_SIZE];
+    uint16_t out_len = sizeof(out);
+    TEST_ASSERT_PARAM_OK(param_read_raw(TID_APPLET_BLOB, out, &out_len));
+
+    /* 前 16 字节 = 记录内容, 其余必须补零 (修复前: 残留 0x55) */
+    uint8_t expect[TEST_BLOB_SIZE];
+    memset(expect, 0x00, sizeof(expect));
+    memset(expect, 0xAA, 16);
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(expect, out, TEST_BLOB_SIZE);
+
+    param_set_storage(&g_mock_storage);
+}
+
+void test_load_uint_short_record_zero_padded(void) {
+    register_all();
+
+    /* 旧固件按 2 字节写入, 本构建 param_value_t 更宽: 高位必须为 0 */
+    uint16_t short_rec = 7;
+    mock_storage_preset(TID_APPLET_UINT, (const uint8_t *)&short_rec, sizeof(short_rec));
+
+    use_nozero_storage();
+    TEST_ASSERT_PARAM_OK(param_load_one(TID_APPLET_UINT));
+
+    param_value_t v;
+    param_read_cache(TID_APPLET_UINT, &v);
+    TEST_ASSERT_EQUAL_UINT32(7, v.u32); /* 高位若为残留垃圾则不等于 7 */
+
+    param_set_storage(&g_mock_storage);
+}
+
+/* ================================================================
  *  Save 测试
  * ================================================================ */
 void test_save_one_writes_storage(void) {
@@ -256,6 +334,8 @@ void run_test_load_save(void)
     RUN_TEST(test_load_storage_fails);
     RUN_TEST(test_load_all_multiple);
     RUN_TEST(test_load_all_partial_flash);
+    RUN_TEST(test_load_blob_short_record_zeros_tail);
+    RUN_TEST(test_load_uint_short_record_zero_padded);
     RUN_TEST(test_save_one_writes_storage);
     RUN_TEST(test_save_all_skips_non_persist);
     RUN_TEST(test_save_float);

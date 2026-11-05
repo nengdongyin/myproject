@@ -88,21 +88,24 @@ __attribute__((unused)) static int mock_storage_init(void *ctx)
     return g_mock_init_ret;
 }
 
-__attribute__((unused)) static int mock_storage_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len)
+__attribute__((unused)) static int mock_storage_load(void *ctx, uint32_t id, uint8_t *data,
+                                                    uint16_t len, uint16_t *read_len)
 {
     (void)ctx;
     if (g_mock_load_ret != 0)
-        return g_mock_load_ret;
+        return g_mock_load_ret; /* 测试注入的 PARAM_ERR_xxx 原样上抛 */
 
     mock_kv_t *kv = mock_storage_find(id);
     if (!kv)
-        return -1;
+        return PARAM_ERR_NOT_FOUND;
 
     uint16_t copy_len = (len < kv->len) ? len : kv->len;
     memcpy(data, kv->data, copy_len);
     if (copy_len < len)
         memset(data + copy_len, 0, len - copy_len);
-    return copy_len;
+    if (read_len)
+        *read_len = copy_len;
+    return PARAM_OK;
 }
 
 static int mock_storage_save(void *ctx, uint32_t id, const uint8_t *data, uint16_t len)
@@ -183,17 +186,20 @@ __attribute__((unused)) static int mock_storage2_init(void *ctx)
     return 0;
 }
 
-static int mock_storage2_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len)
+static int mock_storage2_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len,
+                              uint16_t *read_len)
 {
     (void)ctx;
     mock_kv_t *kv = mock_storage2_find(id);
     if (!kv)
-        return -1;
+        return PARAM_ERR_NOT_FOUND;
     uint16_t copy_len = (len < kv->len) ? len : kv->len;
     memcpy(data, kv->data, copy_len);
     if (copy_len < len)
         memset(data + copy_len, 0, len - copy_len);
-    return copy_len;
+    if (read_len)
+        *read_len = copy_len;
+    return PARAM_OK;
 }
 
 static int mock_storage2_save(void *ctx, uint32_t id, const uint8_t *data, uint16_t len)

@@ -22,6 +22,10 @@ extern "C"
     typedef void (*param_data_cache_update_fn)(param_entry_t *e, param_value_t value);
     typedef int (*param_data_read_fn)(param_entry_t *e, param_value_t *value);
     typedef int (*param_data_save_fn)(param_entry_t *e);
+    /** @brief 加载: 返回 param_status_t (PARAM_OK = 已恢复或无数据; 负值 = 错误)
+     *  @note 后端 param_storage_drv_t::load 也是状态码 + read_len 出参;
+     *        适配层 (value_type_load / blob_load / string_load) 负责把
+     *        "键不存在" 归为 PARAM_OK 并消费 read_len (短记录补零)。 */
     typedef int (*param_data_load_fn)(param_entry_t *e);
     typedef int (*param_data_reset_fn)(param_entry_t *e);
 

@@ -38,8 +38,9 @@ static int ip_param_load(param_entry_t *e)
 {
     int ret = param_entry_load(e);
 
-    /* IP 参数恢复后必须下发硬件: 标脏条目 + 标脏模块 */
-    if (ret >= 0 && param_entry_is_writable(e)) {
+    /* IP 参数恢复后必须下发硬件: 标脏条目 + 标脏模块
+       (load 统一返回 param_status_t: PARAM_OK = 已恢复或无存储数据) */
+    if (ret == PARAM_OK && param_entry_is_writable(e)) {
         param_entry_mark_dirty(e);
         param_module_node_t *m = param_module_find((uint16_t)PARAM_MODULE_ID(e->param_id));
         if (m && m->vtable && m->vtable->mark_dirty)
@@ -221,6 +222,8 @@ const param_vtable_t ip_vtable = {
     /* IP 参数无 apply 回调，write 和 write_cache 均仅更新缓存+标记 dirty;
        实际硬件写入由 param_flush → ip_module_flush 批量触发，因此二者等价。 */
     .write_cache      = param_entry_write,
+    /* write_immediate 与 App 共用同一实现: write 是可选钩子 (可 NULL),
+       缺失时"立即"只到缓存层, 值由 flush 的批量回调或 exec 命令下发 */
     .write_immediate  = param_entry_write_immediate,
     .write_raw        = param_entry_write_raw,
     .flush            = ip_flush_one,

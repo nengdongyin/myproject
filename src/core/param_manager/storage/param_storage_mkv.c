@@ -37,11 +37,25 @@ static const char *const g_partition_names[PARAM_PARTITION_COUNT] = {
 
 /* ═══════════════════════════════════════ 存储回调 ═══════════════ */
 
-static int mkv_storage_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len)
+static int mkv_storage_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len,
+                            uint16_t *read_len)
 {
     mkv_storage_ctx_t *c = (mkv_storage_ctx_t *)ctx;
-    if (!c || !c->used || !data || len == 0) return -1;
-    return mkv_get(&c->kv, id, data, len);
+    if (!c || !c->used || !data || len == 0) return PARAM_ERR_INVALID_ID;
+
+    int got = mkv_get(&c->kv, id, data, len);
+    if (got > 0)
+    {
+        if (read_len) *read_len = (uint16_t)got;
+        return PARAM_OK;
+    }
+    /* 0 = 记录不存在或墓碑: 框架保持默认值, 非错误 */
+    if (got == 0) return PARAM_ERR_NOT_FOUND;
+
+    /* mkv_get 的 -1 = 内部/参数错误。
+       注: mkv_get 内部已按 max_len 截断, 取不到记录原始长度,
+       故本后端无法上报 PARAM_ERR_OUT_OF_RANGE (见 drv 契约注释)。 */
+    return PARAM_ERR_FLASH_FAIL;
 }
 
 static void mkv_scan_restore_cb(uint32_t id, const uint8_t *data, uint16_t len, void *user)

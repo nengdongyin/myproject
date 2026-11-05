@@ -216,6 +216,18 @@ static int string_save(param_entry_t *e)
 
 /* ================================================================
  *  load 函数
+ *
+ *  分层约定:
+ *   - param_storage_drv_t::load (后端层, 返回 param_status_t +
+ *     read_len 出参): PARAM_OK = 记录已拷入; PARAM_ERR_NOT_FOUND =
+ *     键不存在 (框架保持默认值, 非错误); 其他负值 = 读失败/数据损坏。
+ *   - param_data_ops_t::load (本文件, 适配层): 把上述结果翻译成
+ *     缓存可见的最终状态 —— 仅"记录存在"时提交缓存,
+ *     "不存在"归为 PARAM_OK (缓存不动), 错误码原样上抛。
+ *   - param_vtable_t 的 8 个槽位一律只返回 param_status_t。
+ *
+ *  read_len 只在适配层内部使用 (短记录补零需要知道"到底写满了多少"),
+ *  不向 param_vtable_t::load 的调用者传播。
  * ================================================================ */
 
 static int value_type_load(param_entry_t *e)
@@ -230,13 +242,12 @@ static int value_type_load(param_entry_t *e)
     param_value_t stored;
     memset(&stored, 0, sizeof(stored));
 
-    int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)&stored, sizeof(stored));
-    /* 0 / -1 = 键不存在: 保持默认值, 非错误; < -1 = 读取失败, 上抛 */
-    if (ret == 0 || ret == -1) return PARAM_OK;
-    if (ret < 0) return ret;
-    if (ret > (int)sizeof(stored)) return PARAM_ERR_OUT_OF_RANGE;
+    int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)&stored,
+                            (uint16_t)sizeof(stored), NULL);
+    if (ret == PARAM_ERR_NOT_FOUND) return PARAM_OK; /* 键不存在: 保持默认值 */
+    if (ret != PARAM_OK) return ret;                 /* 读失败/损坏: 上抛 */
     *entry_cache_ptr(e) = stored;
-    return ret;
+    return PARAM_OK;
 }
 
 static int blob_load(param_entry_t *e)
@@ -249,12 +260,11 @@ static int blob_load(param_entry_t *e)
     param_blob_entry_t *be = (param_blob_entry_t *)e;
     if (!be->cache.ptr || be->blob_size == 0) return PARAM_OK;
 
-    int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)be->cache.ptr, be->blob_size);
-    /* 0 / -1 = 键不存在: 驱动未写入任何字节, 缓存保持默认值; < -1 = 读取失败, 上抛 */
-    if (ret == 0 || ret == -1) return PARAM_OK;
-    if (ret < 0) return ret;
-    /* 驱动只被允许写入 blob_size 字节, 报告更长说明后端违约或数据异常 */
-    if (ret > (int)be->blob_size) return PARAM_ERR_OUT_OF_RANGE;
+    uint16_t got = 0;
+    int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)be->cache.ptr,
+                            be->blob_size, &got);
+    if (ret == PARAM_ERR_NOT_FOUND) return PARAM_OK; /* 键不存在: 缓存保持默认值 */
+    if (ret != PARAM_OK) return ret;                 /* 读失败/记录超长: 上抛 */
 
     /* 短记录 (旧固件 / 数据损坏 / 格式变更) → 显式清零未覆盖的尾部。
        缓存是就地填充的, 且 BLOB 为单缓冲配置 (cache 与 default_val 共享
@@ -265,9 +275,13 @@ static int blob_load(param_entry_t *e)
        注: param_cache_restore 对短 BLOB 记录直接拒绝 —— 那里的源是共享的
        scan 缓冲区, 越过 len 读会越界; 此处目标缓冲区由本条目独占,
        零补齐是安全且确定的。 */
-    if (ret < (int)be->blob_size)
-        memset((uint8_t *)be->cache.ptr + ret, 0,
-               (size_t)be->blob_size - (size_t)ret);
+    /* 为何不"读取前整块 memset": BLOB 为单缓冲配置, cache 与 default_val
+       是同一块内存, 键不存在 (PARAM_ERR_NOT_FOUND) 时预清零会连出厂默认值
+       一起抹掉。value_type_load 能"先清零再回填", 是因为它清的是栈上
+       临时变量而非缓存。 */
+    if (got < be->blob_size)
+        memset((uint8_t *)be->cache.ptr + got, 0,
+               (size_t)be->blob_size - (size_t)got);
 
     return PARAM_OK;
 }
@@ -283,21 +297,20 @@ static int string_load(param_entry_t *e)
     if (!se->cache.ptr || se->max_len == 0) return PARAM_OK;
 
     uint16_t cap = (uint16_t)(se->max_len + 1); /* 缓冲容量 (含结尾 '\0') */
-    int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)se->cache.ptr, cap);
-    /* 0 / -1 = 键不存在: 驱动未写入任何字节, 缓存保持默认值; < -1 = 读取失败, 上抛 */
-    if (ret == 0 || ret == -1) return PARAM_OK;
-    if (ret < 0) return ret;
-    /* 驱动只被允许写入 cap 字节, 报告更长说明后端违约或数据异常 */
-    if (ret > (int)cap) return PARAM_ERR_OUT_OF_RANGE;
+    uint16_t got = 0;
+    int ret = storage->load(storage->ctx, e->param_id, (uint8_t *)se->cache.ptr,
+                            cap, &got);
+    if (ret == PARAM_ERR_NOT_FOUND) return PARAM_OK; /* 键不存在: 缓存保持默认值 */
+    if (ret != PARAM_OK) return ret;                 /* 读失败/记录超长: 上抛 */
 
-    /* 记录长度 n = min(记录字节数, max_len):
+    /* 记录长度 n = min(read_len, max_len):
        - 记录不含 '\0' 时 (损坏/旧格式), 在 n 处强制截断;
        - 记录短于缓冲区时, 从 n 到缓冲末尾 [n, max_len] 全部清零。
        这两步同时解决两个真实泄漏: param_read_raw 拷贝 max_len+1 字节、
        string_save 持久化 max_len+1 字节 —— 尾部残留字节否则会被当作
        有效字符读出去、并写进 Flash。语义同 value_type_load/blob_load
        (短记录按零补齐)。 */
-    uint16_t n = (ret > (int)se->max_len) ? se->max_len : (uint16_t)ret;
+    uint16_t n = (got > se->max_len) ? se->max_len : got;
     /* 同 blob_load: STRING 亦为单缓冲, 不能读取前预清零 (会抹掉默认字符串) */
     memset((char *)se->cache.ptr + n, 0, (size_t)cap - (size_t)n);
 

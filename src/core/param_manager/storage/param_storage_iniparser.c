@@ -29,8 +29,8 @@
  *  PARAM_INIPARSER_ENABLE=0: 空操作 stub
  * ================================================================ */
 
-static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l)
-{ (void)ctx; (void)id; (void)d; (void)l; return -1; }
+static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l, uint16_t *rl)
+{ (void)ctx; (void)id; (void)d; (void)l; (void)rl; return PARAM_ERR_NOT_FOUND; }
 static int stub_save(void *ctx, uint32_t id, const uint8_t *d, uint16_t l)
 { (void)ctx; (void)id; (void)d; (void)l; return -1; }
 static int stub_erase_all(void *ctx) { (void)ctx; return 0; }
@@ -170,23 +170,27 @@ static void hex_encode(const uint8_t *data, uint16_t len, char *out)
  * @param hex     hex 字符串 (偶数长度)
  * @param data    输出缓冲区
  * @param max_len 输出缓冲区容量
- * @return 解码的字节数 (>0), -1 格式错误
+ * @param out_len [out] 解码字节数 (可 NULL)
+ * @return PARAM_OK 成功; PARAM_ERR_OUT_OF_RANGE 存储值损坏 (奇数长度 /
+ *         非 hex 字符) 或长度超出 max_len; PARAM_ERR_INVALID_ID hex 为 NULL
  */
-static int hex_decode(const char *hex, uint8_t *data, uint16_t max_len)
+static int hex_decode(const char *hex, uint8_t *data, uint16_t max_len, uint16_t *out_len)
 {
-    if (!hex) return -1;
-    uint16_t hex_len = (uint16_t)strlen(hex);
-    if (hex_len % 2 != 0) return -1;
-    uint16_t byte_len = hex_len / 2;
+    if (!hex) return PARAM_ERR_INVALID_ID;
+    size_t hex_len = strlen(hex);
+    if (hex_len % 2 != 0) return PARAM_ERR_OUT_OF_RANGE;
     /* 拒绝截断: 存储值超过缓冲区容量视为数据损坏 */
-    if (byte_len > max_len) return -1;
+    if (hex_len / 2 > (size_t)max_len) return PARAM_ERR_OUT_OF_RANGE;
+
+    uint16_t byte_len = (uint16_t)(hex_len / 2);
     for (uint16_t i = 0; i < byte_len; i++) {
         int hi = hex_nibble(hex[i * 2]);
         int lo = hex_nibble(hex[i * 2 + 1]);
-        if (hi < 0 || lo < 0) return -1;
+        if (hi < 0 || lo < 0) return PARAM_ERR_OUT_OF_RANGE;
         data[i] = (uint8_t)((hi << 4) | lo);
     }
-    return (int)byte_len;
+    if (out_len) *out_len = byte_len;
+    return PARAM_OK;
 }
 
 /* ================================================================
@@ -333,22 +337,24 @@ static bool dict_is_empty(iniparser_ctx_t *c)
 /**
  * @brief 加载: 从字典中读取 hex 值并解码为字节数组
  *
- * @return 实际读取字节数 (>0), -1 键不存在或解码失败
+ * @return PARAM_OK 成功; PARAM_ERR_NOT_FOUND 键不存在;
+ *         PARAM_ERR_OUT_OF_RANGE 存储值损坏/超出条目容量; PARAM_ERR_INVALID_ID 参数非法
  */
 static int iniparser_load_cb(void *ctx, uint32_t param_id,
-                              uint8_t *data, uint16_t len)
+                              uint8_t *data, uint16_t len, uint16_t *read_len)
 {
     iniparser_ctx_t *c = (iniparser_ctx_t *)ctx;
     if (!c || !c->dict_ready || !c->dict || !data || len == 0)
-        return -1;
+        return PARAM_ERR_INVALID_ID;
 
     char key[INI_KEY_MAX];
     make_key(param_id, key, sizeof(key));
 
     const char *hex = iniparser_getstring(c->dict, key, NULL);
-    if (!hex || hex[0] == '\0') return -1;
+    if (!hex || hex[0] == '\0') return PARAM_ERR_NOT_FOUND;
 
-    return hex_decode(hex, data, len);
+    /* 损坏/超长记录上报错误码, 不再冒充"键不存在" */
+    return hex_decode(hex, data, len, read_len);
 }
 
 /**

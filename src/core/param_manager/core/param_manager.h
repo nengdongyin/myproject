@@ -265,12 +265,12 @@ extern "C"
          *   - App 参数: 跳过 apply 回调，仅更新缓存 + 标记 dirty
          *   - IP 参数:  与 write 行为相同 (IP 无 apply 回调) */
         int (*write_cache)(param_entry_t *e, param_value_t value);
-        /** 立即写入参数 — 行为随参数所属模块类型分派:
-         *   - IP 参数: 通过 write 回调直通硬件，更新缓存，不产生 dirty。
-         *              硬件寄存器在函数返回时已更新。
-         *   - App 参数: 执行 apply 校验 + 更新缓存 + 清除 dirty，
-         *              不写硬件。App 模块没有硬件，"立即"仅到缓存层，
-         *              硬件生效仍需 param_flush() 触发模块 flush。 */
+        /** 立即写入参数 — "立即" = 写到本模块可及的最深层:
+         *   - IP 且注册了 write 回调: 直通硬件 (返回时寄存器已更新), 不产生 dirty;
+         *   - App, 或 IP 未注册 write 回调: 更新缓存 + 清除 dirty,
+         *     "立即"仅到缓存层, 硬件生效仍需 param_flush() 触发模块 flush。
+         *   write 是**可选钩子** (App 与 IP 一视同仁), 缺失不报错 —— 与
+         *   param_write / param_write_apply 及 IP flush 路径的既有语义一致。 */
         int (*write_immediate)(param_entry_t *e, param_value_t value);
         /** 原始字节流写入 */
         int (*write_raw)(param_entry_t *e, const uint8_t *data, uint16_t len);
@@ -278,7 +278,10 @@ extern "C"
         int (*flush)(param_entry_t *e);
         /** 将参数持久化到 Flash */
         int (*save)(param_entry_t *e);
-        /** 从 Flash 恢复参数 */
+        /** 从 Flash 恢复参数
+         *  返回 param_status_t (PARAM_OK = 已恢复或存储中无该键;
+         *  负值 = 错误), 与其余槽位保持一致 —— 不返回字节数,
+         *  "读了多少字节"是存储后端层 (param_storage_drv_t::load) 的契约。 */
         int (*load)(param_entry_t *e);
         /** 重置参数为默认值 */
         int (*reset)(param_entry_t *e);
@@ -541,9 +544,27 @@ extern "C"
     typedef struct param_storage_drv
     {
         void *ctx; /**< 实例上下文 (传递给所有回调) */
-        /** 加载指定参数的数据。返回实际读取字节数; 0 或 -1 = 键不存在
-         *  (框架保持默认值, 不视为错误); < -1 = 读取失败 (错误码上抛)。 */
-        int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len);
+        /** 加载指定参数的数据。
+         *
+         *  @param ctx      实例上下文
+         *  @param param_id 参数 ID
+         *  @param data     目标缓冲区 (非 NULL)
+         *  @param len      目标缓冲区容量 (>= 1)
+         *  @param read_len [out] 实际写入 data 的字节数 (<= len), 可传 NULL。
+         *                  短记录 (read_len < len) 由调用方按需补零。
+         *  @return PARAM_OK               记录存在, 已拷入 data
+         *          PARAM_ERR_NOT_FOUND    键不存在/已删除 → 框架保持默认值 (非错误)
+         *          PARAM_ERR_OUT_OF_RANGE 存储记录长度超出 len (格式变更/数据损坏)
+         *          其他负值               读取失败, 错误码上抛到 param_load_all
+         *
+         *  @note 不再用"返回字节数"承载状态。旧契约为 0/-1 = 不存在、
+         *        < -1 = 读取失败, 但三个后端都无法产生 "< -1", 导致真实读失败
+         *        与数据损坏被当成"键不存在"静默吞掉。现在失败与不存在彻底分开,
+         *        长度信息经 read_len 出参传递 (适配层需要它给短记录补零)。
+         *  @note 无法取得记录原始长度的后端 (如 mkv_get 内部按 max_len 截断)
+         *        可跳过 PARAM_ERR_OUT_OF_RANGE 检查。 */
+        int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len,
+                    uint16_t *read_len);
         /** 批量加载全部参数。NULL=走逐条 load；非 NULL=param_load_all 优先调用。
          *  后端应一次扫描完成所有数据恢复（如通过 param_cache_restore），
          *  典型场景是追加写日志型存储（mkv）的 O(N²)→O(N) 优化。
@@ -724,10 +745,13 @@ extern "C"
     /**
      * @brief 立即写入参数
      *
-     * 行为取决于参数所属模块类型:
-     *   - IP 参数: 通过 write 直通硬件，更新缓存，不产生 dirty。
+     * "立即"= 写到参数所属模块可及的最深层, 不承诺硬件已更新:
+     *   - IP 参数: write 回调存在时直通硬件，更新缓存，不产生 dirty。
      *   - App 参数: 执行 apply 校验回调，更新缓存并清除 dirty 标记。
      *     注意: App 参数不会写硬件，实际硬件写入由 param_flush() 触发。
+     *   - 未注册 write 回调 (App / IP 一视同仁): 仅更新缓存 + 清 dirty 并
+     *     返回 PARAM_OK。适用于只用 flush 批量下发或只用 exec 命令驱动
+     *     硬件的模块 —— write 是可选钩子, 不是写入的必要条件。
      *
      * @note 同 param_write: 不接受 BLOB/STRING (无长度信息)。
      *

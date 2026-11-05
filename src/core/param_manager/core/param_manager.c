@@ -594,6 +594,27 @@ int param_entry_write_apply(param_entry_t *e, param_value_t value)
     return PARAM_OK;
 }
 
+/**
+ * @brief 立即写入 — EXEC 路由 / READONLY 过滤 / pre_write + 缓存提交
+ *
+ * "立即"的含义是"写到本模块可及的最深层", **不是**"硬件寄存器已更新":
+ *   - App 模块: 最深层就是缓存, 硬件由模块的 flush 回调稍后拉取;
+ *   - IP 模块:  write 回调存在时直通硬件; 不存在时同样只到缓存,
+ *                值留在缓存里等 flush 的批量回调或 exec 命令下发。
+ *
+ * 因此 write 是**可选钩子**, 缺失不构成错误 (App / IP 一视同仁)。这与仓库里
+ * 既有的两条语义一致:
+ *   - param_entry_write / param_entry_write_apply 都不要求 write 存在;
+ *   - _ip_flush_write_entry 对无 write 回调的驱动也是"清脏后跳过"。
+ * 若在此返回错误, 同一配置下 param_write 成功而 param_write_immediate 失败,
+ * 调用者无法从 API 层解释该差异; 而且"该 IP 驱动既无 write 又无 flush"这类
+ * 配置问题属于注册期诊断 (param_check_flush_integrity 一类), 不该由单次
+ * 写入路径承担。
+ *
+ * @param e     参数条目
+ * @param value 待写入值 (pre_write 会就地裁剪)
+ * @return PARAM_OK 成功, 或其他错误码
+ */
 int param_entry_write_immediate(param_entry_t *e, param_value_t value)
 {
     param_module_t *m = param_entry_module(e);
@@ -620,8 +641,6 @@ int param_entry_write_immediate(param_entry_t *e, param_value_t value)
 
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
-    if (!m->write) return PARAM_ERR_NOT_FOUND;
-
     /* 缓存先行 (有意不回滚): 回调执行期间缓存已为新值。
        回调语义由模块类型决定 (App: apply 校验; IP: driver 直通硬件),
        失败不清脏、错误码上抛。 */
@@ -629,13 +648,17 @@ int param_entry_write_immediate(param_entry_t *e, param_value_t value)
     g_param_data_ops[t].cache_update(e, value);
     system_unlock(SYS_LOCK_PARAM);
 
-    int ret = m->write(m->ctx, e->param_id, value);
-    if (ret == PARAM_OK) {
-        system_lock(SYS_LOCK_PARAM);
-        param_entry_clear_dirty(e);
-        system_unlock(SYS_LOCK_PARAM);
+    /* write 为可选钩子: 缺失时"立即"只到缓存层, 不报错 (见函数头注释) */
+    if (m->write) {
+        int ret = m->write(m->ctx, e->param_id, value);
+        if (ret != PARAM_OK)
+            return ret;
     }
-    return ret;
+
+    system_lock(SYS_LOCK_PARAM);
+    param_entry_clear_dirty(e);
+    system_unlock(SYS_LOCK_PARAM);
+    return PARAM_OK;
 }
 
 /** @brief write_raw 公共主体 — EXEC 路由 / BLOB 长度校验 / 值类型转换 + 委托 write_fn */
@@ -1691,16 +1714,19 @@ int param_migrate_storage(const param_storage_drv_t *storage,
 
     uint8_t buf[256];
     uint8_t schema_ver;
+    uint16_t got = 0;
     int ret;
 
     /* ---- 阶段 1: 版本检查 ---- */
-    ret = storage->load(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1);
-    if (ret <= 0) {
+    ret = storage->load(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1, &got);
+    if (ret == PARAM_ERR_NOT_FOUND) {
         /* 首次启动: 无版本键 → 写入当前版本, 跳过迁移 */
         schema_ver = PARAM_SCHEMA_VERSION;
         ret = storage->save(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1);
         return (ret < 0) ? PARAM_ERR_FLASH_FAIL : PARAM_OK;
     }
+    if (ret != PARAM_OK)
+        return PARAM_ERR_FLASH_FAIL;  /**< 读失败: 无法判定版本, 不动存储 */
 
     if (schema_ver != PARAM_SCHEMA_VERSION) {
         /* 存储格式破坏性变更 → 全量擦除, 写版本号, 跳过迁移 */
@@ -1718,12 +1744,15 @@ int param_migrate_storage(const param_storage_drv_t *storage,
     for (uint16_t i = 0; i < count; i++) {
         const param_migrate_entry_t *e = &table[i];
 
-        /* 尝试加载旧数据 */
-        ret = storage->load(storage->ctx, e->old_id, buf, sizeof(buf));
-        if (ret <= 0)
-            continue;  /**< 不存在或已迁移 → 跳过 */
+        /* 尝试加载旧数据: 不存在/已迁移 → 跳过; 读失败或记录超出
+           buf 容量 → 中断迁移 (不静默截断, 否则 convert 收到的是残缺数据) */
+        uint16_t old_len = 0;
+        ret = storage->load(storage->ctx, e->old_id, buf, (uint16_t)sizeof(buf), &old_len);
+        if (ret == PARAM_ERR_NOT_FOUND)
+            continue;
+        if (ret != PARAM_OK)
+            return ret;
 
-        uint16_t old_len = (uint16_t)ret;
         bool saved = false;
 
         if (e->convert) {
@@ -1801,7 +1830,7 @@ int param_load_all(void)
                 if (!e)
                     continue;
                 int ret = e->vtable->load(e);
-                if (ret < 0 && entry_err == PARAM_OK)
+                if (ret != PARAM_OK && entry_err == PARAM_OK)
                     entry_err = ret;
             }
             first_err = entry_err;
@@ -1854,13 +1883,13 @@ int param_load_one(uint32_t param_id)
     system_lock(SYS_LOCK_PARAM);
     ret = e->vtable->load(e);
     system_unlock(SYS_LOCK_PARAM);
-    if (ret >= 0) {
+    if (ret == PARAM_OK) {
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->mark_dirty)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
     }
     /* apply 重新校验恢复值 (多分区兼容); 有意不走 param_write 以避免 notify */
-    if (ret >= 0)
+    if (ret == PARAM_OK)
         ret = e->vtable->write(e, *entry_cache(e));
 
     return ret;

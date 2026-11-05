@@ -73,6 +73,8 @@ const param_vtable_t app_vtable = {
     .read             = param_entry_read,
     .write            = param_entry_write_apply,
     .write_cache      = param_entry_write,
+    /* write_immediate 与 IP 共用同一实现: write 是可选的校验/下发钩子,
+       缺失时"立即"只到缓存层 (硬件生效由 param_flush 触发) */
     .write_immediate  = param_entry_write_immediate,
     .write_raw        = param_entry_write_raw_apply,
     .flush            = param_entry_flush_nop,

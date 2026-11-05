@@ -30,13 +30,14 @@
  * ================================================================ */
 
 /** @brief stub: 加载操作始终返回"不存在" */
-static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l)
+static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l, uint16_t *rl)
 {
     (void)ctx;
     (void)id;
     (void)d;
     (void)l;
-    return -1;
+    (void)rl;
+    return PARAM_ERR_NOT_FOUND;
 }
 /** @brief stub: 保存操作始终返回 -1 */
 static int stub_save(void *ctx, uint32_t id, const uint8_t *d, uint16_t l)
@@ -279,22 +280,36 @@ static const param_storage_drv_t *flashdb_get_partition(void *ctx, uint8_t index
  * @param param_id  参数 ID
  * @param data      输出缓冲区
  * @param len       缓冲区长度
- * @return 0 成功, -1 键不存在或读取失败
+ * @param read_len  [out] 实际写入字节数 (可 NULL)
+ * @return PARAM_OK 成功, PARAM_ERR_NOT_FOUND 键不存在,
+ *         PARAM_ERR_OUT_OF_RANGE 记录长度超出 len, PARAM_ERR_INVALID_ID 参数非法
+ *
+ * @note FlashDB 的 fdb_kv_get_blob 用 0 同时表示"键不存在"与"读失败",
+ *       本层无法区分 —— 两者一律按 PARAM_ERR_NOT_FOUND 处理 (框架保持
+ *       默认值)。这是后端能力限制, 非契约模糊。
  */
 static int flashdb_load(void *ctx, uint32_t param_id,
-                        uint8_t *data, uint16_t len)
+                        uint8_t *data, uint16_t len, uint16_t *read_len)
 {
     flashdb_ctx_t *c = (flashdb_ctx_t *)ctx;
     if (!c || !c->kvdb_ready || !data || len == 0)
-        return -1;
+        return PARAM_ERR_INVALID_ID;
 
     char key[FDB_KEY_MAX];
     snprintf(key, sizeof(key), "p%lu", (unsigned long)param_id);
 
     struct fdb_blob blob;
-    size_t read_len = fdb_kv_get_blob(&c->kvdb, key,
-                                      fdb_blob_make(&blob, data, len));
-    return (int)read_len;
+    size_t got = fdb_kv_get_blob(&c->kvdb, key,
+                                fdb_blob_make(&blob, data, len));
+    if (got == 0)
+        return PARAM_ERR_NOT_FOUND; /* 键不存在: 框架保持默认值 */
+    /* 存储记录比条目容量长 (格式变更/数据损坏): 已拷入部分不可信 → 上报 */
+    if (got > (size_t)len)
+        return PARAM_ERR_OUT_OF_RANGE;
+
+    if (read_len)
+        *read_len = (uint16_t)got;
+    return PARAM_OK;
 }
 
 /**

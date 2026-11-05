@@ -143,13 +143,13 @@ extern "C"
     int param_entry_write(param_entry_t *e, param_value_t value);
     /** @brief 写入 (带 apply): 缓存先行 + 模块业务回调, 拒绝不标脏 */
     int param_entry_write_apply(param_entry_t *e, param_value_t value);
-    /** @brief 立即写入: EXEC 路由 / 写回调后清脏 */
+    /** @brief 立即写入: EXEC 路由 / 可选 write 钩子 / 清脏 (App 与 IP 共用) */
     int param_entry_write_immediate(param_entry_t *e, param_value_t value);
     /** @brief 原始字节流写入 (委托 param_entry_write) */
     int param_entry_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len);
     /** @brief 原始字节流写入 (委托 param_entry_write_apply) */
     int param_entry_write_raw_apply(param_entry_t *e, const uint8_t *data, uint16_t len);
-    /** @brief 加载: data_ops.load, 不标脏 */
+    /** @brief 加载: data_ops.load, 不标脏 (成功 = PARAM_OK, 不返回字节数) */
     int param_entry_load(param_entry_t *e);
     /** @brief 重置: data_ops.reset */
     int param_entry_reset(param_entry_t *e);

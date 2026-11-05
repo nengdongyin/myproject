@@ -35,6 +35,8 @@ extern "C"
      *   - write: 执行期间缓存已先行更新为新值 (immediate 与 flush 路径一致),
      *            回调内 param_read / param_save_one 反映新值; 硬件写失败
      *            缓存保持新值不回滚。
+     *            可 NULL: 缺失时参数值只停留在缓存层, 由 flush 的批量回调
+     *            或 exec 命令下发, 框架不视为错误 (与 param_write 一致)。
      *            回调在所有路径均锁外执行, 可安全调用加锁 API;
      *            但仍不得在回调内调用 param_flush(), 也不建议回调内做
      *            param_save_one 持久化 (每次下发写一次 Flash, 寿命消耗大)。
