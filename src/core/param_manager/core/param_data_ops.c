@@ -185,7 +185,7 @@ static int value_type_save(param_entry_t *e)
     if (!(entry_flags(e) & PARAM_FLAG_PERSIST)) return PARAM_OK;
 
     const param_storage_drv_t *storage = param_get_storage();
-    if (!storage || !storage->save) return PARAM_ERR_NOT_FOUND;
+    if (!storage || !storage->save) return PARAM_ERR_NOT_SUPPORTED;
 
     return storage->save(storage->ctx, e->param_id, (const uint8_t *)entry_cache(e), sizeof(param_value_t));
 }
@@ -195,7 +195,7 @@ static int blob_save(param_entry_t *e)
     if (!(entry_flags(e) & PARAM_FLAG_PERSIST)) return PARAM_OK;
 
     const param_storage_drv_t *storage = param_get_storage();
-    if (!storage || !storage->save) return PARAM_ERR_NOT_FOUND;
+    if (!storage || !storage->save) return PARAM_ERR_NOT_SUPPORTED;
 
     param_blob_entry_t *be = (param_blob_entry_t *)e;
     if (!be->cache.ptr || be->blob_size == 0) return PARAM_OK;
@@ -207,7 +207,7 @@ static int string_save(param_entry_t *e)
     if (!(entry_flags(e) & PARAM_FLAG_PERSIST)) return PARAM_OK;
 
     const param_storage_drv_t *storage = param_get_storage();
-    if (!storage || !storage->save) return PARAM_ERR_NOT_FOUND;
+    if (!storage || !storage->save) return PARAM_ERR_NOT_SUPPORTED;
 
     param_string_entry_t *se = (param_string_entry_t *)e;
     if (!se->cache.ptr || se->max_len == 0) return PARAM_OK;
@@ -235,7 +235,7 @@ static int value_type_load(param_entry_t *e)
     if (!(entry_flags(e) & PARAM_FLAG_PERSIST)) return PARAM_OK;
 
     const param_storage_drv_t *storage = param_get_storage();
-    if (!storage || !storage->load) return PARAM_ERR_NOT_FOUND;
+    if (!storage || !storage->load) return PARAM_ERR_NOT_SUPPORTED;
 
     /* 先清零再回填: 短记录 (如旧固件按 4 字节写入而本构建为 8 字节)
        未写满的字节必须为 0, 不能引入未初始化读 */
@@ -255,7 +255,7 @@ static int blob_load(param_entry_t *e)
     if (!(entry_flags(e) & PARAM_FLAG_PERSIST)) return PARAM_OK;
 
     const param_storage_drv_t *storage = param_get_storage();
-    if (!storage || !storage->load) return PARAM_ERR_NOT_FOUND;
+    if (!storage || !storage->load) return PARAM_ERR_NOT_SUPPORTED;
 
     param_blob_entry_t *be = (param_blob_entry_t *)e;
     if (!be->cache.ptr || be->blob_size == 0) return PARAM_OK;
@@ -291,7 +291,7 @@ static int string_load(param_entry_t *e)
     if (!(entry_flags(e) & PARAM_FLAG_PERSIST)) return PARAM_OK;
 
     const param_storage_drv_t *storage = param_get_storage();
-    if (!storage || !storage->load) return PARAM_ERR_NOT_FOUND;
+    if (!storage || !storage->load) return PARAM_ERR_NOT_SUPPORTED;
 
     param_string_entry_t *se = (param_string_entry_t *)e;
     if (!se->cache.ptr || se->max_len == 0) return PARAM_OK;

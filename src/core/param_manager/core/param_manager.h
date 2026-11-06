@@ -117,6 +117,11 @@ extern "C"
         PARAM_ERR_NO_MEMORY = -8,     /**< 哈希表已满 */
         PARAM_ERR_TIMEOUT = -9,       /**< 操作超时 */
         PARAM_ERR_BUSY = -10,         /**< 系统忙，重复初始化 */
+        /** 当前配置/后端不具备该能力: 未编译持久化 (storage == NULL)、
+         *  或后端未提供所需回调 (load/save/delete/erase_all/分区)。
+         *  与 PARAM_ERR_NOT_FOUND("查不到实体") 区分: 本码表示"本固件不支持",
+         *  重试无意义; 通常由构建配置决定, 运行期不会自行恢复。 */
+        PARAM_ERR_NOT_SUPPORTED = -11,
     } param_status_t;
 
     typedef struct param_module param_module_t;
@@ -942,6 +947,12 @@ extern "C"
 
     /* ================================================================
      *  持久化 CRUD
+     *
+     *  @note 存储后端未配置 (param_init 传 NULL / 未编译持久化) 或后端缺
+     *        对应回调时, 下列接口返回 PARAM_ERR_NOT_SUPPORTED (而非
+     *        PARAM_ERR_NOT_FOUND —— "支持但找不到"与"本固件不支持"是两件事)。
+     *        例外: param_load_all 在无存储时不报错, 只把 LOAD 阶段跳过
+     *        (INIT 阶段照常执行, 见其文档)。
      * ================================================================ */
 
     /** @brief 保存所有参数到持久化存储 (仅 PARAM_FLAG_PERSIST 标记的参数) */
@@ -976,12 +987,12 @@ extern "C"
     /**
      * @brief 删除单个参数的持久化数据
      * @param param_id 参数 ID
-     * @return PARAM_OK 成功，PARAM_ERR_FLASH_FAIL 删除失败，PARAM_ERR_NOT_FOUND 存储不可用
+     * @return PARAM_OK 成功，PARAM_ERR_FLASH_FAIL 删除失败，PARAM_ERR_NOT_SUPPORTED 存储不可用
      */
     int param_delete_one(uint32_t param_id);
     /**
      * @brief 擦除全部持久化数据
-     * @return PARAM_OK 成功，PARAM_ERR_FLASH_FAIL 擦除失败，PARAM_ERR_NOT_FOUND 存储不可用
+     * @return PARAM_OK 成功，PARAM_ERR_FLASH_FAIL 擦除失败，PARAM_ERR_NOT_SUPPORTED 存储不可用
      */
     int param_delete_all(void);
 

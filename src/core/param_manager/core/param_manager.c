@@ -1581,7 +1581,7 @@ int param_save_all(void)
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->save)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
     int first_err = PARAM_OK;
 
     system_lock(SYS_LOCK_PARAM);
@@ -1603,7 +1603,7 @@ int param_save_one(uint32_t param_id)
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->save)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
     system_lock(SYS_LOCK_PARAM);
     param_entry_t *e = find_entry(param_id);
     if (!e) {
@@ -1622,14 +1622,14 @@ int param_save_one(uint32_t param_id)
 int param_storage_get_active_partition(uint8_t *index)
 {
     if (!g_pm.storage || !g_pm.storage->get_active_partition)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
     return g_pm.storage->get_active_partition(g_pm.storage->ctx, index);
 }
 
 int param_storage_set_active_partition(uint8_t index)
 {
     if (!g_pm.storage || !g_pm.storage->set_active_partition)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
     return g_pm.storage->set_active_partition(g_pm.storage->ctx, index);
 }
 /**
@@ -1702,7 +1702,8 @@ const param_storage_drv_t *param_get_storage_partition(uint8_t index)
  * @param storage 持久化后端驱动（必须支持 load/save）
  * @param table   迁移条目表（可为 NULL + count==0 跳过迁移）
  * @param count   迁移条目数
- * @return PARAM_OK 成功, PARAM_ERR_FLASH_FAIL Flash 操作失败,
+ * @return PARAM_OK 成功, PARAM_ERR_NOT_SUPPORTED 无存储驱动或后端缺 load/save,
+ *         PARAM_ERR_FLASH_FAIL Flash 操作失败,
  *         其他 <0 表示迁移回调返回的致命错误
  */
 int param_migrate_storage(const param_storage_drv_t *storage,
@@ -1710,7 +1711,7 @@ int param_migrate_storage(const param_storage_drv_t *storage,
                           uint16_t count)
 {
     if (!storage || !storage->load || !storage->save)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
 
     uint8_t buf[256];
     uint8_t schema_ver;
@@ -1873,7 +1874,7 @@ int param_load_one(uint32_t param_id)
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->load)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
 
     param_entry_t *e = find_entry(param_id);
     if (!e)
@@ -1901,7 +1902,7 @@ int param_delete_one(uint32_t param_id)
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->delete)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
     int ret = g_pm.storage->delete(g_pm.storage->ctx, param_id);
     return (ret == 0) ? PARAM_OK : PARAM_ERR_FLASH_FAIL;
 }
@@ -1912,7 +1913,7 @@ int param_delete_all(void)
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
     if (!g_pm.storage || !g_pm.storage->erase_all)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_SUPPORTED;
     int ret = g_pm.storage->erase_all(g_pm.storage->ctx);
     return (ret == 0) ? PARAM_OK : PARAM_ERR_FLASH_FAIL;
 }

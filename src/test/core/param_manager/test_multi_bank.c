@@ -87,8 +87,9 @@ void test_bank_set_null_disables_persist(void)
 
     param_set_storage(NULL);
 
+    /* 存储被置 NULL: 不再是"找不到"(NOT_FOUND), 而是"本配置不支持持久化" */
     int ret = param_save_all();
-    TEST_ASSERT_EQUAL_INT(PARAM_ERR_NOT_FOUND, ret);
+    TEST_ASSERT_EQUAL_INT(PARAM_ERR_NOT_SUPPORTED, ret);
 
     param_set_storage(&g_mock_storage);
 
@@ -115,7 +116,7 @@ void test_bank_init_with_null_driver(void)
     TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
 
     int save_ret = param_save_all();
-    TEST_ASSERT_EQUAL_INT(PARAM_ERR_NOT_FOUND, save_ret);
+    TEST_ASSERT_EQUAL_INT(PARAM_ERR_NOT_SUPPORTED, save_ret);
 
     param_set_storage(&g_mock_storage);
 
