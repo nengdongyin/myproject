@@ -3,7 +3,7 @@
  * @brief IP 参数子系统实现 — 派生差异壳 + vtable 常量组装
  *
  * App 与 IP 的通用 vtable 实现位于 param_manager.c (基类)。
- * 本文件仅保留 IP 真正差异的部分:
+ * 本文件只包含 IP 真正差异的部分:
  *   - ip_param_load:        基类 load + 标脏尾巴 (恢复值需下发硬件)
  *   - _ip_flush_write_entry / ip_flush_one: 单条目硬件写通路
  *   - ip_module_flush:      逐条 driver write + 批量后处理

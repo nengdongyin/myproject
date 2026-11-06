@@ -411,7 +411,7 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
         if (g_ctx[i].used &&
             strncmp(g_ctx[i].part_name, part_name, sizeof(g_ctx[i].part_name)) == 0)
         {
-            /* 惰性重初始化：若 KVDB 曾被 deinit 则重新初始化 */
+            /* 惰性重初始化: 条件为 kvdb_ready 为假 (实例被 deinit 后即如此) */
             if (!g_ctx[i].kvdb_ready)
                 flashdb_init_kvdb(&g_ctx[i]);
             return &g_ctx[i].drv;

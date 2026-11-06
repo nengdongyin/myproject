@@ -812,7 +812,7 @@ void param_module_deinit(param_module_node_t *m)
  *
  * 快照在锁内完成, 回调本身在锁外执行 (锁纪律第 4 条: 回调一律锁外)。
  * BLOB/STRING 的 .ptr 指向框架缓存缓冲区 (生命周期覆盖整个运行期),
- * 优于调用者传入的瞬态缓冲区。
+ * 调用者的瞬态缓冲区不参与。
  *
  * @param param_id 参数 ID
  * @param e        参数条目 (已成功写入)
@@ -830,20 +830,21 @@ static void param_notify_effective(uint32_t param_id, param_entry_t *e)
     g_pm.notify_cb(param_id, effective);
 }
 
-/* ================================================================
- *  读写操作 — vtable 分派
+/**
+ * @brief 写入入口公共前缀 — 初始化/存在性校验 + 无长度类型拦截
  *
- *  所有 param_write / param_read 类的操作都遵循同一模式:
- *    1. 检查初始化状态
- *    2. 获取锁
- *    3. 通过哈希表找到 param_entry
- *    4. 调用 entry->vtable->xxx() 分派
- *    5. 根据返回值更新模块 dirty 标记
- *    6. 释放锁
- * ================================================================ */
-
-/** @brief 写入参数 (缓存模式，不立即刷硬件，标记 dirty) */
-int param_write(uint32_t param_id, param_value_t value)
+ * param_write / param_write_cache / param_write_immediate / param_write_raw
+ * 共用的第一步: 校验框架已初始化、条目已注册, 并按需拒绝 BLOB/STRING。
+ *
+ * @param param_id        参数 ID
+ * @param[out] out        解析到的条目 (仅在返回 PARAM_OK 时有效)
+ * @param reject_ptr_types true = 拒绝 BLOB/STRING (调用入口没有长度信息,
+ *                        向 STRING 条目写 .u32 会被当成指针解引用)
+ * @return PARAM_OK 成功; PARAM_ERR_NOT_FOUND 未初始化;
+ *         PARAM_ERR_INVALID_ID 参数不存在; PARAM_ERR_TYPE_MISMATCH 类型被拦
+ */
+static int param_write_resolve(uint32_t param_id, param_entry_t **out,
+                               bool reject_ptr_types)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
@@ -852,126 +853,158 @@ int param_write(uint32_t param_id, param_value_t value)
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
-    /* BLOB/STRING 的 payload 经 .ptr 传递, 而 param_value_t 无法携带长度,
-       本路径无法校验源的容量/有效性 (向 STRING 条目写 .u32 会被当成
-       指针解引用)。请使用带长度的专用入口:
-       param_write_blob / param_write_string / param_write_raw */
-    param_type_t t = entry_type(e);
-    if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
-        return PARAM_ERR_TYPE_MISMATCH;
-
-    int ret = e->vtable->write(e, value);
-    if (ret == PARAM_OK) {
-        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
-        if (m && m->vtable && m->vtable->mark_dirty) {
-            system_lock(SYS_LOCK_PARAM);
-            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-            system_unlock(SYS_LOCK_PARAM);
-        }
-        /* 通知生效值而非入参: pre_write 可能已裁剪超范围值 */
-        param_notify_effective(param_id, e);
+    if (reject_ptr_types) {
+        /* BLOB/STRING 的 payload 经 .ptr 传递, 而 param_value_t 无法携带长度,
+           本路径无法校验源的容量/有效性。请使用带长度的专用入口:
+           param_write_blob / param_write_string / param_write_raw */
+        param_type_t t = entry_type(e);
+        if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
+            return PARAM_ERR_TYPE_MISMATCH;
     }
+
+    *out = e;
+    return PARAM_OK;
+}
+
+/**
+ * @brief 按参数所属模块同步模块级 dirty 标志 (置脏或清脏)
+ *
+ * 这是全部写入路径共用的唯一实现: "找模块 → 选 mark_dirty/clear_dirty →
+ * 锁内调用" 三步只在此处存在。调用方 (param_write_complete /
+ * param_load_one) 用 mark 参数表达语义, 不自行展开。
+ *
+ * @note 内部自行持锁: 调用者**不得**持有 SYS_LOCK_PARAM (端口层为非递归锁,
+ *       否则自死锁)。
+ * @param param_id 参数 ID (用于定位模块与本地 ID)
+ * @param mark     true = 置脏 (缓存待下发), false = 清脏 (已写到最深层)
+ */
+static void param_module_dirty_sync(uint32_t param_id, bool mark)
+{
+    param_module_node_t *m = param_module_find((uint16_t)PARAM_MODULE_ID(param_id));
+    if (!m || !m->vtable)
+        return;
+
+    void (*fn)(param_module_node_t *, uint16_t) =
+        mark ? m->vtable->mark_dirty : m->vtable->clear_dirty;
+    if (!fn)
+        return;
+
+    system_lock(SYS_LOCK_PARAM);
+    fn(m, (uint16_t)PARAM_LOCAL_ID(param_id));
+    system_unlock(SYS_LOCK_PARAM);
+}
+
+/**
+ * @brief 写入成功后的公共尾巴 — 同步模块脏位 + 通知生效值
+ *
+ * 所有写入入口 (EXEC 原始写这一特例除外) 在 vtable 返回 PARAM_OK 后都执行这两步,
+ * 且顺序不可交换: 先落脏位再通知, 保证 notify 订阅者观察到模块状态已与缓存一致。
+ *
+ * @param param_id   参数 ID
+ * @param e          已成功写入的条目
+ * @param mark_dirty true = 置脏 (待下发), false = 清脏 (已到最深层)
+ */
+static void param_write_complete(uint32_t param_id, param_entry_t *e, bool mark_dirty)
+{
+    param_module_dirty_sync(param_id, mark_dirty);
+    /* 通知生效值而非入参: pre_write 裁剪 / apply 修正后的缓存值才是真值 */
+    param_notify_effective(param_id, e);
+}
+
+/* ================================================================
+ *  读写操作 — vtable 分派
+ *
+ *  所有写入入口共用同一骨架, 差异只有三处 (入口语义决定):
+ *    1. 前置拦截: 有无长度信息 → param_write_resolve(reject_ptr_types)
+ *    2. 分派目标: entry->vtable 的哪个槽位 (write / write_cache /
+ *       write_immediate / write_raw)
+ *    3. 收尾: 置脏还是清脏 → param_write_complete(mark_dirty)
+ *  其余步骤 (存在性校验、模块查找、加锁、生效值通知) 均由上面两个函数提供,
+ *  各入口只表达自己那三处差异。
+ * ================================================================ */
+
+/** @brief 写入参数 (缓存模式，不立即刷硬件，标记 dirty) */
+int param_write(uint32_t param_id, param_value_t value)
+{
+    param_entry_t *e = NULL;
+    int ret = param_write_resolve(param_id, &e, true);
+    if (ret != PARAM_OK)
+        return ret;
+
+    ret = e->vtable->write(e, value);
+    if (ret == PARAM_OK)
+        param_write_complete(param_id, e, true);
     return ret;
 }
 
 /** @brief 写入参数缓存 (跳过 apply 回调，仅更新缓存 + 标记 dirty) */
 int param_write_cache(uint32_t param_id, param_value_t value)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+    param_entry_t *e = NULL;
+    int ret = param_write_resolve(param_id, &e, true);
+    if (ret != PARAM_OK)
+        return ret;
 
-    param_entry_t *e = find_entry(param_id);
-    if (!e)
-        return PARAM_ERR_INVALID_ID;
-
-    /* 同 param_write: BLOB/STRING 需带长度的专用入口 */
-    param_type_t t = entry_type(e);
-    if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
-        return PARAM_ERR_TYPE_MISMATCH;
-
-    int ret = e->vtable->write_cache(e, value);
-    if (ret == PARAM_OK) {
-        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
-        if (m && m->vtable && m->vtable->mark_dirty) {
-            system_lock(SYS_LOCK_PARAM);
-            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-            system_unlock(SYS_LOCK_PARAM);
-        }
-        /* 通知生效值而非入参: pre_write 可能已裁剪超范围值 */
-        param_notify_effective(param_id, e);
-    }
+    ret = e->vtable->write_cache(e, value);
+    if (ret == PARAM_OK)
+        param_write_complete(param_id, e, true);
     return ret;
 }
 
 /** @brief 立即写入参数 (直通硬件/回调，不产生 dirty) */
 int param_write_immediate(uint32_t param_id, param_value_t value)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+    param_entry_t *e = NULL;
+    int ret = param_write_resolve(param_id, &e, true);
+    if (ret != PARAM_OK)
+        return ret;
 
-    param_entry_t *e = find_entry(param_id);
-    if (!e)
-        return PARAM_ERR_INVALID_ID;
-
-    /* 同 param_write: BLOB/STRING 需带长度的专用入口 */
-    param_type_t t = entry_type(e);
-    if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
-        return PARAM_ERR_TYPE_MISMATCH;
-
-    int ret = e->vtable->write_immediate(e, value);
-    if (ret == PARAM_OK) {
-        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
-        if (m && m->vtable && m->vtable->clear_dirty) {
-            system_lock(SYS_LOCK_PARAM);
-            m->vtable->clear_dirty(m, PARAM_LOCAL_ID(param_id));
-            system_unlock(SYS_LOCK_PARAM);
-        }
-        /* 通知生效值而非入参: pre_write / apply 可能已修正值 */
-        param_notify_effective(param_id, e);
-    }
+    ret = e->vtable->write_immediate(e, value);
+    if (ret == PARAM_OK)
+        param_write_complete(param_id, e, false);
     return ret;
 }
 
 /** @brief 原始字节流写入 (EXEC 参数自动路由到 exec) */
 int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
 {
+    /* 检查顺序: 未初始化优先于 data/len 校验 —— 框架未初始化时任何调用
+       都返回 PARAM_ERR_NOT_FOUND */
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
     if (!data || len == 0)
         return PARAM_ERR_INVALID_ID;
 
-    param_entry_t *e = find_entry(param_id);
-    if (!e)
-        return PARAM_ERR_INVALID_ID;
+    param_entry_t *e = NULL;
+    int ret = param_write_resolve(param_id, &e, false);
+    if (ret != PARAM_OK)
+        return ret;
 
-    int ret = e->vtable->write_raw(e, data, len);
-    if (ret == PARAM_OK) {
-        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
-        if (m && m->vtable && m->vtable->mark_dirty) {
-            system_lock(SYS_LOCK_PARAM);
-            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-            system_unlock(SYS_LOCK_PARAM);
-        }
-        if (param_entry_is_exec(e)) {
-            /* EXEC 不写缓存 (EXEC 类型的 cache_update 为空操作), 不存在
-               "生效值": 通知携带命令负载, 与 exec 回调收到的 arg 一致。
-               memset 清零后只填充有效字节，剩余字段为 0 (best-effort)。 */
-            param_value_t arg;
-            memset(&arg, 0, sizeof(arg));
-            if (len <= sizeof(arg))
-                memcpy(&arg, data, len);
-            else
-                arg.ptr = (void *)data;
-            if (g_pm.notify_cb)
-                g_pm.notify_cb(param_id, arg);
-        }
-        else {
-            /* 值类型 / BLOB / STRING: 以缓存生效值为准 (裁剪结果已体现,
-               BLOB/STRING 的 .ptr 指向框架缓存缓冲区而非调用者瞬态缓冲) */
-            param_notify_effective(param_id, e);
-        }
+    ret = e->vtable->write_raw(e, data, len);
+    if (ret != PARAM_OK)
+        return ret;
+
+    if (param_entry_is_exec(e)) {
+        /* EXEC 不写缓存 (EXEC 类型的 cache_update 为空操作), 不存在
+           "生效值": 通知携带命令负载, 与 exec 回调收到的 arg 一致。
+           memset 清零后只填充有效字节，剩余字段为 0 (best-effort)。
+           注: 此分支不调 param_module_dirty_sync —— EXEC 条目被模块级
+           mark_dirty 的可写过滤挡掉, 该调用恒为空操作。 */
+        param_value_t arg;
+        memset(&arg, 0, sizeof(arg));
+        if (len <= sizeof(arg))
+            memcpy(&arg, data, len);
+        else
+            arg.ptr = (void *)data;
+        if (g_pm.notify_cb)
+            g_pm.notify_cb(param_id, arg);
+        return PARAM_OK;
     }
-    return ret;
+
+    /* 值类型 / BLOB / STRING: 以缓存生效值为准 (裁剪结果已体现,
+       BLOB/STRING 的 .ptr 指向框架缓存缓冲区而非调用者瞬态缓冲) */
+    param_write_complete(param_id, e, true);
+    return PARAM_OK;
 }
 
 /** @brief 读取参数当前缓存值 */
@@ -1037,15 +1070,9 @@ int param_update(uint32_t param_id)
     if (ret != PARAM_OK)
         return ret;
 
-    param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
-    if (m && m->vtable && m->vtable->mark_dirty) {
-        system_lock(SYS_LOCK_PARAM);
-        m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-        system_unlock(SYS_LOCK_PARAM);
-    }
     /* 通知生效值而非入参: 快照 cached 是 re-apply 前的旧值,
        pre_write 裁剪后缓存可能已变化 */
-    param_notify_effective(param_id, e);
+    param_write_complete(param_id, e, true);
 
     return PARAM_OK;
 }
@@ -1240,7 +1267,7 @@ int param_read_string(uint32_t id, char *buf, uint16_t buf_size)
  * pre_write / apply / dirty / notify 语义。
  *
  * @note apply/notify 收到的 BLOB/STRING 指针是**参数缓存自身**,
- *       生命周期覆盖整个运行期 (优于原来传调用者的瞬态缓冲)。
+ *       生命周期覆盖整个运行期, 调用者的瞬态缓冲不参与。
  */
 static int param_write_typed_tail(uint32_t param_id, param_entry_t *e)
 {
@@ -1250,14 +1277,8 @@ static int param_write_typed_tail(uint32_t param_id, param_entry_t *e)
     if (ret != PARAM_OK)
         return ret;
 
-    param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
-    if (m && m->vtable && m->vtable->mark_dirty) {
-        system_lock(SYS_LOCK_PARAM);
-        m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-        system_unlock(SYS_LOCK_PARAM);
-    }
     /* 通知生效值: BLOB/STRING 的 .ptr 即框架缓存缓冲区 */
-    param_notify_effective(param_id, e);
+    param_write_complete(param_id, e, true);
 
     return PARAM_OK;
 }
@@ -1269,7 +1290,7 @@ static int param_write_typed_tail(uint32_t param_id, param_entry_t *e)
  * 有界读取源串 (遇 '\0' 即停) 并截断到 max_len，随后以缓存自身为源
  * 重放完整写入路径 (pre_write → apply → dirty → notify)。
  *
- * @note 不再经 param_write: 后者因无长度信息而拒收 BLOB/STRING。
+ * @note 不经 param_write: 该入口因无长度信息而拒收 BLOB/STRING。
  */
 int param_write_string(uint32_t id, const char *str)
 {
@@ -1884,11 +1905,9 @@ int param_load_one(uint32_t param_id)
     system_lock(SYS_LOCK_PARAM);
     ret = e->vtable->load(e);
     system_unlock(SYS_LOCK_PARAM);
-    if (ret == PARAM_OK) {
-        param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
-        if (m && m->vtable && m->vtable->mark_dirty)
-            m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));
-    }
+    /* 恢复值需重新下发硬件: 标脏模块 (此刻未持锁, 可安全走自加锁的公共封装) */
+    if (ret == PARAM_OK)
+        param_module_dirty_sync(param_id, true);
     /* apply 重新校验恢复值 (多分区兼容); 有意不走 param_write 以避免 notify */
     if (ret == PARAM_OK)
         ret = e->vtable->write(e, *entry_cache(e));
@@ -1990,6 +2009,9 @@ int param_reset_one(uint32_t param_id)
     }
     ret = e->vtable->reset(e);
     if (ret == PARAM_OK) {
+        /* 此处已持 SYS_LOCK_PARAM (reset 与标脏必须原子), 故内联调用模块
+           vtable 的 mark_dirty, 而非 param_module_dirty_sync —— 后者内部
+           自行加锁, 而端口层是非递归锁, 会自死锁。 */
         param_module_node_t *m = param_module_find(PARAM_MODULE_ID(param_id));
         if (m && m->vtable && m->vtable->mark_dirty)
             m->vtable->mark_dirty(m, PARAM_LOCAL_ID(param_id));

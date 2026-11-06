@@ -12,8 +12,8 @@ extern "C"
      * @file param_data_ops.h
      * @brief App 与 IP 共享的参数数据操作层
      *
-     * 将 cache_update / read / save / load / reset 五种纯数据操作从
-     * App/IP 各自的 vtable 实现中抽出，消除代码重复。
+     * cache_update / read / save / load / reset 五种纯数据操作集中在
+     * 本层, App/IP 的 vtable 实现共用同一条数据通路。
      *
      * App 和 IP 的控制策略层 (pre_write+apply vs. write+条目 dirty 标志)
      * 保持不变，仅数据通路共用。
@@ -49,8 +49,7 @@ extern "C"
     /**
      * @brief 共享 vtable save 函数 — App 和 IP 共用
      *
-     * 消除 app_save / ip_param_save 的代码重复。
-     * 直接可赋值给 vtable 的 .save 字段。
+     * App 和 IP 共用同一实现, 可直接赋值给 vtable 的 .save 字段。
      *
      * @param e 参数条目
      * @return PARAM_OK 成功，PARAM_ERR_TYPE_MISMATCH 类型越界

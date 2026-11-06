@@ -37,6 +37,16 @@ extern "C"
      *   - 注册接口:   param_module_register 声明于 param_manager_internal.h
      * ================================================================ */
 
+/* 本子系统声明 App 派生侧的 vtable 常量: 基类头文件 (param_manager.h)
+   只命名基类符号, 派生侧符号由各自的派生头文件声明 (依赖方向
+   派生 → 基类, 无反向)。下方的 PARAM_APP_* / PARAM_MODULE_DEFINE 宏
+   在建表时引用这两个常量, 因此声明必须出现在宏定义之前。 */
+
+    /** @brief App 参数级 vtable 实现 (定义于 app_param_manager.c) */
+    extern const param_vtable_t app_vtable;
+    /** @brief App 模块级 vtable 实现 (定义于 app_param_manager.c) */
+    extern const param_module_vtable_t app_module_vtable;
+
 /**
  * @name App 参数条目定义宏
  *
@@ -126,10 +136,10 @@ extern "C"
     /** @} */
 
     /* ================================================================
-     *  兼容旧名 (DEPRECATED)
+     *  传统拼写别名
      *
-     *  与 IP 侧 PARAM_IP_* 命名对称的规范名为 PARAM_APP_*。
-     *  旧名 PARAM_* 保留为别名, 全量迁移到 PARAM_APP_* 后删除。
+     *  与 IP 侧 PARAM_IP_* 对称的规范名为 PARAM_APP_*; PARAM_* 是它的
+     *  等价别名, 供既有代码继续使用。新代码请直接用 PARAM_APP_*。
      * ================================================================ */
 #define PARAM_UINT   PARAM_APP_UINT
 #define PARAM_INT    PARAM_APP_INT

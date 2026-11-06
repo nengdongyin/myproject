@@ -320,7 +320,7 @@ static int iniparser_load_cb(void *ctx, uint32_t param_id,
     const char *hex = iniparser_getstring(c->dict, key, NULL);
     if (!hex || hex[0] == '\0') return PARAM_ERR_NOT_FOUND;
 
-    /* 损坏/超长记录上报错误码, 不再冒充"键不存在" */
+    /* 损坏/超长记录上报明确的错误码, 不冒充"键不存在" */
     return hex_decode(hex, data, len, read_len);
 }
 
@@ -585,7 +585,7 @@ const param_storage_drv_t *param_storage_iniparser_get_driver(const char *base_d
         if (g_ctx[i].used &&
             strncmp(g_ctx[i].part_name, part_name, sizeof(g_ctx[i].part_name)) == 0 &&
             strncmp(g_ctx[i].base_dir, base_dir, sizeof(g_ctx[i].base_dir)) == 0) {
-            /* 惰性重加载: 若字典曾被释放则重新加载 */
+            /* 惰性重加载: 条件为 dict_ready 为假 (实例被 deinit 后即如此) */
             if (!g_ctx[i].dict_ready)
                 load_dict(&g_ctx[i]);
             return &g_ctx[i].drv;

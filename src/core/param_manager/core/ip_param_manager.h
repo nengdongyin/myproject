@@ -83,6 +83,11 @@ extern "C"
                            param_entry_t **entries,
                            uint16_t count);
 
+    /** @brief IP 参数级 vtable 实现 (定义于 ip_param_manager.c) */
+    extern const param_vtable_t ip_vtable;
+    /** @brief IP 模块级 vtable 实现 (定义于 ip_param_manager.c) */
+    extern const param_module_vtable_t ip_module_vtable;
+
 /**
  * @name IP 参数条目定义宏
  *

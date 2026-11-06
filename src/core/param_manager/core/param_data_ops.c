@@ -5,7 +5,7 @@
  * 提供 g_param_data_ops[PARAM_TYPE_COUNT] 编译期分派表，
  * 包含 cache_update / read / save / load / reset 五种纯数据操作。
  * App 和 IP 各自的控制策略 (pre_write+apply / write+条目 dirty 标志)
- * 通过此表复用数据通路，消除代码重复。
+ * 保持不变, 数据通路经此表共用。
  */
 
 #include "param_manager.h"
@@ -416,7 +416,7 @@ static int string_reset(param_entry_t *e)
 }
 
 /* ================================================================
- *  共享 vtable save — App 和 IP 共用，消除重复
+ *  共享 vtable save — App 和 IP 共用同一实现
  * ================================================================ */
 
 int param_vtable_save(param_entry_t *e)
@@ -433,7 +433,7 @@ int param_vtable_save(param_entry_t *e)
  *  存入 .rodata，不占 RAM。
  *
  *  值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) 共用同一组函数指针，
- *  通过 VALUE_DATA_OPS 宏消除源级重复；链接器在 .rodata 中
+ *  通过 VALUE_DATA_OPS 宏避免源级重复；链接器在 .rodata 中
  *  可能合并相同常量段。
  * ================================================================ */
 

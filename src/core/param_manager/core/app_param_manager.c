@@ -3,7 +3,7 @@
  * @brief App 参数子系统实现 — 派生差异壳 + vtable 常量组装
  *
  * App 与 IP 的通用 vtable 实现位于 param_manager.c (基类)。
- * 本文件仅保留 App 真正差异的部分:
+ * 本文件只包含 App 真正差异的部分:
  *   - app_module_flush: 业务 flush 回调 (批量刷入) + 清脏
  *   - app_module_init:  清脏 + init 回调
  *   - app_vtable / app_module_vtable 常量组装

@@ -244,10 +244,11 @@ extern "C"
         void (*deinit)(param_module_node_t *m);
     } param_module_vtable_t;
 
-    /** App 模块的 vtable 实现 */
-    extern const param_module_vtable_t app_module_vtable;
-    /** IP 模块的 vtable 实现 */
-    extern const param_module_vtable_t ip_module_vtable;
+    /* 两级 vtable 的具体实例 (app_vtable / ip_vtable / app_module_vtable /
+       ip_module_vtable) 由派生侧头文件声明:
+         - app_param_manager.h → app_vtable / app_module_vtable
+         - ip_param_manager.h  → ip_vtable  / ip_module_vtable
+       基类头文件只命名基类符号 (依赖方向: 派生 → 基类, 无反向)。 */
 
     /**
      * @brief 参数级虚函数表 (vtable)
@@ -294,10 +295,8 @@ extern "C"
         const param_module_vtable_t *module_vtable;
     } param_vtable_t;
 
-    /** App 参数的 vtable 实现 */
-    extern const param_vtable_t app_vtable;
-    /** IP 参数的 vtable 实现 */
-    extern const param_vtable_t ip_vtable;
+    /* app_vtable / ip_vtable 的声明见派生侧头文件
+       (app_param_manager.h / ip_param_manager.h)。 */
 
     /**
      * @brief 参数基类 (平台相关: 32-bit 上 8 字节, 64-bit 上 16 字节)
@@ -562,10 +561,11 @@ extern "C"
          *          PARAM_ERR_OUT_OF_RANGE 存储记录长度超出 len (格式变更/数据损坏)
          *          其他负值               读取失败, 错误码上抛到 param_load_all
          *
-         *  @note 不再用"返回字节数"承载状态。旧契约为 0/-1 = 不存在、
-         *        < -1 = 读取失败, 但三个后端都无法产生 "< -1", 导致真实读失败
-         *        与数据损坏被当成"键不存在"静默吞掉。现在失败与不存在彻底分开,
-         *        长度信息经 read_len 出参传递 (适配层需要它给短记录补零)。
+         *  @note 状态与长度分离: 返回值只承载"存在/不存在/失败"三态, 长度经
+         *        read_len 出参传递 (适配层需要它给短记录补零)。三态必须彼此
+         *        可分 —— 若用"返回字节数"编码 (0 = 不存在, 负值 = 失败), 后端
+         *        无法为不同失败原因产生不同的负值, 真实读失败与数据损坏就会被
+         *        当成"键不存在"静默吞掉。
          *  @note 无法取得记录原始长度的后端 (如 mkv_get 内部按 max_len 截断)
          *        可跳过 PARAM_ERR_OUT_OF_RANGE 检查。 */
         int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len,
