@@ -4,10 +4,11 @@
  *
  * @details
  * 本文件实现 param_storage_drv_t 接口的 FlashDB 适配层。
- * 支持两种编译模式:
- *   - PARAM_FLASHDB_ENABLE=1: 完整 FlashDB 后端 — 多实例工厂、分区选择、
- *     启动分区回退、空分区检测、KV 读写擦除
- *   - PARAM_FLASHDB_ENABLE=0: 空操作 stub — 所有操作返回 -1，用于编译验证
+ *
+ * 本文件无条件提供完整实现 (不存在 stub 变体): 要不要用它由两件事决定 ——
+ *   1. 构建层: 本文件是否被编入 (不编入则工厂符号不存在);
+ *   2. 调用层: 启动流程是否调用 param_storage_flashdb_create()。
+ * 不需要持久化的产品直接传 NULL 给 param_init(), 无需任何编译期开关。
  *
  * FlashDB 模式下采用工厂模式管理多存储实例:
  *   - g_ctx[MAX_INSTANCES] 静态池，按分区名查找/创建
@@ -22,94 +23,6 @@
 #include "param_storage_flashdb.h"
 #include <stdio.h>
 #include <string.h>
-
-#if !PARAM_FLASHDB_ENABLE
-
-/* ================================================================
- *  PARAM_FLASHDB_ENABLE=0: 空操作 stub — 所有持久化操作返回 -1
- * ================================================================ */
-
-/** @brief stub: 加载操作始终返回"不存在" */
-static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l, uint16_t *rl)
-{
-    (void)ctx;
-    (void)id;
-    (void)d;
-    (void)l;
-    (void)rl;
-    return PARAM_ERR_NOT_FOUND;
-}
-/** @brief stub: 保存操作始终返回 -1 */
-static int stub_save(void *ctx, uint32_t id, const uint8_t *d, uint16_t l)
-{
-    (void)ctx;
-    (void)id;
-    (void)d;
-    (void)l;
-    return -1;
-}
-/** @brief stub: 擦除全部 — 无操作 */
-static int stub_erase_all(void *ctx) { (void)ctx; return 0; }
-/** @brief stub: 删除单个 — 无操作 */
-static int stub_delete(void *ctx, uint32_t id) { (void)ctx; (void)id; return 0; }
-/** @brief stub: 去初始化 — 无操作 */
-static int stub_deinit(void *ctx)
-{
-    (void)ctx;
-    return 0;
-}
-/** @brief stub: 获取激活分区 — 不支持 */
-static int stub_get_active_partition(void *ctx, uint8_t *index)
-{
-    (void)ctx;
-    (void)index;
-    return -1;
-}
-/** @brief stub: 设置激活分区 — 不支持 */
-static int stub_set_active_partition(void *ctx, uint8_t index)
-{
-    (void)ctx;
-    (void)index;
-    return -1;
-}
-/** @brief stub: 获取分区驱动 — 不支持 */
-static const param_storage_drv_t *stub_get_partition(void *ctx, uint8_t index)
-{
-    (void)ctx;
-    (void)index;
-    return NULL;
-}
-
-/** @brief stub 模式下的全局驱动实例（所有分区返回同一实例） */
-static param_storage_drv_t g_stub_drv = {
-    .ctx = NULL,
-    .load = stub_load,
-    .save = stub_save,
-    .delete = stub_delete,
-    .erase_all = stub_erase_all,
-    .deinit = stub_deinit,
-    .get_active_partition = stub_get_active_partition,
-    .set_active_partition = stub_set_active_partition,
-    .get_partition = stub_get_partition,
-};
-
-/**
- * @brief stub 模式: 忽略分区名，返回全局空操作驱动
- *
- * @param part_name 分区名（忽略）
- * @return 全局空操作驱动
- */
-const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_name)
-{
-    (void)part_name;
-    return &g_stub_drv;
-}
-
-#else
-
-/* ================================================================
- *  PARAM_FLASHDB_ENABLE=1: 完整 FlashDB 后端实现
- * ================================================================ */
 
 #include "flashdb.h"
 
@@ -541,5 +454,3 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
     /* 阶段 3: 池耗尽 */
     return NULL;
 }
-
-#endif

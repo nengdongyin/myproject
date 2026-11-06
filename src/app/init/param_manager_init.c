@@ -20,6 +20,7 @@
 #include "param_manager.h"
 #include "lwevt/lwevt.h"
 #include "param_storage_flashdb.h"
+#include "param_storage_iniparser.h"
 #include "param_storage_mkv.h"
 #include "sensor_module.h"
 #include "auto_exp_control.h"
@@ -112,14 +113,49 @@ static void on_param_changed(uint32_t param_id, param_value_t new_value)
  * @endcode
  */
 
+/* ================================================================
+ *  存储后端选择 — 全局唯一的"用哪个后端"决策点
+ * ================================================================ */
+
+/**
+ * @brief 按配置创建持久化后端实例
+ *
+ * 选择顺序与 param_manager_config.h 的"存储后端选择"一致 (三者互斥):
+ *   PARAM_FLASHDB_ENABLE   → param_storage_flashdb_create()
+ *   PARAM_INIPARSER_ENABLE → param_storage_iniparser_create(PARAM_INI_BASE_DIR)
+ *   PARAM_MKV_ENABLE       → param_storage_mkv_create()      (当前默认)
+ *   三者皆 0               → NULL: 本固件不持久化
+ *
+ * @return 已初始化的存储驱动; NULL = 不持久化
+ *         (param_load_all 只跑 INIT 阶段, save/load 返回 PARAM_ERR_NOT_FOUND)
+ *
+ * @note 被选中的后端 .c 必须真的编入固件, 否则此处链接失败 —— 有意如此:
+ *       配置声称"选用"某后端就不能只声明不编译。
+ * @note 新增后端时只需在此加一个分支 + 一个 PARAM_xxx_ENABLE 宏,
+ *       无需改动 param_manager 核心。
+ */
+static const param_storage_drv_t *param_storage_create_selected(void)
+{
+#if PARAM_FLASHDB_ENABLE
+    return param_storage_flashdb_create();
+#elif PARAM_INIPARSER_ENABLE
+    return param_storage_iniparser_create(PARAM_INI_BASE_DIR);
+#elif PARAM_MKV_ENABLE
+    return param_storage_mkv_create();
+#else
+    return NULL;
+#endif
+}
+
 /**
  * @brief 参数管理器子系统初始化 — 系统启动时执行完整初始化序列
  *
  * @details
  * 启动流程按以下 10 步顺序执行，每步失败均有错误输出:
  *
- *   1. **存储后端创建**: param_storage_flashdb_create()
- *      智能选择目标分区（读取 param_boot → 选择用户分区/factory）
+ *   1. **存储后端创建**: param_storage_create_selected()
+ *      按 PARAM_FLASHDB_ENABLE / PARAM_INIPARSER_ENABLE / PARAM_MKV_ENABLE
+ *      选一个后端 (当前默认 mkv); 三者皆 0 则 storage=NULL 即不持久化
  *   2. **事件系统**: lwevt_init() 初始化轻量级事件总线
  *   3. **框架初始化**: param_init(storage, on_param_changed)
  *      注册存储驱动和参数变化通知回调
@@ -145,12 +181,8 @@ static void on_param_changed(uint32_t param_id, param_value_t new_value)
  */
 void param_manager_init(void)
 {
-    /* 步骤 1: 存储后端创建 */
-    //const param_storage_drv_t *storage = param_storage_flashdb_create();
-    const param_storage_drv_t *storage = param_storage_mkv_create();
-    //const param_storage_drv_t *storage = NULL;
-    //f (!storage)
-    //   return;
+    /* 步骤 1: 存储后端创建 (由 PARAM_xxx_ENABLE 选择, 见 param_storage_create_selected) */
+    const param_storage_drv_t *storage = param_storage_create_selected();
     /* 步骤 2: 事件系统初始化 */
     lwevt_init();
     /* 步骤 3: 框架初始化 */

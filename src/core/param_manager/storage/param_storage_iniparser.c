@@ -17,49 +17,16 @@
  *
  * @attention 全局实例池 g_ctx[] 无锁保护，仅支持单线程使用。
  *
+ * @note 本文件无条件提供完整实现 (不存在 stub 变体): 要不要用它由两件事决定 ——
+ *   1. 构建层: 本文件是否被编入 (不编入则工厂符号不存在);
+ *   2. 调用层: 启动流程是否调用 param_storage_iniparser_create()。
+ * 不需要持久化的产品直接传 NULL 给 param_init()。
+ *
  * @see param_storage_drv_t 接口定义
  * @see param_storage_iniparser.h 公开 API
  */
 
 #include "param_storage_iniparser.h"
-
-#if !PARAM_INIPARSER_ENABLE
-
-/* ================================================================
- *  PARAM_INIPARSER_ENABLE=0: 空操作 stub
- * ================================================================ */
-
-static int stub_load(void *ctx, uint32_t id, uint8_t *d, uint16_t l, uint16_t *rl)
-{ (void)ctx; (void)id; (void)d; (void)l; (void)rl; return PARAM_ERR_NOT_FOUND; }
-static int stub_save(void *ctx, uint32_t id, const uint8_t *d, uint16_t l)
-{ (void)ctx; (void)id; (void)d; (void)l; return -1; }
-static int stub_erase_all(void *ctx) { (void)ctx; return 0; }
-static int stub_delete(void *ctx, uint32_t id) { (void)ctx; (void)id; return 0; }
-static int stub_deinit(void *ctx) { (void)ctx; return 0; }
-static int stub_get_active_partition(void *ctx, uint8_t *idx)
-{ (void)ctx; (void)idx; return -1; }
-static int stub_set_active_partition(void *ctx, uint8_t idx)
-{ (void)ctx; (void)idx; return -1; }
-static const param_storage_drv_t *stub_get_partition(void *ctx, uint8_t idx)
-{ (void)ctx; (void)idx; return NULL; }
-
-static param_storage_drv_t g_stub_drv = {
-    .ctx = NULL,
-    .load = stub_load, .save = stub_save,
-    .delete = stub_delete, .erase_all = stub_erase_all, .deinit = stub_deinit,
-    .get_active_partition = stub_get_active_partition,
-    .set_active_partition = stub_set_active_partition,
-    .get_partition = stub_get_partition,
-};
-
-const param_storage_drv_t *param_storage_iniparser_create(const char *base_dir)
-{ (void)base_dir; return &g_stub_drv; }
-
-const param_storage_drv_t *param_storage_iniparser_get_driver(const char *base_dir,
-                                                               const char *part_name)
-{ (void)base_dir; (void)part_name; return &g_stub_drv; }
-
-#else
 
 #include <stdio.h>
 #include <string.h>
@@ -666,5 +633,3 @@ const param_storage_drv_t *param_storage_iniparser_get_driver(const char *base_d
     /* 阶段 3: 池耗尽 */
     return NULL;
 }
-
-#endif /* PARAM_INIPARSER_ENABLE */

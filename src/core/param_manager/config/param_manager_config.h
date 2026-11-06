@@ -39,22 +39,43 @@ extern "C" {
 #define PARAM_MODULE_AUTO_REGISTER_ENABLE 0
 #endif
 
-/** @brief 启用 FlashDB 存储后端 (需链接 flashdb 库)
- *  1=开 0=关。0 时使用空操作 stub */
+/** @name 存储后端选择 (调用层开关)
+ *
+ *  1=该后端可用, 0=不可用。三者**互斥**, 由启动流程的
+ *  param_storage_create_selected() 按下列优先级挑一个实例化:
+ *    PARAM_FLASHDB_ENABLE=1   → param_storage_flashdb_create()
+ *    PARAM_INIPARSER_ENABLE=1 → param_storage_iniparser_create(PARAM_INI_BASE_DIR)
+ *    PARAM_MKV_ENABLE=1       → param_storage_mkv_create()        (当前默认)
+ *  三者都为 0 → 传 NULL 给 param_init(), 即"本固件不持久化"
+ *  (param_load_all 的 LOAD 阶段自动跳过, INIT 阶段照常执行)。
+ *
+ *  @note 这些宏**不参与任何 .c 的条件编译** —— storage/*.c 已无条件提供
+ *        完整实现, 是否把某个后端编进固件由构建层 (target_sources + 链接库)
+ *        决定。这样避免"接口改了要同步两份实现 (实体 + stub)"的维护税。
+ *  @note 被选中的后端若未编入固件, 会在链接期报 undefined reference ——
+ *        这是有意的: 配置声称"选用"就不能只声明不编译。
+ *  @{ */
+
+/** @brief 选用 FlashDB 后端 (需把 param_storage_flashdb.c 与 flashdb 库编入) */
 #ifndef PARAM_FLASHDB_ENABLE
-#define PARAM_FLASHDB_ENABLE 1
+#define PARAM_FLASHDB_ENABLE 0
 #endif
 
-/** @brief 启用 iniparser 存储后端 (需链接 iniparser 库)
- *  1=开 0=关。与 PARAM_FLASHDB_ENABLE 互斥，同时为 1 时编译报错*/
-
+/** @brief 选用 iniparser 后端 (需把 param_storage_iniparser.c 与 iniparser 库编入) */
 #ifndef PARAM_INIPARSER_ENABLE
 #define PARAM_INIPARSER_ENABLE 0
 #endif
 
-/* 存储后端互斥检查 */
-#if (PARAM_FLASHDB_ENABLE + PARAM_INIPARSER_ENABLE) > 1
-#error "PARAM_FLASHDB_ENABLE and PARAM_INIPARSER_ENABLE are mutually exclusive"
+/** @brief 选用 mkv 后端 (需把 param_storage_mkv.c 与 src/lib/mkv 编入) */
+#ifndef PARAM_MKV_ENABLE
+#define PARAM_MKV_ENABLE 1
+#endif
+
+/** @} */
+
+/* 存储后端互斥检查: 同时选用多个后端属于配置错误 */
+#if (PARAM_FLASHDB_ENABLE + PARAM_INIPARSER_ENABLE + PARAM_MKV_ENABLE) > 1
+#error "PARAM_FLASHDB_ENABLE / PARAM_INIPARSER_ENABLE / PARAM_MKV_ENABLE are mutually exclusive"
 #endif
 
 /* OS 移植选择已迁移至 port/port.h (PORT_OS_* 宏系列) */
