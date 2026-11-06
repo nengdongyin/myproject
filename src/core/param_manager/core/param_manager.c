@@ -1110,6 +1110,9 @@ int param_update(uint32_t param_id)
  *   - BLOB: 从 entry_cache()->ptr 指向的外部缓冲区读取 blob_size 字节
  *   - STRING: 从 entry_cache()->ptr 指向的外部缓冲区读取 max_len+1 字节
  *
+ * 三种长度定义见 param_entry_data_size() (与 param_get_size 共用),
+ * 本函数不自行推导。
+ *
  * data==NULL 的查询模式用于先探测数据总大小再分配缓冲区。
  * 典型用法:
  * @code
@@ -1140,31 +1143,18 @@ int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
     }
 
     param_type_t t = entry_type(e);
-    uint16_t total;
-    const uint8_t *src;
-
-    switch (t) {
-    case PARAM_TYPE_UINT:
-    case PARAM_TYPE_INT:
-    case PARAM_TYPE_FLOAT:
-    case PARAM_TYPE_BOOL:
-    case PARAM_TYPE_ENUM:
-    case PARAM_TYPE_EXEC:
-        total = sizeof(param_value_t);
-        src = (const uint8_t *)entry_cache(e);
-        break;
-    case PARAM_TYPE_BLOB:
-        total = ((param_blob_entry_t *)e)->blob_size;
-        src = (const uint8_t *)entry_cache(e)->ptr;
-        break;
-    case PARAM_TYPE_STRING:
-        total = ((param_string_entry_t *)e)->max_len + 1;
-        src = (const uint8_t *)entry_cache(e)->ptr;
-        break;
-    default:
+    if (t >= PARAM_TYPE_COUNT) {
         system_unlock(SYS_LOCK_PARAM);
         return PARAM_ERR_TYPE_MISMATCH;
     }
+
+    /* 长度: 值类型取 param_value_t 宽度, BLOB/STRING 取各自容量;
+       源指针: 值类型取缓存本体, BLOB/STRING 取缓存指向的外部缓冲区 */
+    uint16_t total = param_entry_data_size(e);
+    const uint8_t *src =
+        (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
+            ? (const uint8_t *)entry_cache(e)->ptr
+            : (const uint8_t *)entry_cache(e);
 
     if (!src) {
         system_unlock(SYS_LOCK_PARAM);
@@ -1390,40 +1380,18 @@ int param_write_blob(uint32_t id, const void *buf, uint16_t len)
 /**
  * @brief 获取参数数据大小 (字节数)
  *
- * 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) → sizeof(param_value_t) (平台相关: 32-bit 4B, 64-bit 8B)
- * BLOB → blob_size
- * STRING → max_len + 1 (含结尾 '\0')
- * 未注册 → 0
+ * 长度定义见 param_entry_data_size() (与 param_read_raw 共用):
+ * 值类型 sizeof(param_value_t) (平台相关: 32-bit 4B, 64-bit 8B);
+ * BLOB → blob_size; STRING → max_len + 1 (含结尾 '\0')。
+ *
+ * @param param_id 参数 ID
+ * @return 字节数; 未注册或类型越界返回 0
  */
 uint16_t param_get_size(uint32_t param_id)
 {
     system_lock(SYS_LOCK_PARAM);
     param_entry_t *e = param_entry_find(param_id);
-    if (!e) {
-        system_unlock(SYS_LOCK_PARAM);
-        return 0;
-    }
-
-    uint16_t result;
-    switch (entry_type(e)) {
-    case PARAM_TYPE_UINT:
-    case PARAM_TYPE_INT:
-    case PARAM_TYPE_FLOAT:
-    case PARAM_TYPE_BOOL:
-    case PARAM_TYPE_ENUM:
-    case PARAM_TYPE_EXEC:
-        result = sizeof(param_value_t);
-        break;
-    case PARAM_TYPE_BLOB:
-        result = ((param_blob_entry_t *)e)->blob_size;
-        break;
-    case PARAM_TYPE_STRING:
-        result = ((param_string_entry_t *)e)->max_len + 1;
-        break;
-    default:
-        result = 0;
-        break;
-    }
+    uint16_t result = e ? param_entry_data_size(e) : 0;
     system_unlock(SYS_LOCK_PARAM);
     return result;
 }

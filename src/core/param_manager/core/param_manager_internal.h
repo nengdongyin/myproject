@@ -210,6 +210,41 @@ extern "C"
     }
 
     /**
+     * @brief 条目数据区的字节数 — 全部"长度"语义的唯一定义
+     *
+     * - 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) → sizeof(param_value_t)
+     * - BLOB                                   → blob_size
+     * - STRING                                 → max_len + 1 (含结尾 '\0')
+     * - 类型越界                               → 0
+     *
+     * param_read_raw / param_get_size 必须共用本函数: 同一参数在不同入口上
+     * 若各自推导长度, 很容易出现"一处含 '\0' 一处不含"的隐形不一致。
+     *
+     * @note 返回值 0 有两义 —— 类型越界, 或 BLOB 的 blob_size 本就是 0。
+     *       需要区分时请先用 entry_type() 判类型。
+     * @param e 参数条目
+     * @return 字节数
+     */
+    static inline uint16_t param_entry_data_size(const param_entry_t *e)
+    {
+        switch (entry_type(e)) {
+        case PARAM_TYPE_UINT:
+        case PARAM_TYPE_INT:
+        case PARAM_TYPE_FLOAT:
+        case PARAM_TYPE_BOOL:
+        case PARAM_TYPE_ENUM:
+        case PARAM_TYPE_EXEC:
+            return (uint16_t)sizeof(param_value_t);
+        case PARAM_TYPE_BLOB:
+            return ((const param_blob_entry_t *)e)->blob_size;
+        case PARAM_TYPE_STRING:
+            return (uint16_t)(((const param_string_entry_t *)e)->max_len + 1);
+        default:
+            return 0;
+        }
+    }
+
+    /**
      * @brief 判断参数是否为合法的 EXEC 命令参数
      *
      * 同时满足 PARAM_FLAG_EXEC 标志和 PARAM_TYPE_EXEC 类型才返回 true。
