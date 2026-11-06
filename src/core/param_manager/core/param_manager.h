@@ -576,11 +576,16 @@ extern "C"
          *  返回值约定: 0=全部已恢复；>0=扫描不完整 (如单条记录超出后端扫描
          *  缓冲，大 BLOB/STRING)，param_load_all 会回退到逐条 load；<0=失败。 */
         int (*load_all)(void *ctx);
-        /** 保存指定参数的数据。删除操作请用 delete 回调，不要用 len==0 隐式删除。 */
+        /** 保存指定参数的数据。删除操作请用 delete 回调，不要用 len==0 隐式删除。
+         *
+         *  @return 0 = 已写入; 非 0 = 失败。失败原因不区分 (含后端统一为 -1 的
+         *          情形), 框架在 API 边界统一翻译为 PARAM_ERR_FLASH_FAIL。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
-        /** 删除单个参数的持久化数据 (NULL = 后端不支持) */
+        /** 删除单个参数的持久化数据 (NULL = 后端不支持)
+         *  @return 0 = 已删除; 非 0 = 失败 → PARAM_ERR_FLASH_FAIL */
         int (*delete)(void *ctx, uint32_t param_id);
-        /** 擦除全部持久化数据 */
+        /** 擦除全部持久化数据
+         *  @return 0 = 已擦除; 非 0 = 失败 → PARAM_ERR_FLASH_FAIL */
         int (*erase_all)(void *ctx);
         /** 去初始化存储后端 */
         int (*deinit)(void *ctx);
@@ -704,9 +709,14 @@ extern "C"
      */
     const param_storage_drv_t *param_get_storage_partition(uint8_t index);
 
-    /** @brief 获取当前存储后端的激活分区索引 */
+    /** @brief 获取当前存储后端的激活分区索引
+     *  @param index [out] 分区索引
+     *  @return PARAM_OK 成功; PARAM_ERR_NOT_SUPPORTED 单分区/无存储;
+     *          PARAM_ERR_FLASH_FAIL 读启动分区失败 */
     int param_storage_get_active_partition(uint8_t *index);
-    /** @brief 设置存储后端的激活分区索引 (下次启动生效) */
+    /** @brief 设置存储后端的激活分区索引 (下次启动生效)
+     *  @return PARAM_OK 成功; PARAM_ERR_NOT_SUPPORTED 单分区/无存储;
+     *          PARAM_ERR_FLASH_FAIL 写入启动分区失败 */
     int param_storage_set_active_partition(uint8_t index);
 
     /* ================================================================
@@ -955,9 +965,17 @@ extern "C"
      *        (INIT 阶段照常执行, 见其文档)。
      * ================================================================ */
 
-    /** @brief 保存所有参数到持久化存储 (仅 PARAM_FLAG_PERSIST 标记的参数) */
+    /** @brief 保存所有参数到持久化存储 (仅 PARAM_FLAG_PERSIST 标记的参数)
+     *
+     *  @return PARAM_OK 全部成功 (含未标记 PERSIST、因而未写介质的条目);
+     *          PARAM_ERR_FLASH_FAIL 首个失败条目; PARAM_ERR_NOT_SUPPORTED 本固件
+     *          不持久化; PARAM_ERR_NOT_FOUND 框架未初始化
+     *  @note 写介质失败统一译作 PARAM_ERR_FLASH_FAIL —— 后端以 -1 报错, 若
+     *        直接上抛会与 PARAM_ERR_INVALID_ID 撞码。 */
     int param_save_all(void);
-    /** @brief 保存单个参数到持久化存储 */
+    /** @brief 保存单个参数到持久化存储
+     *  @return 与 param_save_all 同码; 另加 PARAM_ERR_INVALID_ID (ID 未注册)。
+     *          未标记 PERSIST 的参数视为成功 (不写介质)。 */
     int param_save_one(uint32_t param_id);
 
     /**

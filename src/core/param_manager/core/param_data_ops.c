@@ -224,7 +224,9 @@ static int string_save(param_entry_t *e)
  *   - param_data_ops_t::load (本文件, 适配层): 把上述结果翻译成
  *     缓存可见的最终状态 —— 仅"记录存在"时提交缓存,
  *     "不存在"归为 PARAM_OK (缓存不动), 错误码原样上抛。
- *   - param_vtable_t 的 8 个槽位一律只返回 param_status_t。
+ *   - param_vtable_t 的槽位返回 param_status_t; 唯一例外是 save —— 它透传
+ *     后端的 "0/非0" 结果, 由公共 API (param_save_all / param_save_one) 在
+ *     边界处统一翻译为 PARAM_ERR_FLASH_FAIL。
  *
  *  read_len 只在适配层内部使用 (短记录补零需要知道"到底写满了多少"),
  *  不向 param_vtable_t::load 的调用者传播。

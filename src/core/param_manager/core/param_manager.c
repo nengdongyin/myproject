@@ -181,6 +181,29 @@ bool param_hash_insert_entry(param_entry_t *entry)
     return hash_insert(entry);
 }
 
+/** @brief 哈希表遍历回调 */
+typedef void (*param_entry_visit_fn)(param_entry_t *e, void *ctx);
+
+/**
+ * @brief 遍历哈希表全部条目 (调用者持锁)
+ *
+ * param_save_all / param_load_all / param_reset_all 共用的唯一实现:
+ * 逐槽扫描 PARAM_HASH_SIZE 个槽位, 跳过空槽。
+ *
+ * @note 本函数**不**自行加锁 —— 调用者须已持 SYS_LOCK_PARAM, 使回调能在
+ *       同一个临界区内完成整轮遍历, 而不逐条反复进出锁。
+ * @param fn  对每个非空条目调用一次
+ * @param ctx 透传给 fn 的调用方上下文
+ */
+static void param_hash_foreach(param_entry_visit_fn fn, void *ctx)
+{
+    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
+        param_entry_t *e = g_pm.hash[i];
+        if (e)
+            fn(e, ctx);
+    }
+}
+
 /* ================================================================
  *  模块链表 — 按 MODULE_INIT_ORDER 有序插入
  * ================================================================ */
@@ -1439,12 +1462,94 @@ int param_exec(uint32_t cmd_id, void *user_arg)
 /**
  * @brief 模块链表快照的批容量上限
  *
- * 栈上指针数组容量, 不是模块总数上限: param_flush / param_foreach /
- * param_module_foreach 均按此容量分批 —— 每批在锁内只快照指针,
- * 锁外执行回调, 处理完重新进锁续扫 (cursor 游标)。
+ * 栈上指针数组容量, 不是模块总数上限: 分批遍历统一由 param_module_scan
+ * 实现 (锁内按谓词快照至多本值个指针, 锁外回调, 再进锁续扫)。
  * 因此栈占用有界，而模块数无上限。
  */
 #define PARAM_MODULE_BATCH_MAX 8
+
+/** @brief 分批遍历的"谁进批"谓词 — 锁内调用, 不得调用任何加锁 API */
+typedef bool (*param_module_accept_fn)(const param_module_node_t *m, void *ctx);
+/** @brief 分批遍历的"进批后做什么" — 锁外调用, 返回 false 终止整次遍历 */
+typedef bool (*param_module_visit_fn)(param_module_node_t *m, void *ctx);
+
+/**
+ * @brief 分批遍历模块链表 — 锁内只快照指针, 锁外执行 visit
+ *
+ * param_flush / param_foreach / param_module_foreach 共用的唯一实现:
+ * 每批在锁内按 accept 谓词收集至多 PARAM_MODULE_BATCH_MAX 个模块指针,
+ * 解锁后逐个 visit; 本批未扫完则重新进锁从游标处续扫。
+ *
+ * 因此栈占用有界 (一个指针数组), 模块数无上限; 且 visit 期间锁是释放的,
+ * 回调内可安全调用 param_read / param_write / param_save_one 等加锁 API。
+ *
+ * @param accept NULL = 全部模块进批; 谓词在锁内执行, 不得调加锁 API
+ * @param visit  锁外对每个已快照模块调用; 返回 false 立即终止整次遍历
+ * @param ctx    透传给 accept / visit 的调用方上下文
+ */
+static void param_module_scan(param_module_accept_fn accept,
+                              param_module_visit_fn visit, void *ctx)
+{
+    uint16_t cursor = 0; /* 链表游标: 已快照过的节点数 */
+
+    for (;;) {
+        param_module_node_t *batch[PARAM_MODULE_BATCH_MAX];
+        uint16_t n = 0;
+        uint16_t pos = 0;
+        uint8_t more = 0;
+
+        /* ---- 阶段 1 (锁内): 只收集模块指针, 不执行回调 ---- */
+        system_lock(SYS_LOCK_PARAM);
+        for (param_module_node_t *m = g_pm.module_head; m; m = m->next, pos++) {
+            if (pos < cursor)
+                continue;
+            if (n >= PARAM_MODULE_BATCH_MAX) {
+                more = 1; /* 本批已满, 下一轮从当前节点续扫 */
+                break;
+            }
+            if (!accept || accept(m, ctx))
+                batch[n++] = m;
+        }
+        cursor = pos;
+        system_unlock(SYS_LOCK_PARAM);
+
+        /* ---- 阶段 2 (锁外): 执行调用方回调 ---- */
+        for (uint16_t i = 0; i < n; i++) {
+            if (!visit(batch[i], ctx))
+                return;
+        }
+
+        if (!more)
+            return;
+    }
+}
+
+/** @brief param_flush 的分批遍历上下文 */
+typedef struct {
+    int last_err;       /**< 最后一个失败的错误码 */
+    uint16_t err_count; /**< 本轮失败模块数 (饱和于 UINT16_MAX) */
+} flush_ctx_t;
+
+/** @brief param_flush 谓词: 只对"有脏位且提供了 flush 通路"的模块进批 */
+static bool flush_accept(const param_module_node_t *m, void *ctx)
+{
+    (void)ctx;
+    return m->dirty && m->vtable && m->vtable->flush;
+}
+
+/** @brief param_flush 访问体: 执行模块 flush, 失败只记录不中断 */
+static bool flush_visit(param_module_node_t *m, void *ctx)
+{
+    flush_ctx_t *f = (flush_ctx_t *)ctx;
+
+    int ret = m->vtable->flush(m);
+    if (ret != PARAM_OK) {
+        f->last_err = ret;
+        if (f->err_count < UINT16_MAX)
+            f->err_count++;
+    }
+    return true; /* 单个模块失败不中断整轮 */
+}
 
 /**
  * @brief 将所有模块的 dirty 参数刷入硬件
@@ -1454,7 +1559,8 @@ int param_exec(uint32_t cmd_id, void *user_arg)
  * **不覆盖任何用户回调或硬件访问**:
  *
  *   **阶段 1 (锁内)**: 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，
- *     仅把 dirty 模块的**指针**快照到栈上数组，不执行任何回调。
+ *     仅把 dirty 模块的**指针**快照到栈上数组，不执行任何回调
+ *     (分批机制与谓词由 param_module_scan / flush_accept 提供)。
  *     单批容量 PARAM_MODULE_BATCH_MAX，超出则分批: 每批处理完重新进锁
  *     续扫 (cursor 游标)，因此栈占用有界、模块数无上限。
  *
@@ -1490,56 +1596,20 @@ int param_flush(void)
     g_pm.flushing = 1;
     system_unlock(SYS_LOCK_PARAM);
 
-    int last_err = PARAM_OK;
-    uint16_t err_count = 0;
-    uint16_t cursor = 0; /* 链表游标: 已快照过的节点数 */
-
-    for (;;) {
-        param_module_node_t *batch[PARAM_MODULE_BATCH_MAX];
-        uint16_t n = 0;
-        uint16_t pos = 0;
-        uint8_t more = 0;
-
-        /* ---- 阶段 1 (锁内): 只收集 dirty 模块指针, 不执行回调 ---- */
-        system_lock(SYS_LOCK_PARAM);
-        for (param_module_node_t *m = g_pm.module_head; m; m = m->next, pos++) {
-            if (pos < cursor)
-                continue;
-            if (n >= PARAM_MODULE_BATCH_MAX) {
-                more = 1; /* 本批已满, 下一轮从当前节点续扫 */
-                break;
-            }
-            if (m->dirty && m->vtable && m->vtable->flush)
-                batch[n++] = m;
-        }
-        cursor = pos;
-        system_unlock(SYS_LOCK_PARAM);
-
-        /* ---- 阶段 2 (锁外): 执行用户回调 / 硬件访问 ---- */
-        for (uint16_t i = 0; i < n; i++) {
-            int ret = batch[i]->vtable->flush(batch[i]);
-            if (ret != PARAM_OK) {
-                last_err = ret;
-                if (err_count < UINT16_MAX)
-                    err_count++;
-            }
-        }
-
-        if (!more)
-            break;
-    }
+    flush_ctx_t fctx = { .last_err = PARAM_OK, .err_count = 0 };
+    param_module_scan(flush_accept, flush_visit, &fctx);
 
     /* ---- 阶段 3 (锁内): 回写统计 + 释放 flusher ---- */
     system_lock(SYS_LOCK_PARAM);
-    if (err_count) {
-        uint32_t sum = (uint32_t)g_pm.stats.flush_error_count + err_count;
+    if (fctx.err_count) {
+        uint32_t sum = (uint32_t)g_pm.stats.flush_error_count + fctx.err_count;
         g_pm.stats.flush_error_count =
             (sum > UINT16_MAX) ? UINT16_MAX : (uint16_t)sum;
     }
     g_pm.flushing = 0;
     system_unlock(SYS_LOCK_PARAM);
 
-    return last_err;
+    return fctx.last_err;
 }
 
 /** @brief 校验 module_id 是否在 MODULE_INIT_ORDER 中 */
@@ -1586,6 +1656,104 @@ int param_check_flush_integrity(void)
 }
 
 /**
+ * @brief 存储后端返回值 → param_status_t (API 边界的唯一翻译点)
+ *
+ * param_storage_drv_t 的回调以 "0 = 成功, 非 0 = 失败" 表达结果 (三个后端
+ * 均为 0/-1), 而公共 API 一律返回 param_status_t。所有持久化入口 (save /
+ * delete / erase_all) 都经由本函数翻译, 使"写介质失败"在任何入口上都报
+ * 同一个错误码 —— 若直接上抛后端值, -1 会被调用方误读为
+ * PARAM_ERR_INVALID_ID ("无效 ID")。
+ *
+ * @note PARAM_ERR_NOT_SUPPORTED 原样保留: 它表示"本固件不支持该能力"
+ *       (未编译持久化 / 后端缺该回调), 与"介质写入失败"是两件事。
+ *
+ * @param backend_ret 后端回调的返回值
+ * @return PARAM_OK 成功; PARAM_ERR_NOT_SUPPORTED 后端不支持;
+ *         其余一律 PARAM_ERR_FLASH_FAIL
+ */
+static int param_status_from_backend(int backend_ret)
+{
+    if (backend_ret == PARAM_OK)
+        return PARAM_OK;
+    if (backend_ret == PARAM_ERR_NOT_SUPPORTED)
+        return PARAM_ERR_NOT_SUPPORTED;
+    return PARAM_ERR_FLASH_FAIL;
+}
+
+/** @brief 持久化入口所需的存储后端能力 */
+typedef enum {
+    PARAM_CAP_SAVE = 0,   /**< storage->save (逐条写) */
+    PARAM_CAP_LOAD,       /**< storage->load (逐条读) */
+    PARAM_CAP_DELETE,     /**< storage->delete (删单条) */
+    PARAM_CAP_ERASE_ALL,  /**< storage->erase_all (全擦) */
+    PARAM_CAP_GET_ACTIVE, /**< storage->get_active_partition */
+    PARAM_CAP_SET_ACTIVE, /**< storage->set_active_partition */
+} param_storage_cap_t;
+
+/**
+ * @brief 持久化入口公共前导 — 校验框架就绪 + 后端具备指定能力
+ *
+ * 所有持久化 API 的第一步都是同一判断; "框架未初始化"(NOT_FOUND) 与
+ * "本固件不持久化 / 后端缺该回调"(NOT_SUPPORTED) 的区分策略也只在此处定义。
+ *
+ * @param cap 需要的后端回调
+ * @param out 成功时写出当前驱动 (可传 NULL); 失败时不改写
+ * @return PARAM_OK 可用; PARAM_ERR_NOT_FOUND 框架未初始化;
+ *         PARAM_ERR_NOT_SUPPORTED 无存储后端或后端缺该回调
+ */
+static int param_storage_require(param_storage_cap_t cap,
+                                 const param_storage_drv_t **out)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_FOUND;
+
+    const param_storage_drv_t *drv = g_pm.storage;
+    if (!drv)
+        return PARAM_ERR_NOT_SUPPORTED;
+
+    bool ok;
+    switch (cap) {
+    case PARAM_CAP_SAVE:
+        ok = drv->save != NULL;
+        break;
+    case PARAM_CAP_LOAD:
+        ok = drv->load != NULL;
+        break;
+    case PARAM_CAP_DELETE:
+        ok = drv->delete != NULL;
+        break;
+    case PARAM_CAP_ERASE_ALL:
+        ok = drv->erase_all != NULL;
+        break;
+    case PARAM_CAP_GET_ACTIVE:
+        ok = drv->get_active_partition != NULL;
+        break;
+    case PARAM_CAP_SET_ACTIVE:
+        ok = drv->set_active_partition != NULL;
+        break;
+    default:
+        ok = false;
+        break;
+    }
+    if (!ok)
+        return PARAM_ERR_NOT_SUPPORTED;
+
+    if (out)
+        *out = drv;
+    return PARAM_OK;
+}
+
+/** @brief param_save_all 的遍历体: 记录首个失败的错误码, 不中断遍历 */
+static void save_all_visit(param_entry_t *e, void *ctx)
+{
+    int *first_err = (int *)ctx;
+
+    int ret = e->vtable->save(e);
+    if (ret != PARAM_OK && *first_err == PARAM_OK)
+        *first_err = param_status_from_backend(ret);
+}
+
+/**
  * @brief 保存所有 PARAM_FLAG_PERSIST 参数到持久化存储
  *
  * 遍历哈希表，对每个 entry 调用 entry->vtable->save()。
@@ -1595,45 +1763,39 @@ int param_check_flush_integrity(void)
  *   - 遇错收集首个错误码，继续保存后续参数 (不提前退出)
  *   - 避免"第 N 个失败导致剩余参数全部丢失"的不一致状态
  *
- * @return PARAM_OK 全部成功，或第一个失败的错误码
+ * @return PARAM_OK 全部成功，或首个失败的错误码 (经 param_status_from_backend
+ *         归一, 与 param_save_one 同码)
  */
 int param_save_all(void)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
-    if (!g_pm.storage || !g_pm.storage->save)
-        return PARAM_ERR_NOT_SUPPORTED;
+    int ret = param_storage_require(PARAM_CAP_SAVE, NULL);
+    if (ret != PARAM_OK)
+        return ret;
+
     int first_err = PARAM_OK;
 
     system_lock(SYS_LOCK_PARAM);
-    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
-        param_entry_t *e = g_pm.hash[i];
-        if (!e)
-            continue;
-        int ret = e->vtable->save(e);
-        if (ret != 0 && first_err == PARAM_OK)
-            first_err = (ret < 0) ? ret : PARAM_ERR_FLASH_FAIL;
-    }
+    param_hash_foreach(save_all_visit, &first_err);
     system_unlock(SYS_LOCK_PARAM);
     return first_err;
 }
 
-/** @brief 保存单个参数到持久化存储 */
+/** @brief 保存单个参数到持久化存储 (错误码经归一, 与 param_save_all 一致) */
 int param_save_one(uint32_t param_id)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
-    if (!g_pm.storage || !g_pm.storage->save)
-        return PARAM_ERR_NOT_SUPPORTED;
+    int ret = param_storage_require(PARAM_CAP_SAVE, NULL);
+    if (ret != PARAM_OK)
+        return ret;
+
     system_lock(SYS_LOCK_PARAM);
     param_entry_t *e = find_entry(param_id);
     if (!e) {
         system_unlock(SYS_LOCK_PARAM);
         return PARAM_ERR_INVALID_ID;
     }
-    int ret = e->vtable->save(e);
+    ret = e->vtable->save(e);
     system_unlock(SYS_LOCK_PARAM);
-    return ret;
+    return param_status_from_backend(ret);
 }
 
 /* ================================================================
@@ -1642,16 +1804,22 @@ int param_save_one(uint32_t param_id)
 
 int param_storage_get_active_partition(uint8_t *index)
 {
-    if (!g_pm.storage || !g_pm.storage->get_active_partition)
-        return PARAM_ERR_NOT_SUPPORTED;
-    return g_pm.storage->get_active_partition(g_pm.storage->ctx, index);
+    const param_storage_drv_t *drv;
+    int ret = param_storage_require(PARAM_CAP_GET_ACTIVE, &drv);
+    if (ret != PARAM_OK)
+        return ret;
+
+    return param_status_from_backend(drv->get_active_partition(drv->ctx, index));
 }
 
 int param_storage_set_active_partition(uint8_t index)
 {
-    if (!g_pm.storage || !g_pm.storage->set_active_partition)
-        return PARAM_ERR_NOT_SUPPORTED;
-    return g_pm.storage->set_active_partition(g_pm.storage->ctx, index);
+    const param_storage_drv_t *drv;
+    int ret = param_storage_require(PARAM_CAP_SET_ACTIVE, &drv);
+    if (ret != PARAM_OK)
+        return ret;
+
+    return param_status_from_backend(drv->set_active_partition(drv->ctx, index));
 }
 /**
  * @brief 按分区索引获取存储后端驱动实例
@@ -1803,6 +1971,16 @@ int param_migrate_storage(const param_storage_drv_t *storage,
     return PARAM_OK;
 }
 
+/** @brief param_load_all 的遍历体 (兜底逐条加载): 记录首个错误码, 不中断 */
+static void load_all_visit(param_entry_t *e, void *ctx)
+{
+    int *first_err = (int *)ctx;
+
+    int ret = e->vtable->load(e);
+    if (ret != PARAM_OK && *first_err == PARAM_OK)
+        *first_err = ret;
+}
+
 /**
  * @brief 从持久化存储加载所有参数
  *
@@ -1831,32 +2009,22 @@ int param_load_all(void)
     int first_err = PARAM_OK;
 
     /* 无存储后端时跳过 LOAD 阶段, 但 INIT 阶段仍须执行:
-       模块初始化 (标脏/下发默认值) 不依赖持久化 */
-    if (g_pm.storage && g_pm.storage->load) {
+       模块初始化 (标脏/下发默认值) 不依赖持久化。
+       param_storage_require 返回 PARAM_OK 即表示"有后端且提供 load 回调" */
+    const param_storage_drv_t *drv = NULL;
+    if (param_storage_require(PARAM_CAP_LOAD, &drv) == PARAM_OK) {
         system_lock(SYS_LOCK_PARAM);
 
         /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存。
            返回值: 0 = 全部恢复; >0 = 扫描不完整 (如单条记录超出后端
            扫描缓冲), 必须走兜底; <0 = 失败 */
-        int batch_ret = g_pm.storage->load_all
-                            ? g_pm.storage->load_all(g_pm.storage->ctx)
-                            : 0;
+        int batch_ret = drv->load_all ? drv->load_all(drv->ctx) : 0;
 
         /* 第一阶段 (兜底): 逐条加载 — 后端未实现批量 / 批量不完整 /
            批量失败。逐条 load 按条目真实容量读取 (大 BLOB/STRING 也能
            恢复), 它的结果权威: 成功即视为恢复成功 */
-        if (!g_pm.storage->load_all || batch_ret != 0) {
-            int entry_err = PARAM_OK;
-            for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
-                param_entry_t *e = g_pm.hash[i];
-                if (!e)
-                    continue;
-                int ret = e->vtable->load(e);
-                if (ret != PARAM_OK && entry_err == PARAM_OK)
-                    entry_err = ret;
-            }
-            first_err = entry_err;
-        }
+        if (!drv->load_all || batch_ret != 0)
+            param_hash_foreach(load_all_visit, &first_err);
 
         system_unlock(SYS_LOCK_PARAM);
     }
@@ -1892,16 +2060,14 @@ int param_load_all(void)
  */
 int param_load_one(uint32_t param_id)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
-    if (!g_pm.storage || !g_pm.storage->load)
-        return PARAM_ERR_NOT_SUPPORTED;
+    int ret = param_storage_require(PARAM_CAP_LOAD, NULL);
+    if (ret != PARAM_OK)
+        return ret;
 
     param_entry_t *e = find_entry(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
-    int ret;
     system_lock(SYS_LOCK_PARAM);
     ret = e->vtable->load(e);
     system_unlock(SYS_LOCK_PARAM);
@@ -1918,28 +2084,35 @@ int param_load_one(uint32_t param_id)
 /** @brief 删除单个参数的持久化数据 */
 int param_delete_one(uint32_t param_id)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
-    if (!g_pm.storage || !g_pm.storage->delete)
-        return PARAM_ERR_NOT_SUPPORTED;
-    int ret = g_pm.storage->delete(g_pm.storage->ctx, param_id);
-    return (ret == 0) ? PARAM_OK : PARAM_ERR_FLASH_FAIL;
+    const param_storage_drv_t *drv;
+    int ret = param_storage_require(PARAM_CAP_DELETE, &drv);
+    if (ret != PARAM_OK)
+        return ret;
+
+    return param_status_from_backend(drv->delete(drv->ctx, param_id));
 }
 
 /** @brief 擦除全部持久化数据 */
 int param_delete_all(void)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
-    if (!g_pm.storage || !g_pm.storage->erase_all)
-        return PARAM_ERR_NOT_SUPPORTED;
-    int ret = g_pm.storage->erase_all(g_pm.storage->ctx);
-    return (ret == 0) ? PARAM_OK : PARAM_ERR_FLASH_FAIL;
+    const param_storage_drv_t *drv;
+    int ret = param_storage_require(PARAM_CAP_ERASE_ALL, &drv);
+    if (ret != PARAM_OK)
+        return ret;
+
+    return param_status_from_backend(drv->erase_all(drv->ctx));
 }
 
 /* ================================================================
  *  reset / stats / foreach / range / validate
  * ================================================================ */
+
+/** @brief param_reset_all 的遍历体: 全部条目恢复默认值 */
+static void reset_all_visit(param_entry_t *e, void *ctx)
+{
+    (void)ctx;
+    e->vtable->reset(e);
+}
 
 /**
  * @brief 重置所有参数为默认值
@@ -1960,12 +2133,7 @@ int param_reset_all(void)
 
     system_lock(SYS_LOCK_PARAM);
 
-    for (uint16_t i = 0; i < PARAM_HASH_SIZE; i++) {
-        param_entry_t *e = g_pm.hash[i];
-        if (!e)
-            continue;
-        e->vtable->reset(e);
-    }
+    param_hash_foreach(reset_all_visit, NULL);
 
     system_unlock(SYS_LOCK_PARAM);
 
@@ -2049,6 +2217,35 @@ void param_clear_stats(void)
     system_unlock(SYS_LOCK_PARAM);
 }
 
+/** @brief param_foreach 的分批遍历上下文 */
+typedef struct {
+    uint16_t module_id;
+    param_foreach_fn cb;
+    void *user_data;
+} foreach_ctx_t;
+
+/** @brief param_foreach 谓词: module_id == 0 表示全部模块 */
+static bool foreach_accept(const param_module_node_t *m, void *ctx)
+{
+    const foreach_ctx_t *f = (const foreach_ctx_t *)ctx;
+    return f->module_id == 0 || m->module_id == f->module_id;
+}
+
+/** @brief param_foreach 访问体: 逐条目调用 cb, 调用者返 false 则终止整次遍历 */
+static bool foreach_visit(param_module_node_t *m, void *ctx)
+{
+    foreach_ctx_t *f = (foreach_ctx_t *)ctx;
+
+    for (uint16_t k = 0; k < m->param_count; k++) {
+        param_entry_t *e = m->table[k];
+        if (!e)
+            continue;
+        if (!f->cb(e, f->user_data))
+            return false;
+    }
+    return true;
+}
+
 /**
  * @brief 遍历指定模块或全部模块的参数条目
  *
@@ -2072,47 +2269,8 @@ void param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data)
     if (!g_pm.initialized || !cb)
         return;
 
-    uint16_t cursor = 0; /* 链表游标: 已快照过的节点数 */
-    uint8_t stop = 0;
-
-    while (!stop) {
-        param_module_node_t *batch[PARAM_MODULE_BATCH_MAX];
-        uint16_t n = 0;
-        uint16_t pos = 0;
-        uint8_t more = 0;
-
-        /* ---- 阶段 1 (锁内): 只收集模块指针 ---- */
-        system_lock(SYS_LOCK_PARAM);
-        for (param_module_node_t *m = g_pm.module_head; m; m = m->next, pos++) {
-            if (pos < cursor)
-                continue;
-            if (n >= PARAM_MODULE_BATCH_MAX) {
-                more = 1;
-                break;
-            }
-            if (module_id == 0 || m->module_id == module_id)
-                batch[n++] = m;
-        }
-        cursor = pos;
-        system_unlock(SYS_LOCK_PARAM);
-
-        /* ---- 阶段 2 (锁外): 逐条目调用用户回调 ---- */
-        for (uint16_t i = 0; i < n && !stop; i++) {
-            param_module_node_t *m = batch[i];
-            for (uint16_t k = 0; k < m->param_count; k++) {
-                param_entry_t *e = m->table[k];
-                if (!e)
-                    continue;
-                if (!cb(e, user_data)) {
-                    stop = 1;
-                    break;
-                }
-            }
-        }
-
-        if (!more)
-            break;
-    }
+    foreach_ctx_t fctx = { .module_id = module_id, .cb = cb, .user_data = user_data };
+    param_module_scan(foreach_accept, foreach_visit, &fctx);
 }
 
 /**
@@ -2166,7 +2324,14 @@ int param_set_range(uint32_t param_id,
     return PARAM_OK;
 }
 
-/** @brief 对所有已注册参数执行范围裁剪 */
+/**
+ * @brief 对所有已注册参数执行范围裁剪
+ *
+ * @note 全程持锁, **不**走 param_module_scan 的分批路径: 裁剪直接改写
+ *       entry->cache, 若在锁外执行, 与并发 param_write 的
+ *       "读缓存 → 裁剪 → 写回" 之间会丢失对方刚写入的值。
+ *       此处只做内存内的 clamp (无 I/O), 持锁代价可忽略。
+ */
 void param_validate_all(void)
 {
     if (!g_pm.initialized)
@@ -2184,47 +2349,34 @@ void param_validate_all(void)
     system_unlock(SYS_LOCK_PARAM);
 }
 
+/** @brief param_module_foreach 的分批遍历上下文 */
+typedef struct {
+    param_module_iter_fn cb;
+    void *ctx;
+} module_iter_ctx_t;
+
+/** @brief param_module_foreach 访问体: 模块级回调无返回值, 恒继续 */
+static bool module_iter_visit(param_module_node_t *m, void *ctx)
+{
+    module_iter_ctx_t *f = (module_iter_ctx_t *)ctx;
+    f->cb(m, f->ctx);
+    return true;
+}
+
 /**
  * @brief 遍历所有已注册模块节点
  *
  * @details
- * 两阶段执行: 锁内只快照模块指针 (每批 PARAM_MODULE_BATCH_MAX 个),
- * 锁外调用 cb。因此 cb 内可安全调用 param_* 加锁 API。
+ * 分批机制见 param_module_scan: 锁内只快照模块指针, 锁外调用 cb。
+ * 因此 cb 内可安全调用 param_* 加锁 API。
  */
 void param_module_foreach(param_module_iter_fn cb, void *ctx)
 {
     if (!g_pm.initialized || !cb)
         return;
 
-    uint16_t cursor = 0; /* 链表游标: 已快照过的节点数 */
-
-    for (;;) {
-        param_module_node_t *batch[PARAM_MODULE_BATCH_MAX];
-        uint16_t n = 0;
-        uint16_t pos = 0;
-        uint8_t more = 0;
-
-        /* ---- 阶段 1 (锁内): 只收集模块指针 ---- */
-        system_lock(SYS_LOCK_PARAM);
-        for (param_module_node_t *m = g_pm.module_head; m; m = m->next, pos++) {
-            if (pos < cursor)
-                continue;
-            if (n >= PARAM_MODULE_BATCH_MAX) {
-                more = 1;
-                break;
-            }
-            batch[n++] = m;
-        }
-        cursor = pos;
-        system_unlock(SYS_LOCK_PARAM);
-
-        /* ---- 阶段 2 (锁外): 调用用户回调 ---- */
-        for (uint16_t i = 0; i < n; i++)
-            cb(batch[i], ctx);
-
-        if (!more)
-            break;
-    }
+    module_iter_ctx_t fctx = { .cb = cb, .ctx = ctx };
+    param_module_scan(NULL, module_iter_visit, &fctx);
 }
 
 #if PARAM_MODULE_AUTO_REGISTER_ENABLE
