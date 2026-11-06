@@ -56,7 +56,11 @@ extern "C"
     /** @brief 通过 module_id 查找模块节点 (遍历链表) */
     param_module_node_t *param_module_find(uint16_t module_id);
 
-    /** @brief 通过 param_id 查找参数条目 (哈希查找) */
+    /** @brief 通过 param_id 查找参数条目 (哈希查找)
+     *  @note 条目只在注册期插入、运行期不删除, 因此无锁查找读到的条目集合是
+     *        稳定的; 需要与注册/反初始化严格互斥的调用方, 自行在外层持
+     *        SYS_LOCK_PARAM。
+     *  @return 条目指针; NULL = 未注册 */
     param_entry_t *param_entry_find(uint32_t param_id);
 
     /**

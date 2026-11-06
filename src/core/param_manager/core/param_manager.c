@@ -283,14 +283,19 @@ void param_module_node_insert(param_module_node_t *node)
     g_pm.module_tail = node;
 }
 
-static param_entry_t *find_entry(uint32_t param_id)
-{
-    return hash_find(param_id);
-}
-
+/**
+ * @brief 通过 param_id 查找参数条目 (哈希 + 线性探测, 见 hash_find)
+ *
+ * 框架内各路径与 param_data_ops.c 的批量恢复均经此函数查找条目 ——
+ * 只此一层, 不再包转发函数。
+ *
+ * @note 调用方若需哈希表一致性保证, 自行在外层持 SYS_LOCK_PARAM。
+ * @param param_id 参数 ID
+ * @return 条目指针, NULL = 未注册
+ */
 param_entry_t *param_entry_find(uint32_t param_id)
 {
-    return find_entry(param_id);
+    return hash_find(param_id);
 }
 
 /* ================================================================
@@ -872,7 +877,7 @@ static int param_write_resolve(uint32_t param_id, param_entry_t **out,
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
 
-    param_entry_t *e = find_entry(param_id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
@@ -1038,7 +1043,7 @@ int param_read(uint32_t param_id, param_value_t *value)
     if (!value)
         return PARAM_ERR_INVALID_ID;
 
-    param_entry_t *e = find_entry(param_id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
     int ret = e->vtable->read(e, value);
@@ -1053,7 +1058,7 @@ int param_read_cache(uint32_t param_id, param_value_t *value)
         return PARAM_ERR_INVALID_ID;
 
     system_lock(SYS_LOCK_PARAM);
-    param_entry_t *e = find_entry(param_id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e) {
         system_unlock(SYS_LOCK_PARAM);
         return PARAM_ERR_INVALID_ID;
@@ -1085,7 +1090,7 @@ int param_update(uint32_t param_id)
     if (ret != PARAM_OK)
         return ret;
 
-    param_entry_t *e = find_entry(param_id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
@@ -1756,7 +1761,7 @@ int param_save_one(uint32_t param_id)
         return ret;
 
     system_lock(SYS_LOCK_PARAM);
-    param_entry_t *e = find_entry(param_id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e) {
         system_unlock(SYS_LOCK_PARAM);
         return PARAM_ERR_INVALID_ID;
@@ -2032,7 +2037,7 @@ int param_load_one(uint32_t param_id)
     if (ret != PARAM_OK)
         return ret;
 
-    param_entry_t *e = find_entry(param_id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
 
@@ -2138,7 +2143,7 @@ int param_reset_one(uint32_t param_id)
     int ret;
 
     system_lock(SYS_LOCK_PARAM);
-    e = find_entry(param_id);
+    e = param_entry_find(param_id);
     if (!e) {
         system_unlock(SYS_LOCK_PARAM);
         return PARAM_ERR_INVALID_ID;
@@ -2256,7 +2261,7 @@ int param_set_range(uint32_t param_id,
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_FOUND;
     system_lock(SYS_LOCK_PARAM);
-    param_entry_t *e = find_entry(param_id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e) {
         system_unlock(SYS_LOCK_PARAM);
         return PARAM_ERR_INVALID_ID;
