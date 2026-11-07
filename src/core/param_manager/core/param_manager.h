@@ -122,6 +122,11 @@ extern "C"
          *  与 PARAM_ERR_NOT_FOUND("查不到实体") 区分: 本码表示"本固件不支持",
          *  重试无意义; 通常由构建配置决定, 运行期不会自行恢复。 */
         PARAM_ERR_NOT_SUPPORTED = -11,
+        /** 框架尚未初始化: param_init 未调用, 或已 param_deinit。
+         *  与 PARAM_ERR_NOT_FOUND ("ID/模块查不到") 区分: 本码与传入的 ID
+         *  无关, 任何调用在未初始化时都得到它; 唯一处理方式是先完成全局
+         *  初始化, 重复试当前调用无意义。 */
+        PARAM_ERR_NOT_INITIALIZED = -12,
     } param_status_t;
 
     typedef struct param_module param_module_t;
@@ -543,9 +548,9 @@ extern "C"
      * 自己遍历: 后端只见到本结构体, 不需要认识 param_cache_restore /
      * param_entry_t / 框架内部头文件 (依赖方向: 后端 → 本端口 → 框架)。
      *
-     * @note restore 由框架在 SYS_LOCK_PARAM **持锁状态下**调用 —— 实现方
-     *       不得在 restore 内再调用任何加锁 API (端口层为非递归锁),
-     *       框架侧的实现据此也不必自行加锁。
+     * @note 框架在 SYS_LOCK_PARAM **之外**把 sink 交给后端 (整段存储扫描
+     *       不在临界区内); 每条记录提交时由 restore 的实现方 (框架侧)
+     *       自行加锁。后端只负责逐条推送, 不需要也不得为它加锁。
      */
     typedef struct param_restore_sink
     {
@@ -619,10 +624,20 @@ extern "C"
          *  @return 0=全部记录已推完；>0=扫描不完整 (存在未被接受的记录: 单条
          *          超出后端扫描缓冲的大 BLOB/STRING, 或 restore 拒绝),
          *          param_load_all 会回退到逐条 load；<0=失败
-         *  @note sink 与 sink->ctx 仅在本次调用期间有效, 后端不得缓存。 */
+         *  @note sink 与 sink->ctx 仅在本次调用期间有效, 后端不得缓存。
+         *  @note 框架在 SYS_LOCK_PARAM **之外**调用本回调: Flash 扫描期间
+         *        不持全局锁, 其他任务可正常访问参数。 */
         int (*load_all)(void *ctx, const param_restore_sink_t *sink);
         /** 保存指定参数的数据。删除操作请用 delete 回调，不要用 len==0 隐式删除。
          *
+         *  @note 框架在 SYS_LOCK_PARAM **持锁状态下**调用本回调。这把锁同时
+         *        承担"同一时刻只有一个后端调用"的串行化: 存储后端的内部
+         *        可变状态 (mkv 的 write_offset、iniparser 的字典与临时文件)
+         *        没有自己的锁, 完全依赖本锁互斥。因此回调内**不得**再调
+         *        任何加锁 API (端口层为非递归锁)。持有时间仅覆盖单条记录,
+         *        而不是整轮保存。
+         *  @note 传入的 data 在调用期间不会被并发修改 (写入路径同样持锁),
+         *        但返回后缓存可能立即变化 —— 需跨调用一致请由调用者同步。
          *  @return 0 = 已写入; 非 0 = 失败。失败原因不区分 (含后端统一为 -1 的
          *          情形), 框架在 API 边界统一翻译为 PARAM_ERR_FLASH_FAIL。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
@@ -636,8 +651,11 @@ extern "C"
          *  逐条的 PERSIST 过滤仍由 param_data_ops 层负责。
          *
          *  @note 二者必须同时提供, 或同时为 NULL。
-         *  @note 框架在 SYS_LOCK_PARAM **之外**调用 begin/commit (锁内只做
-         *        逐条 save 所需的遍历), 实现内可安全调用加锁 API。
+         *  @note begin / commit 在 SYS_LOCK_PARAM **之外**调用, 实现内可安全
+         *        调用加锁 API; 但夹在中间的逐条 save 由框架**逐条持锁**调用
+         *        (见 save 槽位: 后端内部状态靠该锁互斥), 因此"批量模式"标记
+         *        必须保存在后端实例上 —— 它要跨越框架释放锁的间隙持续有效,
+         *        不能只存在于某次调用的栈上。
          *  @return 0 = 已进入批量模式; 非 0 = 失败 (param_save_all 直接上抛,
          *          不退化为逐条 —— 免得"批量不可用"被静默掩盖)。 */
         int (*save_begin)(void *ctx);
@@ -1037,9 +1055,12 @@ extern "C"
      *  @return PARAM_OK 全部成功 (含未标记 PERSIST、因而未写介质的条目);
      *          PARAM_ERR_FLASH_FAIL 任一失败 (逐条路径为首个失败条目; 批量路径由
      *          后端 save_commit 上报); PARAM_ERR_NOT_SUPPORTED 本固件
-     *          不持久化; PARAM_ERR_NOT_FOUND 框架未初始化
+     *          不持久化; PARAM_ERR_NOT_INITIALIZED 框架未初始化
      *  @note 写介质失败统一译作 PARAM_ERR_FLASH_FAIL —— 后端以 -1 报错, 若
-     *        直接上抛会与 PARAM_ERR_INVALID_ID 撞码。 */
+     *        直接上抛会与 PARAM_ERR_INVALID_ID 撞码。
+     *  @note 锁域: 锁内只快照条目指针 (每批若干), 每条 save 单独持锁;
+     *        save_begin / save_commit 在锁外调用。因此锁不会被跨整轮保存
+     *        持有, 但仍保证"两个后端调用不并发" (见 save 槽位的说明)。 */
     int param_save_all(void);
     /** @brief 保存单个参数到持久化存储
      *  @return 与 param_save_all 同码; 另加 PARAM_ERR_INVALID_ID (ID 未注册)。
@@ -1065,6 +1086,15 @@ extern "C"
      * 回调作为恢复后的重新校验入口。
      *
      * @return PARAM_OK 成功，或第一个失败的错误码
+     *
+     * @note 锁域: LOAD 阶段不在临界区内跨整轮持有。批量通路 (后端提供
+     *   load_all) 下只有每条记录的提交在临界区内, 整段存储扫描是锁外的;
+     *   逐条兜底路径因 vtable->load 无法拆分“读介质/写缓存”, 每条单独持锁
+     *   (持有时间收敛到单条, 而非整轮)。INIT 阶段本就在锁外。
+     * @note 批量通路因此假定**本函数与保存操作不并发** (与 param_init 的
+     *   单线程假设一致, 典型场景是启动或分区切换); 且恢复期间读者可能
+     *   观察到部分恢复的缓存 (与 INIT 阶段同级语义)。需要严格隔离时
+     *   请由调用者自行串行化。
      */
     int param_load_all(void);
     /** @brief 从持久化存储加载单个参数 (恢复后经 write 回调重新校验, 见 param_load_all 的生效契约) */

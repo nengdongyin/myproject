@@ -185,13 +185,14 @@ bool param_hash_insert_entry(param_entry_t *entry)
 typedef void (*param_entry_visit_fn)(param_entry_t *e, void *ctx);
 
 /**
- * @brief 遍历哈希表全部条目 (调用者持锁)
+ * @brief 遍历哈希表全部条目 (调用者持锁, 无 I/O 场景专用)
  *
- * param_save_all / param_load_all / param_reset_all 共用的唯一实现:
- * 逐槽扫描 PARAM_HASH_SIZE 个槽位, 跳过空槽。
+ * 逐槽扫描 PARAM_HASH_SIZE 个槽位, 跳过空槽。仅供 param_reset_all 使用:
+ * 它是纯内存操作, 一整轮放在同一个临界区里比逐条进出锁更划算。
  *
- * @note 本函数**不**自行加锁 —— 调用者须已持 SYS_LOCK_PARAM, 使回调能在
- *       同一个临界区内完成整轮遍历, 而不逐条反复进出锁。
+ * @note 本函数**不**自行加锁 —— 调用者须已持 SYS_LOCK_PARAM。
+ * @note 需要**锁外执行介质 I/O** 的调用方 (param_save_all /
+ *       param_load_all) 请用 param_hash_scan, 不要用本函数。
  * @param fn  对每个非空条目调用一次
  * @param ctx 透传给 fn 的调用方上下文
  */
@@ -201,6 +202,45 @@ static void param_hash_foreach(param_entry_visit_fn fn, void *ctx)
         param_entry_t *e = g_pm.hash[i];
         if (e)
             fn(e, ctx);
+    }
+}
+
+/** @brief 哈希分批遍历的批容量 (栈上指针数组, 与 PARAM_MODULE_BATCH_MAX 同量级) */
+#define PARAM_HASH_BATCH_MAX 8
+
+/**
+ * @brief 分批遍历哈希表 — 锁内只快照指针, 锁外执行回调
+ *
+ * 持久化入口 (param_save_all / param_load_all 的兜底路径) 专用: 把介质
+ * 访问放到锁外, 避免"整轮持久化期间一直持锁"。
+ *
+ * 锁外使用快照指针之所以安全: 条目只在注册期插入、运行期不摘除 (静态
+ * 对象), 指针生命周期与注册表一致; 其缓存内容为 best-effort 快照。
+ *
+ * @note 回调在锁外执行, 可安全调用加锁 API。
+ * @param fn  对每个非空条目调用一次 (锁外)
+ * @param ctx 透传给 fn 的调用方上下文
+ */
+static void param_hash_scan(param_entry_visit_fn fn, void *ctx)
+{
+    uint16_t slot = 0;
+
+    while (slot < PARAM_HASH_SIZE) {
+        param_entry_t *batch[PARAM_HASH_BATCH_MAX];
+        uint16_t n = 0;
+
+        /* ---- 阶段 1 (锁内): 只收集指针, 不执行回调 ---- */
+        system_lock(SYS_LOCK_PARAM);
+        while (slot < PARAM_HASH_SIZE && n < PARAM_HASH_BATCH_MAX) {
+            param_entry_t *e = g_pm.hash[slot++];
+            if (e)
+                batch[n++] = e;
+        }
+        system_unlock(SYS_LOCK_PARAM);
+
+        /* ---- 阶段 2 (锁外): 执行调用方回调 ---- */
+        for (uint16_t i = 0; i < n; i++)
+            fn(batch[i], ctx);
     }
 }
 
@@ -417,7 +457,7 @@ int param_module_register_node(param_module_node_t *node,
                                uint16_t count)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!node || !entries || count == 0)
         return PARAM_ERR_INVALID_ID;
 
@@ -868,14 +908,14 @@ static void param_notify_effective(uint32_t param_id, param_entry_t *e)
  * @param[out] out        解析到的条目 (仅在返回 PARAM_OK 时有效)
  * @param reject_ptr_types true = 拒绝 BLOB/STRING (调用入口没有长度信息,
  *                        向 STRING 条目写 .u32 会被当成指针解引用)
- * @return PARAM_OK 成功; PARAM_ERR_NOT_FOUND 未初始化;
+ * @return PARAM_OK 成功; PARAM_ERR_NOT_INITIALIZED 未初始化;
  *         PARAM_ERR_INVALID_ID 参数不存在; PARAM_ERR_TYPE_MISMATCH 类型被拦
  */
 static int param_write_resolve(uint32_t param_id, param_entry_t **out,
                                bool reject_ptr_types)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
 
     param_entry_t *e = param_entry_find(param_id);
     if (!e)
@@ -997,9 +1037,9 @@ int param_write_immediate(uint32_t param_id, param_value_t value)
 int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
 {
     /* 检查顺序: 未初始化优先于 data/len 校验 —— 框架未初始化时任何调用
-       都返回 PARAM_ERR_NOT_FOUND */
+       都返回 PARAM_ERR_NOT_INITIALIZED */
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!data || len == 0)
         return PARAM_ERR_INVALID_ID;
 
@@ -1039,7 +1079,7 @@ int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
 int param_read(uint32_t param_id, param_value_t *value)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!value)
         return PARAM_ERR_INVALID_ID;
 
@@ -1053,7 +1093,7 @@ int param_read(uint32_t param_id, param_value_t *value)
 int param_read_cache(uint32_t param_id, param_value_t *value)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!value)
         return PARAM_ERR_INVALID_ID;
 
@@ -1078,7 +1118,7 @@ int param_read_cache(uint32_t param_id, param_value_t *value)
 int param_update(uint32_t param_id)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
 
     /* 先取缓存快照 (param_read_cache 锁内), 再重放完整写入路径
        (pre_write → apply → cache_update → dirty → notify)。
@@ -1136,7 +1176,7 @@ int param_update(uint32_t param_id)
 int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!len)
         return PARAM_ERR_INVALID_ID;
 
@@ -1251,7 +1291,7 @@ int param_read_bool(uint32_t id, bool *val)
 int param_read_string(uint32_t id, char *buf, uint16_t buf_size)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!buf || buf_size == 0)
         return PARAM_ERR_INVALID_ID;
 
@@ -1313,7 +1353,7 @@ static int param_write_typed_tail(uint32_t param_id, param_entry_t *e)
 int param_write_string(uint32_t id, const char *str)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!str)
         return PARAM_ERR_INVALID_ID;
 
@@ -1358,7 +1398,7 @@ int param_write_string(uint32_t id, const char *str)
 int param_write_blob(uint32_t id, const void *buf, uint16_t len)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     if (!buf)
         return PARAM_ERR_INVALID_ID;
 
@@ -1415,7 +1455,7 @@ uint16_t param_get_size(uint32_t param_id)
 int param_exec(uint32_t cmd_id, void *user_arg)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     system_lock(SYS_LOCK_PARAM);
     param_entry_t *e = param_entry_find(cmd_id);
     if (!param_entry_is_exec(e)) {
@@ -1558,7 +1598,7 @@ static bool flush_visit(param_module_node_t *m, void *ctx)
 int param_flush(void)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
 
     /* ---- 阶段 0 (锁内): 单 flusher 互斥 ---- */
     system_lock(SYS_LOCK_PARAM);
@@ -1604,7 +1644,7 @@ static bool module_order_contains(const uint16_t *order, uint16_t count,
 int param_check_flush_integrity(void)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
 
     g_pm.stats.flush_order_miss_count = 0;
 
@@ -1666,19 +1706,19 @@ typedef enum {
 /**
  * @brief 持久化入口公共前导 — 校验框架就绪 + 后端具备指定能力
  *
- * 所有持久化 API 的第一步都是同一判断; "框架未初始化"(NOT_FOUND) 与
+ * 所有持久化 API 的第一步都是同一判断; "框架未初始化"(NOT_INITIALIZED) 与
  * "本固件不持久化 / 后端缺该回调"(NOT_SUPPORTED) 的区分策略也只在此处定义。
  *
  * @param cap 需要的后端回调
  * @param out 成功时写出当前驱动 (可传 NULL); 失败时不改写
- * @return PARAM_OK 可用; PARAM_ERR_NOT_FOUND 框架未初始化;
+ * @return PARAM_OK 可用; PARAM_ERR_NOT_INITIALIZED 框架未初始化;
  *         PARAM_ERR_NOT_SUPPORTED 无存储后端或后端缺该回调
  */
 static int param_storage_require(param_storage_cap_t cap,
                                  const param_storage_drv_t **out)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
 
     const param_storage_drv_t *drv = g_pm.storage;
     if (!drv)
@@ -1716,12 +1756,23 @@ static int param_storage_require(param_storage_cap_t cap,
     return PARAM_OK;
 }
 
-/** @brief param_save_all 的遍历体: 记录首个失败的错误码, 不中断遍历 */
+/** @brief param_save_all 的遍历体: 记录首个失败的错误码, 不中断遍历
+ *
+ * @note 由 param_hash_scan 在锁外调用, 故本函数**自行持锁**包住单条 save。
+ *       不得省掉这把锁: vtable->save 虽然只读缓存, 但它驱动存储后端,
+ *       而后端的内部可变状态 (mkv 的 write_offset / iniparser 的字典与
+ *       .tmp 文件) 没有自己的锁 —— 框架锁是它们唯一的串行化来源。
+ *       去掉后两次并发保存会写到同一偏移 / 同一临时文件, 造成记录覆盖。
+ *       锁持有时间因此收敛到单条介质写, 而不是整轮。
+ */
 static void save_all_visit(param_entry_t *e, void *ctx)
 {
     int *first_err = (int *)ctx;
 
+    system_lock(SYS_LOCK_PARAM);
     int ret = e->vtable->save(e);
+    system_unlock(SYS_LOCK_PARAM);
+
     if (ret != PARAM_OK && *first_err == PARAM_OK)
         *first_err = param_status_from_backend(ret);
 }
@@ -1759,12 +1810,13 @@ int param_save_all(void)
             return param_status_from_backend(bret); /* 不退化: 免得"批量不可用"被静默掩盖 */
     }
 
-    /* 逐条保存 (无批量后端走同一路径): 收集首个错误码, 不提前退出 */
+    /* 逐条保存 (无批量后端走同一路径): 收集首个错误码, 不提前退出。
+       遍历经 param_hash_scan: 锁内只快照条目指针, 回调内再单独持锁包住
+       单条 save —— 两次并发保存因此不会同时进入后端 (见 save_all_visit),
+       而锁的持有时间也从"整轮"收敛到"单条"。 */
     int first_err = PARAM_OK;
 
-    system_lock(SYS_LOCK_PARAM);
-    param_hash_foreach(save_all_visit, &first_err);
-    system_unlock(SYS_LOCK_PARAM);
+    param_hash_scan(save_all_visit, &first_err);
 
     /* 提交: 即使中间有条目 save 失败也照样调用 (提交已成功部分,
        错误码已在 first_err 里, 此处只补"无更早错误时"的提交失败) */
@@ -1777,21 +1829,26 @@ int param_save_all(void)
     return first_err;
 }
 
-/** @brief 保存单个参数到持久化存储 (错误码经归一, 与 param_save_all 一致) */
+/** @brief 保存单个参数到持久化存储 (错误码经归一, 与 param_save_all 一致)
+ *
+ * @note 查找无需持锁 (条目只增不删), 但 save 本身必须持锁: 存储后端的内部
+ *       可变状态 (mkv 的 write_offset、iniparser 的字典/临时文件) 靠框架锁
+ *       串行化, 没有自己的锁 (与 save_all_visit 同一理由)。
+ */
 int param_save_one(uint32_t param_id)
 {
     int ret = param_storage_require(PARAM_CAP_SAVE, NULL);
     if (ret != PARAM_OK)
         return ret;
 
-    system_lock(SYS_LOCK_PARAM);
     param_entry_t *e = param_entry_find(param_id);
-    if (!e) {
-        system_unlock(SYS_LOCK_PARAM);
+    if (!e)
         return PARAM_ERR_INVALID_ID;
-    }
+
+    system_lock(SYS_LOCK_PARAM);
     ret = e->vtable->save(e);
     system_unlock(SYS_LOCK_PARAM);
+
     return param_status_from_backend(ret);
 }
 
@@ -1825,8 +1882,11 @@ int param_storage_set_active_partition(uint8_t index)
  * 封装 `g_pm.storage->get_partition(ctx, index)` 虚函数调用。
  * 调用者通常随后用 param_set_storage() 切换并 param_load_all()。
  *
- * @note 持 SYS_LOCK_PARAM 锁调用 get_partition，防御性保护
- *       g_pm.storage 指针在调用期间不被并发修改。
+ * @note 锁域: 锁内只快照 g_pm.storage 指针, get_partition 在锁外调用 ——
+ *       工厂会触发介质 I/O 与后端初始化 (mkv_init 扇区扫描 / iniparser
+ *       解析 INI / fdb_kvdb_init), 不该占着参数锁。取到快照后即使并发
+ *       param_set_storage() 换掉后端也没问题: 旧驱动在替换后依然有效
+ *       (见 param_set_storage 的语义), 且本次调用本就返回旧后端的实例。
  *
  * @param index 分区索引 (PARAM_PARTITION_FACTORY=factory, PARAM_PARTITION_USER_MIN~MAX=用户)
  * @return 驱动指针，存储未初始化或不支持 get_partition 时返回 NULL
@@ -1834,23 +1894,13 @@ int param_storage_set_active_partition(uint8_t index)
 const param_storage_drv_t *param_get_storage_partition(uint8_t index)
 {
     system_lock(SYS_LOCK_PARAM);
-
-    if (!g_pm.initialized || !g_pm.storage)
-    {
-        system_unlock(SYS_LOCK_PARAM);
-        return NULL;
-    }
-    if (!g_pm.storage->get_partition)
-    {
-        system_unlock(SYS_LOCK_PARAM);
-        return NULL;
-    }
-
-    const param_storage_drv_t *drv =
-        g_pm.storage->get_partition(g_pm.storage->ctx, index);
-
+    const param_storage_drv_t *drv = g_pm.initialized ? g_pm.storage : NULL;
     system_unlock(SYS_LOCK_PARAM);
-    return drv;
+
+    if (!drv || !drv->get_partition)
+        return NULL;
+
+    return drv->get_partition(drv->ctx, index);
 }
 
 /* ================================================================
@@ -1985,7 +2035,15 @@ static int param_load_restore(void *ctx, uint32_t param_id,
                               const uint8_t *data, uint16_t len)
 {
     (void)ctx;
-    return param_cache_restore(param_id, data, len);
+
+    /* 框架在锁外把 sink 交给后端 (整个 Flash 扫描不在临界区内), 故本处
+       自行加锁保护缓存写入; param_cache_restore 本身假定调用者持锁。
+       每条记录的提交是原子的, 后端扫描期间其他任务可正常访问参数。 */
+    system_lock(SYS_LOCK_PARAM);
+    int ret = param_cache_restore(param_id, data, len);
+    system_unlock(SYS_LOCK_PARAM);
+
+    return ret;
 }
 
 /** @brief 供 load_all 注入的数据出口 (无状态, 可静态共享) */
@@ -1994,12 +2052,21 @@ static const param_restore_sink_t g_load_sink = {
     .restore = param_load_restore,
 };
 
-/** @brief param_load_all 的遍历体 (兜底逐条加载): 记录首个错误码, 不中断 */
+/** @brief param_load_all 的遍历体 (兜底逐条加载): 记录首个错误码, 不中断
+ *
+ * @note 由 param_hash_scan 在锁外调用, 故本函数自行持锁: vtable->load 把
+ *       "读介质"与"写缓存"绑在一起, 无法拆分到锁外。持有时间因此收敛到
+ *       单条, 而不是整轮 —— 配合 sink 批量通路, 锁外 I/O 成为常态。
+ *       (blob_load/string_load 直接把数据读进缓存缓冲, 拆不开。)
+ */
 static void load_all_visit(param_entry_t *e, void *ctx)
 {
     int *first_err = (int *)ctx;
 
+    system_lock(SYS_LOCK_PARAM);
     int ret = e->vtable->load(e);
+    system_unlock(SYS_LOCK_PARAM);
+
     if (ret != PARAM_OK && *first_err == PARAM_OK)
         *first_err = ret;
 }
@@ -2028,7 +2095,7 @@ static void load_all_visit(param_entry_t *e, void *ctx)
 int param_load_all(void)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     int first_err = PARAM_OK;
 
     /* 无存储后端时跳过 LOAD 阶段, 但 INIT 阶段仍须执行:
@@ -2036,21 +2103,18 @@ int param_load_all(void)
        param_storage_require 返回 PARAM_OK 即表示"有后端且提供 load 回调" */
     const param_storage_drv_t *drv = NULL;
     if (param_storage_require(PARAM_CAP_LOAD, &drv) == PARAM_OK) {
-        system_lock(SYS_LOCK_PARAM);
-
-        /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存。
-           后端只负责把记录逐条推给注入的 sink, 不接触框架内部。
+        /* 第一阶段 (优先, 锁外): 存储后端批量加载 — 一次扫描恢复所有缓存。
+           后端只负责把记录逐条推给注入的 sink; sink 内部自行加锁, 因此
+           整段 Flash 扫描**不**在临界区内, 也不阻塞其他任务的参数访问。
            返回值: 0 = 全部恢复; >0 = 扫描不完整 (单条记录超出后端扫描
            缓冲, 或 restore 拒绝了某条), 必须走兜底; <0 = 失败 */
         int batch_ret = drv->load_all ? drv->load_all(drv->ctx, &g_load_sink) : 0;
 
-        /* 第一阶段 (兜底): 逐条加载 — 后端未实现批量 / 批量不完整 /
-           批量失败。逐条 load 按条目真实容量读取 (大 BLOB/STRING 也能
-           恢复), 它的结果权威: 成功即视为恢复成功 */
+        /* 第一阶段 (兜底, 逐条): 后端未实现批量 / 批量不完整 / 批量失败。
+           逐条 load 按条目真实容量读取 (大 BLOB/STRING 也能恢复), 结果权威。
+           走 param_hash_scan: 锁内只快照指针, 回调内置锁只包住单条 I/O。 */
         if (!drv->load_all || batch_ret != 0)
-            param_hash_foreach(load_all_visit, &first_err);
-
-        system_unlock(SYS_LOCK_PARAM);
+            param_hash_scan(load_all_visit, &first_err);
     }
 
     /* 第二阶段: 按 MODULE_INIT_ORDER 顺序初始化每个模块。
@@ -2153,7 +2217,7 @@ static void reset_all_visit(param_entry_t *e, void *ctx)
 int param_reset_all(void)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
 
     system_lock(SYS_LOCK_PARAM);
 
@@ -2188,7 +2252,7 @@ int param_reset_all(void)
 int param_reset_one(uint32_t param_id)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
 
     param_entry_t *e;
     int ret;
@@ -2310,7 +2374,7 @@ int param_set_range(uint32_t param_id,
                     const param_value_t *max_val)
 {
     if (!g_pm.initialized)
-        return PARAM_ERR_NOT_FOUND;
+        return PARAM_ERR_NOT_INITIALIZED;
     system_lock(SYS_LOCK_PARAM);
     param_entry_t *e = param_entry_find(param_id);
     if (!e) {

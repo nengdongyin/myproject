@@ -22,57 +22,60 @@ static void register_all(void)
 
 /* ================================================================
  *  API 前置校验 (未 init 时调用)
+ *
+ *  未初始化时一律返回 PARAM_ERR_NOT_INITIALIZED —— 与"ID/模块查不到"的
+ *  PARAM_ERR_NOT_FOUND 分属两种语义 (后者在 init 后仍会返回)。
  * ================================================================ */
 void test_api_no_init_write_raw(void) {
     param_deinit();
     uint8_t d[4] = {0};
-    TEST_ASSERT_PARAM_ERR(param_write_raw(TID_APPLET_UINT, d, 4), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_write_raw(TID_APPLET_UINT, d, 4), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_write_immediate(void) {
     param_deinit();
     param_value_t v = { .u32 = 1 };
-    TEST_ASSERT_PARAM_ERR(param_write_immediate(TID_APPLET_UINT, v), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_write_immediate(TID_APPLET_UINT, v), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_flush(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_flush(), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_flush(), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_save_all(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_save_all(), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_save_all(), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_save_one(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_save_one(TID_APPLET_UINT), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_save_one(TID_APPLET_UINT), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_load_all(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_load_all(), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_load_all(), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_load_one(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_load_one(TID_APPLET_UINT), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_load_one(TID_APPLET_UINT), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_reset_all(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_reset_all(), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_reset_all(), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_reset_one(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_reset_one(TID_APPLET_UINT), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_reset_one(TID_APPLET_UINT), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_exec(void) {
     param_deinit();
-    TEST_ASSERT_PARAM_ERR(param_exec(MAKE_PARAM_ID(TEST_MODULE_APPLET, 0), NULL), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_exec(MAKE_PARAM_ID(TEST_MODULE_APPLET, 0), NULL), PARAM_ERR_NOT_INITIALIZED);
 }
 
 /* ================================================================

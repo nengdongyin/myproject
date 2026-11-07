@@ -82,7 +82,7 @@ void test_read_null_value_ptr(void) {
 void test_read_not_initialized(void) {
     param_deinit();
     param_value_t v;
-    TEST_ASSERT_PARAM_ERR(param_read(TID_APPLET_UINT, &v), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_read(TID_APPLET_UINT, &v), PARAM_ERR_NOT_INITIALIZED);
 }
 
 /* ================================================================
@@ -208,7 +208,7 @@ void test_write_non_existent(void) {
 void test_write_not_initialized(void) {
     param_deinit();
     param_value_t v = { .u32 = 1 };
-    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_NOT_INITIALIZED);
 }
 
 /* ================================================================

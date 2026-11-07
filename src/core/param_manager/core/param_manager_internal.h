@@ -44,6 +44,21 @@ extern "C"
      *      锁外写硬件, 失败回滚脏位), 因此 flush 回调内可安全调用
      *      param_read / param_save_one 等加锁 API; 但不得在回调内再调
      *      param_flush (返回 BUSY)。
+     *   5b. 持久化入口不把锁跨整轮持有, 但**必须**串行化后端调用本身:
+     *      - param_save_all: 锁内只快照条目指针 (param_hash_scan, 每批
+     *        PARAM_HASH_BATCH_MAX 个), 每条 save 单独持锁;
+     *        save_begin / save_commit 在锁外。
+     *      - param_save_one: 查找不持锁, save 持锁。
+     *      - param_load_all: 批量通路 (后端 load_all) 整段扫描在锁外,
+     *        仅 sink->restore 逐条提交时持锁; 逐条兜底路径因
+     *        vtable->load 无法拆分"读介质/写缓存", 每条单独持锁。
+     *
+     *      为什么 save 不能彻底放到锁外: 存储后端的内部可变状态 (mkv 的
+     *      write_offset、iniparser 的字典与 *.tmp 文件) **没有自己的锁**,
+     *      SYS_LOCK_PARAM 是它们唯一的串行化来源。省掉后两次并发保存会
+     *      落到同一偏移 / 同一临时文件, 造成记录覆盖或半写文件。
+     *      load_all 的批量扫描因此假定"与保存不并发" (与 param_init 的
+     *      单线程假设一致)。
      *   6. 初始化 (param_init) 和反初始化 (param_deinit) 假定单线程
      *      调用；init 不加锁，deinit 加锁以安全清理。
      *   7. 模块注册 (param_module_register_node) 全程持锁以保证
@@ -70,6 +85,10 @@ extern "C"
      * 存储后端不再直接调用本函数 —— 它只持有框架注入的 sink。
      * 正向扫描追加写日志时，同一 id 后出现的值覆盖前值，
      * 扫描完成时缓存中即为最新值。
+     *
+     * @note **调用者必须已持 SYS_LOCK_PARAM** —— 本函数不加锁 (与
+     *       vtable 基类实现一致)。框架侧的 sink 实现 (param_load_restore)
+     *       已按此约定在调用前后加锁。
      *
      * @param param_id 参数 ID
      * @param data     值数据 (NULL 表示删除/墓碑)
