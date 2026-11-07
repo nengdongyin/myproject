@@ -591,7 +591,8 @@ extern "C"
         int (*deinit)(void *ctx);
         /** 读取当前激活分区索引 (PARAM_PARTITION_FACTORY~PARAM_PARTITION_USER_MAX, NULL=单分区不支持) */
         int (*get_active_partition)(void *ctx, uint8_t *index);
-        /** 写入激活分区索引 — 写入 FAL_BOOT_PART 裸分区，下次启动生效 (NULL=不支持) */
+        /** 写入激活分区索引 — 存储介质由后端决定 (FAL 后端写启动裸分区,
+         *  iniparser 后端写 <base_dir>/param_boot 文本文件), 下次启动生效 (NULL=不支持) */
         int (*set_active_partition)(void *ctx, uint8_t index);
         /** 按索引获取指定分区的存储驱动 — 单例语义 (PARAM_PARTITION_FACTORY=factory, 其他参见 PARAM_PARTITION_USER_MIN~MAX) */
         const struct param_storage_drv *(*get_partition)(void *ctx, uint8_t index);

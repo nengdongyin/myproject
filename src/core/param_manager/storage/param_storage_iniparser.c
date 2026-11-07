@@ -27,6 +27,7 @@
  */
 
 #include "param_storage_iniparser.h"
+#include "param_storage_common.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -83,23 +84,7 @@ typedef struct {
 /** @brief 全局存储实例池（静态分配） */
 static iniparser_ctx_t g_ctx[MAX_INSTANCES];
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(MAX_INSTANCES >= PARAM_PARTITION_COUNT,
-               "MAX_INSTANCES must be >= PARAM_PARTITION_COUNT");
-#endif
-
-/**
- * @brief 分区索引→分区名映射表 (与 flashdb 后端一致)
- *
- * 索引: 0=factory, 1~PARAM_PARTITION_USER_MAX=用户分区。
- */
-static const char *const g_partition_names[PARAM_PARTITION_COUNT] = {
-    [PARAM_PARTITION_FACTORY] = "param_factory",
-    [1] = "param_user0",
-    [2] = "param_user1",
-    [3] = "param_user2",
-    [4] = "param_user3",
-};
+/* 分区索引→分区名 的映射与 MAX_INSTANCES 断言由 param_storage_common.h 提供 */
 
 /* ================================================================
  *  hex 编解码
@@ -490,13 +475,7 @@ static const param_storage_drv_t *iniparser_get_partition_cb(void *ctx, uint8_t 
     iniparser_ctx_t *c = (iniparser_ctx_t *)ctx;
     if (!c) return NULL;
 
-    const char *name;
-    if (index < PARAM_PARTITION_COUNT && g_partition_names[index])
-        name = g_partition_names[index];
-    else
-        name = g_partition_names[PARAM_PARTITION_FACTORY];
-
-    return param_storage_iniparser_get_driver(c->base_dir, name);
+    return param_storage_iniparser_get_driver(c->base_dir, param_partition_name(index));
 }
 
 /* ================================================================
@@ -528,19 +507,15 @@ const param_storage_drv_t *param_storage_iniparser_create(const char *base_dir)
     uint8_t boot_index = PARAM_PARTITION_FACTORY;
     (void)read_boot_index(base_dir, &boot_index);
 
-    /* 阶段 3: 映射索引到分区名 */
-    const char *target;
-    if (boot_index >= PARAM_PARTITION_USER_MIN && boot_index <= PARAM_PARTITION_USER_MAX)
-        target = g_partition_names[boot_index];
-    else
-        target = g_partition_names[PARAM_PARTITION_FACTORY];
+    /* 阶段 3: 索引 → 分区名 (越界/未填充自动回退 factory) */
+    const char *target = param_partition_name(boot_index);
 
     /* 阶段 4: 初始化目标分区，空则回退 factory */
     const param_storage_drv_t *drv =
         param_storage_iniparser_get_driver(base_dir, target);
     if (!drv) {
-        drv = param_storage_iniparser_get_driver(base_dir,
-                                                  g_partition_names[PARAM_PARTITION_FACTORY]);
+        drv = param_storage_iniparser_get_driver(
+            base_dir, param_partition_name(PARAM_PARTITION_FACTORY));
         return drv;
     }
 
@@ -549,8 +524,8 @@ const param_storage_drv_t *param_storage_iniparser_create(const char *base_dir)
         && dict_is_empty(c)) {
         /* 用户分区为空 → 回退 factory */
         drv->deinit(drv->ctx);
-        drv = param_storage_iniparser_get_driver(base_dir,
-                                                  g_partition_names[PARAM_PARTITION_FACTORY]);
+        drv = param_storage_iniparser_get_driver(
+            base_dir, param_partition_name(PARAM_PARTITION_FACTORY));
         /* 写入 boot_index=factory */
         char buf[BOOT_VAL_MAX];
         int len = snprintf(buf, sizeof(buf), "%u", PARAM_PARTITION_FACTORY);

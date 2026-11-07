@@ -8,6 +8,8 @@
  */
 
 #include "param_storage_mkv.h"
+#include "param_storage_common.h"
+#include "param_storage_fal.h"
 #include "mkv.h"
 #include "fal.h"
 #include "param_manager_internal.h"
@@ -25,15 +27,8 @@ typedef struct
 /** @brief 全局存储实例池 */
 static mkv_storage_ctx_t g_ctx[MAX_INSTANCES];
 
-#define FAL_BOOT_PART "param_boot"
-
-static const char *const g_partition_names[PARAM_PARTITION_COUNT] = {
-    [PARAM_PARTITION_FACTORY] = "param_factory",
-    [1] = "param_user0",
-    [2] = "param_user1",
-    [3] = "param_user2",
-    [4] = "param_user3",
-};
+/* 分区索引→分区名 的映射与 MAX_INSTANCES 断言由 param_storage_common.h 提供;
+   启动分区索引读写与 FAL 惰性初始化由 param_storage_fal.h 提供 */
 
 /* ═══════════════════════════════════════ 存储回调 ═══════════════ */
 
@@ -100,58 +95,27 @@ static int mkv_storage_deinit(void *ctx)
     return 0;
 }
 
-static int mkv_storage_get_active_partition(void *ctx, uint8_t *index)
-{
-    (void)ctx;
-    if (!index) return -1;
-    const struct fal_partition *part = fal_partition_find(FAL_BOOT_PART);
-    if (!part) return -1;
-    uint8_t val = 0xFF;
-    if (fal_partition_read(part, 0, &val, 1) < 0) return -1;
-    *index = (val < PARAM_PARTITION_COUNT) ? val : PARAM_PARTITION_FACTORY;
-    return 0;
-}
-
-static int mkv_storage_set_active_partition(void *ctx, uint8_t index)
-{
-    (void)ctx;
-    const struct fal_partition *part = fal_partition_find(FAL_BOOT_PART);
-    if (!part) return -1;
-    if (fal_partition_erase(part, 0, part->len) < 0) return -1;
-    return fal_partition_write(part, 0, &index, 1);
-}
-
 static const param_storage_drv_t *mkv_storage_get_partition(void *ctx, uint8_t index)
 {
     (void)ctx;
-    const char *name;
-    if (index < PARAM_PARTITION_COUNT && g_partition_names[index])
-        name = g_partition_names[index];
-    else
-        name = g_partition_names[PARAM_PARTITION_FACTORY];
-    return param_storage_mkv_get_driver(name);
+    return param_storage_mkv_get_driver(param_partition_name(index));
 }
 
 /* ═══════════════════════════════════════ 公开 API ═══════════════ */
 
 const param_storage_drv_t *param_storage_mkv_create(void)
 {
-    fal_init();
+    param_fal_ensure_init();
 
+    /* 读取启动分区索引 (失败则保持 0xFF → 走 factory) */
     uint8_t boot_index = 0xFF;
-    const struct fal_partition *boot = fal_partition_find(FAL_BOOT_PART);
-    if (boot)
-        fal_partition_read(boot, 0, &boot_index, 1);
+    (void)param_boot_index_get(NULL, &boot_index);
 
-    const char *target;
-    if (boot_index >= PARAM_PARTITION_USER_MIN && boot_index <= PARAM_PARTITION_USER_MAX)
-        target = g_partition_names[boot_index];
-    else
-        target = g_partition_names[PARAM_PARTITION_FACTORY];
+    const char *target = param_partition_name(boot_index);
 
     const param_storage_drv_t *drv = param_storage_mkv_get_driver(target);
     if (!drv)
-        drv = param_storage_mkv_get_driver("param_factory");
+        drv = param_storage_mkv_get_driver(param_partition_name(PARAM_PARTITION_FACTORY));
     return drv;
 }
 
@@ -186,8 +150,8 @@ const param_storage_drv_t *param_storage_mkv_get_driver(const char *part_name)
             c->drv.delete = mkv_storage_delete;
             c->drv.erase_all = mkv_storage_erase_all;
             c->drv.deinit = mkv_storage_deinit;
-            c->drv.get_active_partition = mkv_storage_get_active_partition;
-            c->drv.set_active_partition = mkv_storage_set_active_partition;
+            c->drv.get_active_partition = param_boot_index_get;
+            c->drv.set_active_partition = param_boot_index_set;
             c->drv.get_partition = mkv_storage_get_partition;
             c->used = true;
 

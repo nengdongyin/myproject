@@ -134,7 +134,8 @@ extern "C" {
 
 /** @brief 分区总数 (factory + N 个用户分区)。
  *  修改此值需同步: ① FAL 分区表 ② MAX_INSTANCES (≥COUNT)
- *  ③ g_partition_names[] 条目 ④ 启动流程 doc 中的分区数 */
+ *  ③ PARAM_PARTITION_NAME_LIST (storage/param_storage_common.h) 条目
+ *  ④ 启动流程 doc 中的分区数 */
 #ifndef PARAM_PARTITION_COUNT
 #define PARAM_PARTITION_COUNT 5
 #endif

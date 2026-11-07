@@ -14,13 +14,15 @@
  *   - g_ctx[MAX_INSTANCES] 静态池，按分区名查找/创建
  *   - 同一分区名返回同一实例（幂等）
  *   - param_storage_flashdb_create() 实现智能启动分区选择:
- *     读取 FAL_BOOT_PART 裸分区 → 选择目标用户分区 → 空则回退 factory
+ *     读取启动分区索引裸分区 → 选择目标用户分区 → 空则回退 factory
  *
  * @see param_storage_drv_t 接口定义
  * @see param_storage_flashdb.h 公开 API
  */
 
 #include "param_storage_flashdb.h"
+#include "param_storage_common.h"
+#include "param_storage_fal.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -47,29 +49,8 @@ typedef struct
 /** @brief 全局存储实例池（静态分配，编译期确定上限） */
 static flashdb_ctx_t g_ctx[MAX_INSTANCES];
 
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
-_Static_assert(MAX_INSTANCES >= PARAM_PARTITION_COUNT,
-               "MAX_INSTANCES must be >= PARAM_PARTITION_COUNT");
-#endif
-/** @brief FAL (Flash Abstraction Layer) 是否已初始化 */
-static bool g_fal_inited = false;
-
-/** @brief 启动索引裸分区名 */
-#define FAL_BOOT_PART "param_boot"
-
-/**
- * @brief 分区索引→分区名映射表 (唯一数据源)
- *
- * 索引: 0=factory, 1~PARAM_PARTITION_USER_MAX=用户分区。
- * PARAM_PARTITION_COUNT 变更时需同步补全条目，未填充槽位为 NULL。
- */
-static const char *const g_partition_names[PARAM_PARTITION_COUNT] = {
-    [PARAM_PARTITION_FACTORY] = "param_factory",
-    [1] = "param_user0",
-    [2] = "param_user1",
-    [3] = "param_user2",
-    [4] = "param_user3",
-};
+/* 分区索引→分区名 的映射与 MAX_INSTANCES 断言由 param_storage_common.h 提供;
+   启动分区索引读写与 FAL 惰性初始化由 param_storage_fal.h 提供 */
 
 /**
  * @brief 初始化 FlashDB KVDB 实例
@@ -113,60 +94,9 @@ static bool kvdb_is_empty(flashdb_ctx_t *c)
 }
 
 /**
- * @brief 读取启动分区索引（从 FAL_BOOT_PART 裸分区）
- *
- * @param ctx   存储上下文（本实现忽略）
- * @param index [out] 启动索引 (0=factory, 1~PARAM_PARTITION_USER_MAX=用户, 越界→0)
- * @return 0 成功, -1 失败
- */
-static int flashdb_get_active_partition(void *ctx, uint8_t *index)
-{
-    (void)ctx;
-    if (!index)
-        return -1;
-
-    const struct fal_partition *part = fal_partition_find(FAL_BOOT_PART);
-    if (!part)
-        return -1;
-
-    uint8_t val = 0xFF;
-    if (fal_partition_read(part, 0, &val, 1) < 0)
-        return -1;
-
-    *index = (val < PARAM_PARTITION_COUNT) ? val : PARAM_PARTITION_FACTORY;
-    return 0;
-}
-
-/**
- * @brief 写入启动分区索引（下次启动生效）
- *
- * 擦除整个 FAL_BOOT_PART 分区，写入 1 字节索引值。
- *
- * @param ctx   存储上下文（本实现忽略）
- * @param index 启动索引 (0~PARAM_PARTITION_USER_MAX)
- * @return 0 成功, -1 失败
- */
-static int flashdb_set_active_partition(void *ctx, uint8_t index)
-{
-    (void)ctx;
-
-    const struct fal_partition *part = fal_partition_find(FAL_BOOT_PART);
-    if (!part)
-        return -1;
-
-    if (fal_partition_erase(part, 0, part->len) < 0)
-        return -1;
-
-    if (fal_partition_write(part, 0, &index, 1) < 0)
-        return -1;
-
-    return 0;
-}
-
-/**
  * @brief 按索引获取分区驱动 — 单例语义 (运行时分区切换用)
  *
- * 通过 g_partition_names[] 查表获取分区名，再委托 param_storage_flashdb_get_driver。
+ * 通过 param_partition_name() 取分区名，再委托 param_storage_flashdb_get_driver。
  * 单例: 同一分区名多次调用返回同一驱动实例。
  * 运行时切换允许目标分区为空 — 由调用者决定是否 param_load_all。
  *
@@ -177,13 +107,7 @@ static int flashdb_set_active_partition(void *ctx, uint8_t index)
 static const param_storage_drv_t *flashdb_get_partition(void *ctx, uint8_t index)
 {
     (void)ctx;
-
-    const char *name;
-    if (index < PARAM_PARTITION_COUNT && g_partition_names[index])
-        name = g_partition_names[index];
-    else
-        name = g_partition_names[PARAM_PARTITION_FACTORY];
-    return param_storage_flashdb_get_driver(name);
+    return param_storage_flashdb_get_driver(param_partition_name(index));
 }
 
 /**
@@ -314,8 +238,8 @@ static int flashdb_deinit(void *ctx)
  * @details
  * 启动流程分 4 个阶段，任意阶段失败均回退到 param_factory:
  *
- *   1. FAL 初始化: 若尚未初始化则调用 fal_init()（惰性初始化，仅首次）
- *   2. 读取启动索引: 从 FAL_BOOT_PART 裸分区读取 1 字节 boot_index
+ *   1. FAL 初始化: 经 param_fal_ensure_init() 惰性初始化 (每 TU 仅首次生效)
+ *   2. 读取启动索引: 从启动分区裸分区读取 1 字节 boot_index
  *      - 0 → factory
  *      - 1~PARAM_PARTITION_USER_MAX → 用户分区
  *      - 其他 → 回退 factory
@@ -333,30 +257,20 @@ static int flashdb_deinit(void *ctx)
 const param_storage_drv_t *param_storage_flashdb_create(void)
 {
     /* 阶段 1: 惰性 FAL 初始化 */
-    if (!g_fal_inited)
-    {
-        fal_init();
-        g_fal_inited = true;
-    }
+    param_fal_ensure_init();
 
-    /* 阶段 2: 读取启动分区索引 */
+    /* 阶段 2: 读取启动分区索引 (失败则保持 0xFF → 走 factory) */
     uint8_t boot_index = 0xFF;
-    const struct fal_partition *boot = fal_partition_find(FAL_BOOT_PART);
-    if (boot)
-        fal_partition_read(boot, 0, &boot_index, 1);
+    (void)param_boot_index_get(NULL, &boot_index);
 
-    /* 阶段 3: 映射索引到分区名 (共享 g_partition_names) */
-    const char *target;
-    if (boot_index >= PARAM_PARTITION_USER_MIN && boot_index <= PARAM_PARTITION_USER_MAX)
-        target = g_partition_names[boot_index];
-    else
-        target = g_partition_names[PARAM_PARTITION_FACTORY];
+    /* 阶段 3: 索引 → 分区名 (越界/未填充自动回退 factory) */
+    const char *target = param_partition_name(boot_index);
 
     /* 阶段 4: 初始化目标分区，空则回退 factory */
     const param_storage_drv_t *drv = param_storage_flashdb_get_driver(target);
     if (!drv)
     {
-        drv = param_storage_flashdb_get_driver("param_factory");
+        drv = param_storage_flashdb_get_driver(param_partition_name(PARAM_PARTITION_FACTORY));
         return drv;
     }
 
@@ -364,8 +278,8 @@ const param_storage_drv_t *param_storage_flashdb_create(void)
         && kvdb_is_empty((flashdb_ctx_t *)drv->ctx))
     {
         drv->deinit(drv->ctx);
-        drv = param_storage_flashdb_get_driver("param_factory");
-        flashdb_set_active_partition(NULL, PARAM_PARTITION_FACTORY);
+        drv = param_storage_flashdb_get_driver(param_partition_name(PARAM_PARTITION_FACTORY));
+        (void)param_boot_index_set(NULL, PARAM_PARTITION_FACTORY);
     }
 
     return drv;
@@ -434,17 +348,13 @@ const param_storage_drv_t *param_storage_flashdb_get_driver(const char *part_nam
             c->drv.delete = flashdb_delete;
             c->drv.erase_all = flashdb_erase_all;
             c->drv.deinit = flashdb_deinit;
-            c->drv.get_active_partition = flashdb_get_active_partition;
-            c->drv.set_active_partition = flashdb_set_active_partition;
+            c->drv.get_active_partition = param_boot_index_get;
+            c->drv.set_active_partition = param_boot_index_set;
             c->drv.get_partition = flashdb_get_partition;
             c->used = true;
 
-            /* 惰性 FAL 初始化（全局仅一次） */
-            if (!g_fal_inited)
-            {
-                fal_init();
-                g_fal_inited = true;
-            }
+            /* 惰性 FAL 初始化（每个 TU 仅一次） */
+            param_fal_ensure_init();
 
             flashdb_init_kvdb(c);
             return &c->drv;

@@ -12,8 +12,8 @@ extern "C"
      * @brief 创建默认存储驱动（启动时调用，内部完成分区选择与初始化）
      *
      * 内部流程:
-     *   - 从 FAL_BOOT_PART 裸分区读取 1 字节启动索引
-     *   - 按 g_partition_names[] 映射到分区名并初始化 KVDB
+     *   - 从启动分区裸分区 (PARAM_BOOT_PART_NAME) 读取 1 字节启动索引
+     *   - 按 param_partition_name() 映射到分区名并初始化 KVDB
      *   - 检测用户分区是否为空，空则回退 factory
      *   - 异常保护: 任意步骤失败均回退 factory
      *
