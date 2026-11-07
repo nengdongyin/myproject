@@ -10,8 +10,11 @@
  *   - param_storage_iniparser_create() 实现智能启动分区选择:
  *     读取 param_boot 文件 → 选择目标用户分区 → 空则回退 factory
  *
- * 每个参数以 hex 字符串存储在 [params] 段下:
- *   p<param_id> = <hex bytes>
+ * 每个参数以一行键值对存储在 [params] 段下, 键为 param_id 的 32 位 hex 形态,
+ * 值由"参数名"与"hex 字节流"组成 (参数名仅作可读标注, 不参与身份):
+ *   0x00020000 = g_boot_index:03000000
+ * 高 16 位 = module_id, 低 16 位 = local_id, 便于对照 module_ids.h。
+ * 键与值格式均为本后端第一版定义, 无历史格式包袱。
  *
  * 每次 save() 全量重写 INI 文件，通过写临时文件 + rename 保证原子性。
  *
@@ -28,6 +31,9 @@
 
 #include "param_storage_iniparser.h"
 #include "param_storage_common.h"
+/* 值是"名称:hex"形式, 名称经 param_entry_name() 取自条目本身 (调试名),
+   因此本后端依赖框架内部 API —— 与 mkv 后端调用 param_cache_restore 同类。 */
+#include "param_manager_internal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -46,8 +52,11 @@
 /** @brief INI 段名 — 所有参数键值对存放在此段下 */
 #define INI_SECTION "params"
 
-/** @brief 键名缓冲区大小 ("params:p" + id 十进制 + '\0') */
-#define INI_KEY_MAX 48
+/** @brief 键名缓冲区大小 ("params:" + "0x" + 8 位 hex id + '\0') */
+#define INI_KEY_MAX 32
+
+/** @brief 参数名缓冲区 (调试名即 C 变量名, 超出则截断) */
+#define INI_NAME_MAX 32
 
 /** @brief hex 值缓冲区大小 (支持 ≤255 字节的原始数据: 255*2+1=511)
  *
@@ -59,6 +68,9 @@
  * 如需支持更大的 BLOB/STRING，将此值改为 2*N+1 (N 为目标最大字节数)
  * 或改用动态分配。 */
 #define HEX_VAL_MAX 512
+
+/** @brief 完整值缓冲区大小: "<name>:<hex>" (名称 + ':' + hex 部分) */
+#define INI_VAL_MAX (INI_NAME_MAX + 1 + HEX_VAL_MAX)
 
 /** @brief param_boot 文件名 (存储启动分区索引) */
 #define BOOT_FILE "param_boot"
@@ -228,15 +240,45 @@ static int atomic_dump_ini(iniparser_ctx_t *c)
 }
 
 /* ================================================================
- *  键名构建
+ *  键名 / 值构建
  * ================================================================ */
 
 /**
- * @brief 构建 iniparser 键名 "params:p<id>"
+ * @brief 构建键名 "params:0x<8 位 hex param_id>"
+ *
+ * param_id 的完整 32 位形式: 高 16 位 module_id | 低 16 位 local_id。
+ * 不使用 "p" 前缀: "0x" 已足以区分命名空间, 同时便于人工对照 module_ids.h。
+ * 键大小写不敏感 —— iniparser 内部统一转小写, 落盘形如 "params:0x00020000"。
  */
 static void make_key(uint32_t param_id, char *key, size_t key_size)
 {
-    snprintf(key, key_size, INI_SECTION ":p%u", param_id);
+    snprintf(key, key_size, INI_SECTION ":0x%08X", param_id);
+}
+
+/**
+ * @brief 构建值 "<参数名>:<hex>" — 参数名仅作可读标注, 不参与身份
+ *
+ * @note 名称为空或条目未注册时用 "?" 占位 (PARAM_DEBUG_NAME_ENABLE=0 时
+ *       param_entry_name 本身就返回 "?")。调试名是 C 变量名, 只含
+ *       [A-Za-z0-9_], 不会与分隔符 ':' 冲突。
+ */
+static void make_value(uint32_t param_id, const char *hex, char *out, size_t out_size)
+{
+    const param_entry_t *e = param_entry_find(param_id);
+    const char *src = "?";
+
+    if (e) {
+        const char *nm = param_entry_name(e);
+        if (nm && nm[0])
+            src = nm;
+    }
+
+    /* 先独立截断名称: 直接把长名称拼进 out 会挤掉 hex 部分, 静默损坏值。
+       截断后总长上限 = (INI_NAME_MAX-1) + 1 + strlen(hex) + 1, 恒 < INI_VAL_MAX */
+    char name[INI_NAME_MAX];
+    snprintf(name, sizeof(name), "%s", src);
+
+    snprintf(out, out_size, "%s:%s", name, hex);
 }
 
 /* ================================================================
@@ -302,11 +344,15 @@ static int iniparser_load_cb(void *ctx, uint32_t param_id,
     char key[INI_KEY_MAX];
     make_key(param_id, key, sizeof(key));
 
-    const char *hex = iniparser_getstring(c->dict, key, NULL);
-    if (!hex || hex[0] == '\0') return PARAM_ERR_NOT_FOUND;
+    const char *val = iniparser_getstring(c->dict, key, NULL);
+    if (!val) return PARAM_ERR_NOT_FOUND;
+
+    /* 值格式固定为 "<参数名>:<hex>"; 缺分隔符或 hex 为空均属记录损坏 */
+    const char *sep = strchr(val, ':');
+    if (!sep || sep[1] == '\0') return PARAM_ERR_OUT_OF_RANGE;
 
     /* 损坏/超长记录上报明确的错误码, 不冒充"键不存在" */
-    return hex_decode(hex, data, len, read_len);
+    return hex_decode(sep + 1, data, len, read_len);
 }
 
 /**
@@ -325,14 +371,17 @@ static int iniparser_save_cb(void *ctx, uint32_t param_id,
     if (((uint32_t)len * 2 + 1) > HEX_VAL_MAX)
         return -1;
 
-    /* 1. hex 编码 */
+    /* 1. hex 编码, 并组装成 "<参数名>:<hex>" (名称仅供人读) */
     char hex_val[HEX_VAL_MAX];
     hex_encode(data, len, hex_val);
+
+    char val[INI_VAL_MAX];
+    make_value(param_id, hex_val, val, sizeof(val));
 
     /* 2. 更新字典 */
     char key[INI_KEY_MAX];
     make_key(param_id, key, sizeof(key));
-    if (iniparser_set(c->dict, key, hex_val) != 0)
+    if (iniparser_set(c->dict, key, val) != 0)
         return -1;
 
     /* 3. 全量写入 INI 文件 (原子) */
