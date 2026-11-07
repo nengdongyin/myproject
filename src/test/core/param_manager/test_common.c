@@ -241,6 +241,175 @@ param_storage_drv_t g_mock_storage2 = {
 };
 
 /* ================================================================
+ *  Mock Storage 3 (批量通路) — 验证 load_all 的 sink 与
+ *  save_begin / save_commit 事务
+ *
+ *  独立实例: 既有用例仍用 g_mock_storage (只实现逐条通路), 因此它们的
+ *  兜底路径不受影响; 本实例专门覆盖批量分支。
+ * ================================================================ */
+
+mock_kv_t g_mock_kv3[MOCK_STORAGE_MAX];
+uint16_t g_mock_kv3_count;
+int g_mock3_save_calls;
+int g_mock3_load_one_calls;
+int g_mock3_begin_calls;
+int g_mock3_commit_calls;
+int g_mock3_begin_ret;
+int g_mock3_commit_ret;
+int g_mock3_push_short_blob;
+uint16_t g_mock3_restored;
+
+void mock_storage3_reset(void)
+{
+    memset(g_mock_kv3, 0, sizeof(g_mock_kv3));
+    g_mock_kv3_count = 0;
+    g_mock3_save_calls = 0;
+    g_mock3_load_one_calls = 0;
+    g_mock3_begin_calls = 0;
+    g_mock3_commit_calls = 0;
+    g_mock3_begin_ret = 0;
+    g_mock3_commit_ret = 0;
+    g_mock3_push_short_blob = 0;
+    g_mock3_restored = 0;
+}
+
+void mock_storage3_preset(uint32_t id, const uint8_t *data, uint16_t len)
+{
+    if (g_mock_kv3_count >= MOCK_STORAGE_MAX)
+        return;
+    if (len > 64)
+        return;
+
+    mock_kv_t *kv = &g_mock_kv3[g_mock_kv3_count++];
+    kv->id = id;
+    kv->len = len;
+    memcpy(kv->data, data, len);
+}
+
+mock_kv_t *mock_storage3_entry(uint32_t id)
+{
+    for (uint16_t i = 0; i < g_mock_kv3_count; i++)
+    {
+        if (g_mock_kv3[i].id == id)
+            return &g_mock_kv3[i];
+    }
+    return NULL;
+}
+
+static int mock_storage3_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len,
+                              uint16_t *read_len)
+{
+    (void)ctx;
+    g_mock3_load_one_calls++;
+
+    mock_kv_t *kv = mock_storage3_entry(id);
+    if (!kv)
+        return PARAM_ERR_NOT_FOUND;
+
+    uint16_t copy_len = (len < kv->len) ? len : kv->len;
+    memcpy(data, kv->data, copy_len);
+    if (copy_len < len)
+        memset(data + copy_len, 0, len - copy_len);
+    if (read_len)
+        *read_len = copy_len;
+    return PARAM_OK;
+}
+
+static int mock_storage3_save(void *ctx, uint32_t id, const uint8_t *data, uint16_t len)
+{
+    (void)ctx;
+    g_mock3_save_calls++;
+
+    mock_kv_t *kv = mock_storage3_entry(id);
+    if (!kv)
+    {
+        if (g_mock_kv3_count >= MOCK_STORAGE_MAX)
+            return -1;
+        kv = &g_mock_kv3[g_mock_kv3_count++];
+        kv->id = id;
+    }
+    kv->len = (len > 64) ? 64 : len;
+    memcpy(kv->data, data, kv->len);
+    return 0;
+}
+
+/**
+ * @brief load_all 的批量实现 — 只经框架注入的 sink 推数据
+ *
+ * 后端不认识 param_cache_restore, 也不需要认识: 这正是本轮改造要验证的端口。
+ */
+static int mock_storage3_load_all(void *ctx, const param_restore_sink_t *sink)
+{
+    (void)ctx;
+    if (!sink || !sink->restore)
+        return -1;
+
+    uint16_t rejected = 0;
+
+    for (uint16_t i = 0; i < g_mock_kv3_count; i++)
+    {
+        int ret = sink->restore(sink->ctx, g_mock_kv3[i].id,
+                                g_mock_kv3[i].data, g_mock_kv3[i].len);
+        if (ret == PARAM_OK)
+            g_mock3_restored++;
+        else if (ret != PARAM_ERR_NOT_FOUND)
+            rejected++;
+    }
+
+    /* 模拟"存储里有条长度与条目容量不符的损坏记录":
+       已被注册 (BLOB), 但只推 4 字节 → restore 返回 PARAM_ERR_OUT_OF_RANGE */
+    if (g_mock3_push_short_blob)
+    {
+        static const uint8_t short_rec[4] = { 1, 2, 3, 4 };
+        int ret = sink->restore(sink->ctx, TID_APPLET_BLOB, short_rec,
+                                (uint16_t)sizeof(short_rec));
+        if (ret != PARAM_OK && ret != PARAM_ERR_NOT_FOUND)
+            rejected++;
+    }
+
+    /* >0 = 扫描不完整 → 框架回退逐条 load */
+    return rejected ? 1 : 0;
+}
+
+static int mock_storage3_save_begin(void *ctx)
+{
+    (void)ctx;
+    g_mock3_begin_calls++;
+    return g_mock3_begin_ret;
+}
+
+static int mock_storage3_save_commit(void *ctx)
+{
+    (void)ctx;
+    g_mock3_commit_calls++;
+    return g_mock3_commit_ret;
+}
+
+static int mock_storage3_erase_all(void *ctx)
+{
+    (void)ctx;
+    g_mock_kv3_count = 0;
+    return 0;
+}
+
+static int mock_storage3_deinit(void *ctx)
+{
+    (void)ctx;
+    return 0;
+}
+
+param_storage_drv_t g_mock_storage3 = {
+    .ctx = NULL,
+    .load = mock_storage3_load,
+    .load_all = mock_storage3_load_all,
+    .save = mock_storage3_save,
+    .save_begin = mock_storage3_save_begin,
+    .save_commit = mock_storage3_save_commit,
+    .erase_all = mock_storage3_erase_all,
+    .deinit = mock_storage3_deinit,
+};
+
+/* ================================================================
  *  Mock Callbacks
  * ================================================================ */
 

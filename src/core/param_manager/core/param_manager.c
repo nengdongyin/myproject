@@ -1732,6 +1732,10 @@ static void save_all_visit(param_entry_t *e, void *ctx)
  * 遍历哈希表，对每个 entry 调用 entry->vtable->save()。
  * 仅当 entry 的 flags 含 PARAM_FLAG_PERSIST 时才实际写入 (由子类实现判断)。
  *
+ * 后端提供 save_begin/save_commit 时走批量事务: begin → 逐条 save →
+ * commit, 把"N 次全量重写"降为"一次落盘"。后端只在自己内部打开批量
+ * 模式, 不遍历框架条目 (依赖方向: 后端 → 端口)。
+ *
  * 错误处理策略与 param_load_all 对称:
  *   - 遇错收集首个错误码，继续保存后续参数 (不提前退出)
  *   - 避免"第 N 个失败导致剩余参数全部丢失"的不一致状态
@@ -1746,17 +1750,30 @@ int param_save_all(void)
     if (ret != PARAM_OK)
         return ret;
 
-    /* 后端提供批量通路 → 锁外交给它 (它内部会自行遍历条目, 而遍历 API
-       会加锁; 非递归锁下锁内调用会自死锁)。同时避免持久化全程持锁。 */
-    if (drv->save_all)
-        return param_status_from_backend(drv->save_all(drv->ctx));
+    /* 后端提供批量事务 → 先打开它, 逐条 save 仍走同一条路径, 最后一次性
+       落盘。begin/commit 均在锁外调用, 实现内可安全使用加锁 API。 */
+    bool batch = (drv->save_begin != NULL && drv->save_commit != NULL);
+    if (batch) {
+        int bret = drv->save_begin(drv->ctx);
+        if (bret != PARAM_OK)
+            return param_status_from_backend(bret); /* 不退化: 免得"批量不可用"被静默掩盖 */
+    }
 
-    /* 兜底: 逐条保存 (后端未提供批量通路) */
+    /* 逐条保存 (无批量后端走同一路径): 收集首个错误码, 不提前退出 */
     int first_err = PARAM_OK;
 
     system_lock(SYS_LOCK_PARAM);
     param_hash_foreach(save_all_visit, &first_err);
     system_unlock(SYS_LOCK_PARAM);
+
+    /* 提交: 即使中间有条目 save 失败也照样调用 (提交已成功部分,
+       错误码已在 first_err 里, 此处只补"无更早错误时"的提交失败) */
+    if (batch) {
+        int cret = drv->save_commit(drv->ctx);
+        if (cret != PARAM_OK && first_err == PARAM_OK)
+            first_err = param_status_from_backend(cret);
+    }
+
     return first_err;
 }
 
@@ -1951,6 +1968,32 @@ int param_migrate_storage(const param_storage_drv_t *storage,
     return PARAM_OK;
 }
 
+/* ================================================================
+ *  load_all 输出端口 — 把 param_cache_restore 包装成 sink
+ * ================================================================ */
+
+/**
+ * @brief sink 的 restore 实现 — 直接委托 param_cache_restore
+ *
+ * 框架在 SYS_LOCK_PARAM 内调用本函数 (见 param_restore_sink_t 的契约),
+ * 因此此处不再加锁; param_cache_restore 自身也不加锁。
+ *
+ * @note 本函数是 param_cache_restore 与存储后端之间唯一的桥。后端的
+ *       load_all 只持有 sink 指针, 不需要也不得包含 param_manager_internal.h。
+ */
+static int param_load_restore(void *ctx, uint32_t param_id,
+                              const uint8_t *data, uint16_t len)
+{
+    (void)ctx;
+    return param_cache_restore(param_id, data, len);
+}
+
+/** @brief 供 load_all 注入的数据出口 (无状态, 可静态共享) */
+static const param_restore_sink_t g_load_sink = {
+    .ctx = NULL,
+    .restore = param_load_restore,
+};
+
 /** @brief param_load_all 的遍历体 (兜底逐条加载): 记录首个错误码, 不中断 */
 static void load_all_visit(param_entry_t *e, void *ctx)
 {
@@ -1996,9 +2039,10 @@ int param_load_all(void)
         system_lock(SYS_LOCK_PARAM);
 
         /* 第一阶段 (优先): 存储后端批量加载 — 一次扫描恢复所有缓存。
-           返回值: 0 = 全部恢复; >0 = 扫描不完整 (如单条记录超出后端
-           扫描缓冲), 必须走兜底; <0 = 失败 */
-        int batch_ret = drv->load_all ? drv->load_all(drv->ctx) : 0;
+           后端只负责把记录逐条推给注入的 sink, 不接触框架内部。
+           返回值: 0 = 全部恢复; >0 = 扫描不完整 (单条记录超出后端扫描
+           缓冲, 或 restore 拒绝了某条), 必须走兜底; <0 = 失败 */
+        int batch_ret = drv->load_all ? drv->load_all(drv->ctx, &g_load_sink) : 0;
 
         /* 第一阶段 (兜底): 逐条加载 — 后端未实现批量 / 批量不完整 /
            批量失败。逐条 load 按条目真实容量读取 (大 BLOB/STRING 也能

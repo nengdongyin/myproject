@@ -320,7 +320,8 @@ static int string_load(param_entry_t *e)
 }
 
 /* ================================================================
- *  批量恢复 — 供存储后端 load_all 使用
+ *  批量恢复 — 供框架的 sink 实现使用 (存储后端经 param_restore_sink_t
+ *  间接调用, 不直接依赖本函数)
  * ================================================================ */
 
 int param_cache_restore(uint32_t param_id, const uint8_t *data, uint16_t len)

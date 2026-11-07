@@ -12,7 +12,6 @@
 #include "param_storage_fal.h"
 #include "mkv.h"
 #include "fal.h"
-#include "param_manager_internal.h"
 #include <string.h>
 
 /** @brief mkv 存储上下文 — 每个物理分区对应一个实例 */
@@ -53,17 +52,38 @@ static int mkv_storage_load(void *ctx, uint32_t id, uint8_t *data, uint16_t len,
     return PARAM_ERR_FLASH_FAIL;
 }
 
+/** @brief mkv_scan 回调上下文 — 把记录逐条推给框架注入的 sink */
+typedef struct
+{
+    const param_restore_sink_t *sink; /**< 框架提供的数据出口 (仅在本次调用期间有效) */
+    uint16_t rejected;                /**< 未被框架接受的记录数 (饱和于 UINT16_MAX) */
+} mkv_restore_ctx_t;
+
 static void mkv_scan_restore_cb(uint32_t id, const uint8_t *data, uint16_t len, void *user)
 {
-    (void)user;
-    param_cache_restore(id, data, len);
+    mkv_restore_ctx_t *rc = (mkv_restore_ctx_t *)user;
+
+    /* 单条被拒不中断扫描: 计数后由 load_all 以 >0 让框架回退逐条 load。
+       未注册 ID (旧固件遗留记录) 属正常情形, 不计入 —— 否则参数表一瘦身
+       就会让每次开机都退化为全量逐条扫描。 */
+    int ret = rc->sink->restore(rc->sink->ctx, id, data, len);
+    if (ret != PARAM_OK && ret != PARAM_ERR_NOT_FOUND && rc->rejected < UINT16_MAX)
+        rc->rejected++;
 }
 
-static int mkv_storage_load_all(void *ctx)
+static int mkv_storage_load_all(void *ctx, const param_restore_sink_t *sink)
 {
     mkv_storage_ctx_t *c = (mkv_storage_ctx_t *)ctx;
-    if (!c || !c->used) return -1;
-    return mkv_scan(&c->kv, mkv_scan_restore_cb, NULL);
+    if (!c || !c->used || !sink || !sink->restore) return -1;
+
+    mkv_restore_ctx_t rc = { .sink = sink, .rejected = 0 };
+    int ret = mkv_scan(&c->kv, mkv_scan_restore_cb, &rc);
+    if (ret != 0) return ret;  /* -1 参数/内部错误; 1 扫描不完整 */
+
+    /* 有记录没被接受 (容量不符/数据损坏) → 报 >0 让 param_load_all 走
+       逐条 load (那条路径按条目真实容量读, 能区分“不存在”与“读失败”),
+       不再像旧实现那样静默退化为默认值 */
+    return rc.rejected ? 1 : 0;
 }
 
 static int mkv_storage_save(void *ctx, uint32_t id, const uint8_t *data, uint16_t len)

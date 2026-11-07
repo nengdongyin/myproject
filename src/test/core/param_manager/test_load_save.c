@@ -323,6 +323,100 @@ void test_save_load_roundtrip_float(void) {
     TEST_ASSERT_FLOAT_WITHIN(0.001f, 2.5f, read_val.f32);
 }
 
+/* ================================================================
+ *  批量通路 — load_all 的 sink 端口 与 save_begin/save_commit 事务
+ *
+ *  这些用例把后端换成 g_mock_storage3 (实现了两个批量通路),
+ *  既有用例仍用 g_mock_storage 覆盖逐条兜底路径。
+ * ================================================================ */
+void test_save_all_uses_batch_transaction(void) {
+    register_all();
+    mock_storage3_reset();
+    param_set_storage(&g_mock_storage3);
+
+    param_value_t v = { .u32 = 150 };
+    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
+
+    TEST_ASSERT_PARAM_OK(param_save_all());
+
+    /* 事务边界: begin / commit 各恰好一次, 逐条 save 由框架发起 */
+    TEST_ASSERT_EQUAL_INT(1, g_mock3_begin_calls);
+    TEST_ASSERT_EQUAL_INT(1, g_mock3_commit_calls);
+    TEST_ASSERT_TRUE(g_mock3_save_calls >= 1);
+
+    /* PERSIST 过滤依旧生效 (由 param_data_ops 层负责, 与批量无关) */
+    TEST_ASSERT_NOT_NULL(mock_storage3_entry(TID_APPLET_UINT));
+    TEST_ASSERT_NULL(mock_storage3_entry(TID_APPLET_NOPERSIST));
+}
+
+void test_save_all_batch_begin_fails(void) {
+    register_all();
+    mock_storage3_reset();
+    param_set_storage(&g_mock_storage3);
+    g_mock3_begin_ret = -1; /* 事务开不起来 */
+
+    param_value_t v = { .u32 = 150 };
+    param_write(TID_APPLET_UINT, v);
+
+    TEST_ASSERT_PARAM_ERR(param_save_all(), PARAM_ERR_FLASH_FAIL);
+    TEST_ASSERT_EQUAL_INT(1, g_mock3_begin_calls);
+    /* 不退化: 不开事务就不该继续逐条写, 也不该提交 */
+    TEST_ASSERT_EQUAL_INT(0, g_mock3_save_calls);
+    TEST_ASSERT_EQUAL_INT(0, g_mock3_commit_calls);
+}
+
+void test_save_all_batch_commit_fails(void) {
+    register_all();
+    mock_storage3_reset();
+    param_set_storage(&g_mock_storage3);
+    g_mock3_commit_ret = -1; /* 落盘失败 */
+
+    param_value_t v = { .u32 = 150 };
+    param_write(TID_APPLET_UINT, v);
+
+    TEST_ASSERT_PARAM_ERR(param_save_all(), PARAM_ERR_FLASH_FAIL);
+    TEST_ASSERT_EQUAL_INT(1, g_mock3_begin_calls);
+    TEST_ASSERT_EQUAL_INT(1, g_mock3_commit_calls);
+}
+
+void test_load_all_via_sink(void) {
+    register_all();
+    mock_storage3_reset();
+    param_set_storage(&g_mock_storage3);
+
+    param_value_t preset = { .u32 = 173 };
+    mock_storage3_preset(TID_APPLET_UINT, (const uint8_t *)&preset, sizeof(preset));
+
+    TEST_ASSERT_PARAM_OK(param_load_all());
+
+    /* 批量通路走通: sink 收到 1 条, 未发生逐条 load */
+    TEST_ASSERT_EQUAL_UINT16(1, g_mock3_restored);
+    TEST_ASSERT_EQUAL_INT(0, g_mock3_load_one_calls);
+
+    param_value_t v;
+    param_read(TID_APPLET_UINT, &v);
+    TEST_ASSERT_EQUAL_UINT32(173, v.u32);
+}
+
+void test_load_all_sink_reject_falls_back(void) {
+    register_all();
+    mock_storage3_reset();
+    param_set_storage(&g_mock_storage3);
+
+    param_value_t preset = { .u32 = 186 };
+    mock_storage3_preset(TID_APPLET_UINT, (const uint8_t *)&preset, sizeof(preset));
+    g_mock3_push_short_blob = 1; /* 一条长度不符的 BLOB 记录 → restore 被拒 */
+
+    TEST_ASSERT_PARAM_OK(param_load_all());
+
+    /* 被拒 → 后端返回 >0 → 框架回退逐条 load (而不是静默丢弃) */
+    TEST_ASSERT_TRUE(g_mock3_load_one_calls > 0);
+
+    param_value_t v;
+    param_read(TID_APPLET_UINT, &v);
+    TEST_ASSERT_EQUAL_UINT32(186, v.u32);
+}
+
 void run_test_load_save(void)
 {
     RUN_TEST(test_load_one_valid);
@@ -343,4 +437,9 @@ void run_test_load_save(void)
     RUN_TEST(test_save_blob);
     RUN_TEST(test_save_load_roundtrip_uint);
     RUN_TEST(test_save_load_roundtrip_float);
+    RUN_TEST(test_save_all_uses_batch_transaction);
+    RUN_TEST(test_save_all_batch_begin_fails);
+    RUN_TEST(test_save_all_batch_commit_fails);
+    RUN_TEST(test_load_all_via_sink);
+    RUN_TEST(test_load_all_sink_reject_falls_back);
 }

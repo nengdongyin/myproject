@@ -131,6 +131,28 @@ extern "C"
     void mock_storage2_set_save_ret(int ret);
 
     /* ================================================================
+     *  Mock Storage 3 — 批量通路 (load_all 的 sink / save_begin+commit)
+     *
+     *  只给批量改造的用例使用: 既有用例仍走 g_mock_storage 的逐条兜底路径。
+     * ================================================================ */
+    extern mock_kv_t g_mock_kv3[MOCK_STORAGE_MAX];
+    extern uint16_t g_mock_kv3_count;
+    extern int g_mock3_save_calls;      /**< 逐条 save 被框架调用的次数 */
+    extern int g_mock3_load_one_calls;  /**< 逐条 load 被调用的次数 (>0 说明走了兜底) */
+    extern int g_mock3_begin_calls;     /**< save_begin 调用次数 */
+    extern int g_mock3_commit_calls;    /**< save_commit 调用次数 */
+    extern int g_mock3_begin_ret;       /**< save_begin 返回值 (置非 0 模拟事务开不起来) */
+    extern int g_mock3_commit_ret;      /**< save_commit 返回值 (置非 0 模拟落盘失败) */
+    extern int g_mock3_push_short_blob; /**< 1: load_all 额外推一条长度不符的 BLOB 记录 */
+    extern uint16_t g_mock3_restored;   /**< sink->restore 返回 PARAM_OK 的条数 */
+
+    extern param_storage_drv_t g_mock_storage3;
+
+    void mock_storage3_reset(void);
+    void mock_storage3_preset(uint32_t id, const uint8_t *data, uint16_t len);
+    mock_kv_t *mock_storage3_entry(uint32_t id);
+
+    /* ================================================================
      *  Mock Apply / Flush 回调追踪
      * ================================================================ */
     extern int g_apply_call_count;

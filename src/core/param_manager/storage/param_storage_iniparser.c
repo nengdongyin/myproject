@@ -32,7 +32,9 @@
 #include "param_storage_iniparser.h"
 #include "param_storage_common.h"
 /* 值是"名称:hex"形式, 名称经 param_entry_name() 取自条目本身 (调试名),
-   因此本后端依赖框架内部 API —— 与 mkv 后端调用 param_cache_restore 同类。 */
+   这是本后端对框架内部 API 的唯一依赖 (纯装饰用途, 不参与身份)。
+   批量恢复/批量保存已改为 sink 注入与 save_begin/save_commit 端口,
+   后端不再反向遍历框架条目、也不直调条目 vtable。 */
 #include "param_manager_internal.h"
 
 #include <stdio.h>
@@ -389,52 +391,44 @@ static int iniparser_save_cb(void *ctx, uint32_t param_id,
     return c->defer_dump ? 0 : atomic_dump_ini(c);
 }
 
-/** @brief 批量保存的遍历上下文 */
-typedef struct {
-    bool failed; /**< 任一条目保存失败 */
-} store_ctx_t;
-
 /**
- * @brief 批量保存的遍历体: 复用逐条通路, 此时只改字典不落盘
+ * @brief 批量保存事务开始 — 打开"只改字典不落盘"的批量模式
  *
- * @note param_foreach 回调无返回值, 故逐条错误记在 ctx 上, 由调用方汇成 -1 ——
- *       否则"批量只落盘一次"会换成"错误被静默吞掉"。
+ * 框架随后逐条调用 save (各条目的 PERSIST 过滤由 param_data_ops 层完成),
+ * 最后调用 iniparser_save_commit_cb 一次性落盘。本后端不需要、也不得
+ * 自己遍历框架的条目 —— 批量语义只由本后端的 defer_dump 表达。
+ *
+ * @return 0 成功; -1 字典未就绪
  */
-static bool store_visit(param_entry_t *e, void *user_data)
-{
-    store_ctx_t *s = (store_ctx_t *)user_data;
-
-    if (e && e->vtable && e->vtable->save && e->vtable->save(e) != PARAM_OK)
-        s->failed = true;
-    return true;
-}
-
-/**
- * @brief 批量保存: 逐条算完 → 全量落盘一次
- *
- * 把 param_save_all 的 N 次全文件重写降为 1 次 (原实现每条 PERSIST 参数都
- * atomic_dump_ini 一次, 副本越小重复越多)。
- *
- * @note 本函数由框架在 SYS_LOCK_PARAM 之外调用: 内部的 param_foreach 会自行
- *       加锁快照, 锁内调用会在非递归锁上自死锁。
- * @return 0 成功; -1 失败 (含任一参数无法组装)
- */
-static int iniparser_save_all_cb(void *ctx)
+static int iniparser_save_begin_cb(void *ctx)
 {
     iniparser_ctx_t *c = (iniparser_ctx_t *)ctx;
     if (!c || !c->dict_ready || !c->dict)
         return -1;
 
-    store_ctx_t s = { false };
-
     c->defer_dump = true;
-    param_foreach(0, store_visit, &s); /* 公共 API: 模块级迭代, 锁内只快照指针 */
-    c->defer_dump = false;
+    return 0;
+}
 
-    if (atomic_dump_ini(c) != 0)
+/**
+ * @brief 批量保存事务提交 — 一次性落盘并关闭批量模式
+ *
+ * 把 param_save_all 的 N 次全文件重写降为 1 次 (原实现每条 PERSIST 参数都
+ * atomic_dump_ini 一次, 参数越多重复越大)。
+ *
+ * @note 框架在 SYS_LOCK_PARAM 之外调用本回调, 文件 I/O 不阻塞参数访问。
+ * @note 先关批量模式再落盘: 即使落盘失败, 后端也不会滞留在 defer_dump 状态
+ *       (否则后续 param_save_one 会只改字典、永不落盘)。
+ * @return 0 成功; -1 字典未就绪或写入失败
+ */
+static int iniparser_save_commit_cb(void *ctx)
+{
+    iniparser_ctx_t *c = (iniparser_ctx_t *)ctx;
+    if (!c || !c->dict_ready || !c->dict)
         return -1;
 
-    return s.failed ? -1 : 0;
+    c->defer_dump = false;
+    return atomic_dump_ini(c);
 }
 
 /**
@@ -681,11 +675,12 @@ const param_storage_drv_t *param_storage_iniparser_get_driver(const char *base_d
             /* 确保目录存在 */
             mkdir_p(c->base_dir);
 
-            /* 绑定全部 8 个存储驱动回调 */
+            /* 绑定存储驱动回调 */
             c->drv.ctx = c;
             c->drv.load = iniparser_load_cb;
             c->drv.save = iniparser_save_cb;
-            c->drv.save_all = iniparser_save_all_cb;
+            c->drv.save_begin = iniparser_save_begin_cb;
+            c->drv.save_commit = iniparser_save_commit_cb;
             c->drv.delete = iniparser_delete_cb;
             c->drv.erase_all = iniparser_erase_all_cb;
             c->drv.deinit = iniparser_deinit_cb;

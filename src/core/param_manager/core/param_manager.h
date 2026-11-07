@@ -537,10 +537,50 @@ extern "C"
 /** @} */
 
     /**
+     * @brief 批量恢复输出端口 — 框架注入给 load_all 的数据出口
+     *
+     * load_all 的职责是"把存储里的记录逐条推给框架", 而不是自己找缓存、
+     * 自己遍历: 后端只见到本结构体, 不需要认识 param_cache_restore /
+     * param_entry_t / 框架内部头文件 (依赖方向: 后端 → 本端口 → 框架)。
+     *
+     * @note restore 由框架在 SYS_LOCK_PARAM **持锁状态下**调用 —— 实现方
+     *       不得在 restore 内再调用任何加锁 API (端口层为非递归锁),
+     *       框架侧的实现据此也不必自行加锁。
+     */
+    typedef struct param_restore_sink
+    {
+        /** @brief 框架私有上下文, 后端不得解读, 仅原样回传给 restore */
+        void *ctx;
+        /** @brief 提交一条记录到框架缓存
+         *
+         *  @param ctx  框架私有上下文 (本结构体的 ctx 字段)
+         *  @param id   参数 ID
+         *  @param data 值数据 (NULL 或 len==0 表示墓碑/删除 → 恢复为默认值)
+         *  @param len  数据长度
+         *  @return PARAM_OK               已提交
+         *          PARAM_ERR_NOT_FOUND    该 ID 未注册 (旧固件遗留记录, 可忽略)
+         *          PARAM_ERR_OUT_OF_RANGE 记录长度与条目容量不符 (数据损坏)
+         *          其他负值               提交失败
+         *  @note 单条被拒不中断扫描: 后端只需计数, 最终以 load_all 的返回值
+         *        (>0) 让框架回退逐条 load。 */
+        int (*restore)(void *ctx, uint32_t id, const uint8_t *data, uint16_t len);
+    } param_restore_sink_t;
+
+    /**
      * @brief 持久化后端驱动接口
      *
-     * 移植到新平台时，实现此接口的所有函数即可接入存储层。
-     * FlashDB、LittleFS、裸 NAND 均可通过此接口适配。
+     * 移植到新平台时，实现本接口的所有函数即可接入存储层。
+     * FlashDB、LittleFS、裸 NAND 均可通过本接口适配。
+     *
+     * @par 依赖规则
+     * 后端只依赖本结构体、param_restore_sink_t 与各后端自己的介质库
+     * (mkv / iniparser / flashdb / fal)。需要框架的数据时, 由框架经回调
+     * 参数或端口推给后端 (见 load_all 的 sink、save_begin/commit)。
+     *
+     * **不得**为"遍历条目 / 恢复缓存"而包含 param_manager_internal.h 或
+     * 调用 param_foreach、param_cache_restore、条目 vtable —— 那是控制流
+     * 反转 (后端指挥框架), 会与框架的锁域冲突。唯一的例外是纯装饰性的
+     * 调试名标注 (param_entry_name, 见 iniparser 后端)。
      *
      * ctx 指针使同一套回调函数支持多个物理存储实例
      * (如多分区/Bank 切换)，每个实例传入不同的 ctx 即可。
@@ -571,29 +611,42 @@ extern "C"
         int (*load)(void *ctx, uint32_t param_id, uint8_t *data, uint16_t len,
                     uint16_t *read_len);
         /** 批量加载全部参数。NULL=走逐条 load；非 NULL=param_load_all 优先调用。
-         *  后端应一次扫描完成所有数据恢复（如通过 param_cache_restore），
-         *  典型场景是追加写日志型存储（mkv）的 O(N²)→O(N) 优化。
-         *  返回值约定: 0=全部已恢复；>0=扫描不完整 (如单条记录超出后端扫描
-         *  缓冲，大 BLOB/STRING)，param_load_all 会回退到逐条 load；<0=失败。 */
-        int (*load_all)(void *ctx);
+         *  后端一次扫描, 把每条记录经 sink->restore 推给框架, 典型场景是
+         *  追加写日志型存储（mkv）的 O(N²)→O(N) 优化。
+         *
+         *  @param ctx  实例上下文
+         *  @param sink 框架注入的数据出口 (非 NULL, 且 restore 非 NULL)
+         *  @return 0=全部记录已推完；>0=扫描不完整 (存在未被接受的记录: 单条
+         *          超出后端扫描缓冲的大 BLOB/STRING, 或 restore 拒绝),
+         *          param_load_all 会回退到逐条 load；<0=失败
+         *  @note sink 与 sink->ctx 仅在本次调用期间有效, 后端不得缓存。 */
+        int (*load_all)(void *ctx, const param_restore_sink_t *sink);
         /** 保存指定参数的数据。删除操作请用 delete 回调，不要用 len==0 隐式删除。
          *
          *  @return 0 = 已写入; 非 0 = 失败。失败原因不区分 (含后端统一为 -1 的
          *          情形), 框架在 API 边界统一翻译为 PARAM_ERR_FLASH_FAIL。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
-        /** 批量保存全部参数。NULL = 走逐条 save；非 NULL = param_save_all 优先调用。
+        /** 批量保存事务开始 (NULL = 本后端无批量优化)。
          *
-         *  后端自行遍历条目（典型做法: param_foreach + 各条目的 vtable->save，
-         *  将"逐条落盘"合并为"全部算完再落盘一次"，把 N 次全文件重写降为 1 次）。
+         *  param_save_all 的批量通路由本回调与 save_commit 组成, 取代
+         *  "后端自己遍历条目"的旧方案:
+         *    save_begin → 框架逐条调 save → save_commit
+         *  后端只需在自己内部打开批量模式 (如 iniparser 置 defer_dump,
+         *  让 save 只改字典不落盘), 无需认识框架的遍历 API 或条目 vtable。
          *  逐条的 PERSIST 过滤仍由 param_data_ops 层负责。
          *
-         *  @note save 仍为**必需**: 本回调只是 param_save_all 的批量优化，
-         *        param_save_one / 未提供本回调的后端依旧走 save。
-         *  @note 框架在 SYS_LOCK_PARAM **之外**调用本回调: 后端内部的遍历 API
-         *        会自行加锁，非递归锁下锁内调用会自死锁。
-         *  @return 0 = 全部已保存；<0 = 失败
-         *          (经 param_status_from_backend 归一为 param_status_t)。 */
-        int (*save_all)(void *ctx);
+         *  @note 二者必须同时提供, 或同时为 NULL。
+         *  @note 框架在 SYS_LOCK_PARAM **之外**调用 begin/commit (锁内只做
+         *        逐条 save 所需的遍历), 实现内可安全调用加锁 API。
+         *  @return 0 = 已进入批量模式; 非 0 = 失败 (param_save_all 直接上抛,
+         *          不退化为逐条 —— 免得"批量不可用"被静默掩盖)。 */
+        int (*save_begin)(void *ctx);
+        /** 批量保存事务提交: 把 save_begin 以来累积的改动一次性落盘。
+         *
+         *  @note 仅当 save_begin 返回 0 时调用; 即使中间有条目 save 失败也会
+         *        调用 (提交已成功部分, 错误码由 param_save_all 汇总)。
+         *  @return 0 = 已落盘; 非 0 = 失败 (param_save_all 在无更早错误时上报) */
+        int (*save_commit)(void *ctx);
         /** 删除单个参数的持久化数据 (NULL = 后端不支持)
          *  @return 0 = 已删除; 非 0 = 失败 → PARAM_ERR_FLASH_FAIL */
         int (*delete)(void *ctx, uint32_t param_id);
@@ -983,7 +1036,7 @@ extern "C"
      *
      *  @return PARAM_OK 全部成功 (含未标记 PERSIST、因而未写介质的条目);
      *          PARAM_ERR_FLASH_FAIL 任一失败 (逐条路径为首个失败条目; 批量路径由
-     *          后端 save_all 上报); PARAM_ERR_NOT_SUPPORTED 本固件
+     *          后端 save_commit 上报); PARAM_ERR_NOT_SUPPORTED 本固件
      *          不持久化; PARAM_ERR_NOT_FOUND 框架未初始化
      *  @note 写介质失败统一译作 PARAM_ERR_FLASH_FAIL —— 后端以 -1 报错, 若
      *        直接上抛会与 PARAM_ERR_INVALID_ID 撞码。 */
