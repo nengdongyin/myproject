@@ -6,9 +6,8 @@
  * @brief 存储后端共用定义 — 分区索引 → 分区名 的唯一数据源
  *
  * flashdb / mkv / iniparser 三个后端都按同一张表把分区索引翻译成分区名。
- * 该映射此前在三个 .c 文件里各写一份逐字相同的 static 表, 修改
- * PARAM_PARTITION_COUNT 时必须人工同步三处 (见 param_manager_config.h 的
- * 相关注释)。本头文件是该映射的唯一定义处。
+ * 本头文件是该映射的唯一定义处: 修改 PARAM_PARTITION_COUNT 只需改这里,
+ * 不必在几个后端里人工同步 (见 param_manager_config.h 的相关注释)。
  *
  * @note header-only (static inline): 不新增编译单元, 因此三个后端的
  *       构建清单 (CMakeLists.txt / test_build/build.rsp / .vscode/tasks.json)

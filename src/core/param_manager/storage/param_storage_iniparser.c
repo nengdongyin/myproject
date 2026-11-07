@@ -33,8 +33,8 @@
 #include "param_storage_common.h"
 /* 值是"名称:hex"形式, 名称经 param_entry_name() 取自条目本身 (调试名),
    这是本后端对框架内部 API 的唯一依赖 (纯装饰用途, 不参与身份)。
-   批量恢复/批量保存已改为 sink 注入与 save_begin/save_commit 端口,
-   后端不再反向遍历框架条目、也不直调条目 vtable。 */
+   批量通路分别走 sink 注入 (恢复) 与 save_begin/save_commit (保存),
+   本后端不遍历框架条目、也不直调条目 vtable。 */
 #include "param_manager_internal.h"
 
 #include <stdio.h>
@@ -413,8 +413,8 @@ static int iniparser_save_begin_cb(void *ctx)
 /**
  * @brief 批量保存事务提交 — 一次性落盘并关闭批量模式
  *
- * 把 param_save_all 的 N 次全文件重写降为 1 次 (原实现每条 PERSIST 参数都
- * atomic_dump_ini 一次, 参数越多重复越大)。
+ * 批量模式下逐条 save 只改字典, 由本回调一次性落盘 —— 否则每条 PERSIST
+ * 参数都要全量重写一次文件, 开销随参数数线性叠加。
  *
  * @note 框架在 SYS_LOCK_PARAM 之外调用本回调, 文件 I/O 不阻塞参数访问。
  * @note 先关批量模式再落盘: 即使落盘失败, 后端也不会滞留在 defer_dump 状态

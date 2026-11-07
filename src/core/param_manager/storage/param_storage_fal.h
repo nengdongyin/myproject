@@ -32,7 +32,7 @@ extern "C" {
  *
  * @note 函数内的 inited 标志是每个 TU 一份。flashdb 与 mkv 若同时编入且
  *       都被调用, 最多各调用一次 fal_init() (fal_init 本身幂等)。
- * @note 非线程安全: 与原实现一致, 假定启动期单线程调用。
+ * @note 非线程安全: 假定启动期单线程调用。
  */
 static inline void param_fal_ensure_init(void)
 {

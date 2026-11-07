@@ -643,9 +643,9 @@ extern "C"
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
         /** 批量保存事务开始 (NULL = 本后端无批量优化)。
          *
-         *  param_save_all 的批量通路由本回调与 save_commit 组成, 取代
-         *  "后端自己遍历条目"的旧方案:
+         *  param_save_all 的批量通路由本回调与 save_commit 组成:
          *    save_begin → 框架逐条调 save → save_commit
+         *  遍历与加锁由框架负责, 后端只表达"进入/退出批量模式"。
          *  后端只需在自己内部打开批量模式 (如 iniparser 置 defer_dump,
          *  让 save 只改字典不落盘), 无需认识框架的遍历 API 或条目 vtable。
          *  逐条的 PERSIST 过滤仍由 param_data_ops 层负责。

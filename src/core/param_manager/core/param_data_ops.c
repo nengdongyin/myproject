@@ -268,19 +268,14 @@ static int blob_load(param_entry_t *e)
     if (ret == PARAM_ERR_NOT_FOUND) return PARAM_OK; /* 键不存在: 缓存保持默认值 */
     if (ret != PARAM_OK) return ret;                 /* 读失败/记录超长: 上抛 */
 
-    /* 短记录 (旧固件 / 数据损坏 / 格式变更) → 显式清零未覆盖的尾部。
-       缓存是就地填充的, 且 BLOB 为单缓冲配置 (cache 与 default_val 共享
-       缓冲, 已无法回滚到默认值), 因此必须保证未覆盖字节为 0 —— 否则缓存
-       成为"半新半旧"的混合体, 残留字节来自上一次写入或外部缓冲区, 随后
-       被 param_read / param_save_one 当作有效数据。
-       语义与 value_type_load 一致 (短记录按零补齐)。
-       注: param_cache_restore 对短 BLOB 记录直接拒绝 —— 那里的源是共享的
-       scan 缓冲区, 越过 len 读会越界; 此处目标缓冲区由本条目独占,
-       零补齐是安全且确定的。 */
-    /* 为何不"读取前整块 memset": BLOB 为单缓冲配置, cache 与 default_val
-       是同一块内存, 键不存在 (PARAM_ERR_NOT_FOUND) 时预清零会连出厂默认值
-       一起抹掉。value_type_load 能"先清零再回填", 是因为它清的是栈上
-       临时变量而非缓存。 */
+    /* 短记录 (旧固件 / 数据损坏 / 格式变更) → 清零未覆盖的尾部。
+       BLOB 是单缓冲配置 (cache 与 default_val 共享缓冲, 无法回滚到默认值),
+       而缓存是就地填充的: 不清零会留下"半新半旧"的混合体, 残留字节随后
+       被 param_read / param_save_one 当作有效数据。语义与 value_type_load
+       一致 (短记录按零补齐)。
+       不在读取前整块 memset 的原因: 单缓冲下预清零会连出厂默认值一起抹掉
+       (键不存在时缓存必须保持默认值); value_type_load 能预清零, 是因为它
+       清的是栈上临时变量而非缓存。 */
     if (got < be->blob_size)
         memset((uint8_t *)be->cache.ptr + got, 0,
                (size_t)be->blob_size - (size_t)got);
@@ -306,12 +301,10 @@ static int string_load(param_entry_t *e)
     if (ret != PARAM_OK) return ret;                 /* 读失败/记录超长: 上抛 */
 
     /* 记录长度 n = min(read_len, max_len):
-       - 记录不含 '\0' 时 (损坏/旧格式), 在 n 处强制截断;
-       - 记录短于缓冲区时, 从 n 到缓冲末尾 [n, max_len] 全部清零。
-       这两步同时解决两个真实泄漏: param_read_raw 拷贝 max_len+1 字节、
-       string_save 持久化 max_len+1 字节 —— 尾部残留字节否则会被当作
-       有效字符读出去、并写进 Flash。语义同 value_type_load/blob_load
-       (短记录按零补齐)。 */
+       - 不含 '\0' 的损坏记录在 n 处强制截断;
+       - 短记录从 n 到缓冲末尾全部清零 —— param_read_raw / string_save 都会
+         搬 max_len+1 字节, 尾部残留会被当成有效字符读出并写进 Flash。
+       同 blob_load: 单缓冲下不能读取前预清零 (会抹掉默认字符串)。 */
     uint16_t n = (got > se->max_len) ? se->max_len : got;
     /* 同 blob_load: STRING 亦为单缓冲, 不能读取前预清零 (会抹掉默认字符串) */
     memset((char *)se->cache.ptr + n, 0, (size_t)cap - (size_t)n);

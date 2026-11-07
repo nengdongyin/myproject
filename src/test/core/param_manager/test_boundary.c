@@ -180,7 +180,7 @@ void test_ip_over_64_params_ok(void) {
     IP_DRIVER_DEFINE(big_ip, TEST_MODULE_IP2, "BigIP", NULL, NULL, NULL, NULL, NULL, NULL);
     TEST_ASSERT_PARAM_OK(ip_driver_register(&big_ip_instance, ip_table, 100));
 
-    /* 验证 local_id ≥ 64 的参数可正常标脏/清脏 (旧 64-bit 位图实现会丢位/UB) */
+    /* 验证 local_id ≥ 64 的参数可正常标脏/清脏 (条目级脏位与 local_id 无关) */
     param_value_t v = { .u32 = 12345 };
     TEST_ASSERT_PARAM_OK(param_write(MAKE_PARAM_ID(TEST_MODULE_IP2, 99), v));
     param_stats_t stats;

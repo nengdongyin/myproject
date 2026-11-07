@@ -189,8 +189,7 @@ void test_write_immediate_ip_fails_keeps_cache(void) {
     test_ip_instance.write = mock_ip_write_ok;
 }
 
-/* IP 侧同样: write 是可选钩子, 缺失时"立即"仅到缓存层, 不报错。
-   (旧断言期望 PARAM_ERR_NOT_FOUND —— 那是"只有这一个入口报错"的遗留行为) */
+/* IP 侧同样: write 是可选钩子, 缺失时"立即"仅到缓存层, 不视为错误。 */
 void test_write_immediate_ip_no_write_cb(void) {
     test_ip_instance.write = NULL;
     register_all();
@@ -213,7 +212,7 @@ void test_write_immediate_applet_no_write_cb(void) {
     register_all();
 
     param_value_t v = { .u32 = 42 };
-    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_APPLET_UINT, v)); /* 修复前: NOT_FOUND */
+    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_APPLET_UINT, v));
 
     param_value_t cached;
     param_read_cache(TID_APPLET_UINT, &cached);
@@ -250,7 +249,7 @@ void test_notify_reports_clamped_value(void) {
 
     TEST_ASSERT_EQUAL_INT(1, g_notify_count);
     TEST_ASSERT_EQUAL_UINT32(TID_APPLET_UINT, g_notify_last_id);
-    TEST_ASSERT_EQUAL_UINT32(200, g_notify_last_value.u32); /* 修复前: 250 */
+    TEST_ASSERT_EQUAL_UINT32(200, g_notify_last_value.u32);
 
     param_value_t cached;
     param_read_cache(TID_APPLET_UINT, &cached);
@@ -554,7 +553,7 @@ void test_write_blob_validates(void) {
 void test_write_raw_string_bounded_by_len(void) {
     register_harden();
 
-    /* 4 个有效字符后紧跟非 '\0' 填充 — 旧实现 strncpy(max_len) 会把填充也拷进来 */
+    /* 4 个有效字符后紧跟非 '\0' 填充 —— 若按 strncpy(max_len) 处理, 填充也会被拷入 */
     char src[12];
     memset(src, 'X', sizeof(src));
     memcpy(src, "abcd", 4);
@@ -572,7 +571,7 @@ void test_cache_restore_checks_record_len(void) {
     memset(good, 0x33, sizeof(good));
     TEST_ASSERT_PARAM_OK(param_write_blob(HID_BLOB, good, sizeof(good)));
 
-    /* BLOB: 短记录 → 拒绝, 缓存保持不变 (旧实现会按 blob_size 越界读) */
+    /* BLOB: 短记录 → 拒绝, 缓存保持不变 (若按 blob_size 读会越过记录长度) */
     uint8_t short_rec[4];
     memset(short_rec, 0x77, sizeof(short_rec));
     TEST_ASSERT_PARAM_ERR(param_cache_restore(HID_BLOB, short_rec, sizeof(short_rec)),

@@ -327,7 +327,7 @@ void param_module_node_insert(param_module_node_t *node)
  * @brief 通过 param_id 查找参数条目 (哈希 + 线性探测, 见 hash_find)
  *
  * 框架内各路径与 param_data_ops.c 的批量恢复均经此函数查找条目 ——
- * 只此一层, 不再包转发函数。
+ * 只此一层, 不另设转发包装。
  *
  * @note 调用方若需哈希表一致性保证, 自行在外层持 SYS_LOCK_PARAM。
  * @param param_id 参数 ID
@@ -670,13 +670,11 @@ int param_entry_write_apply(param_entry_t *e, param_value_t value)
  *   - IP 模块:  write 回调存在时直通硬件; 不存在时同样只到缓存,
  *                值留在缓存里等 flush 的批量回调或 exec 命令下发。
  *
- * 因此 write 是**可选钩子**, 缺失不构成错误 (App / IP 一视同仁)。这与仓库里
- * 既有的两条语义一致:
- *   - param_entry_write / param_entry_write_apply 都不要求 write 存在;
- *   - _ip_flush_write_entry 对无 write 回调的驱动也是"清脏后跳过"。
- * 若在此返回错误, 同一配置下 param_write 成功而 param_write_immediate 失败,
- * 调用者无法从 API 层解释该差异; 而且"该 IP 驱动既无 write 又无 flush"这类
- * 配置问题属于注册期诊断 (param_check_flush_integrity 一类), 不该由单次
+ * 因此 write 是**可选钩子**, 缺失不构成错误 (App / IP 一视同仁):
+ * param_entry_write / param_entry_write_apply / _ip_flush_write_entry 都不
+ * 要求它存在。若在此返回错误, 同一配置下 param_write 成功而
+ * param_write_immediate 失败, 调用者无法从 API 层解释该差异; 而"既无 write
+ * 又无 flush"属注册期诊断问题 (见 param_check_flush_integrity), 不该由单次
  * 写入路径承担。
  *
  * @param e     参数条目
@@ -1915,7 +1913,7 @@ const param_storage_drv_t *param_get_storage_partition(uint8_t index)
  *
  *   **阶段 1 — 版本检查:**
  *   从存储中读取 PID_SCHEMA_VER（1 字节版本号）:
- *     - 不存在 (ret≤0): 首次启动 → 写入当前版本号，跳过迁移
+ *     - 返回 PARAM_ERR_NOT_FOUND: 首次启动 → 写入当前版本号，跳过迁移
  *     - 不匹配: 存储格式破坏性变更 → 全量 erase_all + 重写版本号
  *     - 匹配: 进入阶段 2
  *
@@ -2025,8 +2023,9 @@ int param_migrate_storage(const param_storage_drv_t *storage,
 /**
  * @brief sink 的 restore 实现 — 直接委托 param_cache_restore
  *
- * 框架在 SYS_LOCK_PARAM 内调用本函数 (见 param_restore_sink_t 的契约),
- * 因此此处不再加锁; param_cache_restore 自身也不加锁。
+ * 框架在锁**外**调用本函数 (load_all 的批量通路段不持全局锁), 故此处
+ * 自行加锁包住缓存写入; param_cache_restore 本身假定调用者已持锁。
+ * 每条记录的提交是原子的, 后端扫描期间其他任务可正常访问参数。
  *
  * @note 本函数是 param_cache_restore 与存储后端之间唯一的桥。后端的
  *       load_all 只持有 sink 指针, 不需要也不得包含 param_manager_internal.h。

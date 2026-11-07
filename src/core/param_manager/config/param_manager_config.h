@@ -78,7 +78,7 @@ extern "C" {
 #error "PARAM_FLASHDB_ENABLE / PARAM_INIPARSER_ENABLE / PARAM_MKV_ENABLE are mutually exclusive"
 #endif
 
-/* OS 移植选择已迁移至 port/port.h (PORT_OS_* 宏系列) */
+/* OS 移植选择见 port/port.h (PORT_OS_* 宏系列) */
 
 /* ================================================================
  *  容量 / 上限

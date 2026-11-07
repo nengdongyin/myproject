@@ -133,7 +133,7 @@ extern "C"
     /* ================================================================
      *  Mock Storage 3 — 批量通路 (load_all 的 sink / save_begin+commit)
      *
-     *  只给批量改造的用例使用: 既有用例仍走 g_mock_storage 的逐条兜底路径。
+     *  只给验证批量通路的用例使用: 既有用例仍走 g_mock_storage 的逐条兜底路径。
      * ================================================================ */
     extern mock_kv_t g_mock_kv3[MOCK_STORAGE_MAX];
     extern uint16_t g_mock_kv3_count;

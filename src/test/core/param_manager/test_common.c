@@ -336,7 +336,7 @@ static int mock_storage3_save(void *ctx, uint32_t id, const uint8_t *data, uint1
 /**
  * @brief load_all 的批量实现 — 只经框架注入的 sink 推数据
  *
- * 后端不认识 param_cache_restore, 也不需要认识: 这正是本轮改造要验证的端口。
+ * 后端不认识 param_cache_restore, 也不需要认识: 这正是 port 接口存在的意义。
  */
 static int mock_storage3_load_all(void *ctx, const param_restore_sink_t *sink)
 {

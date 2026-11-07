@@ -205,7 +205,7 @@ void test_load_blob_short_record_zeros_tail(void) {
     uint16_t out_len = sizeof(out);
     TEST_ASSERT_PARAM_OK(param_read_raw(TID_APPLET_BLOB, out, &out_len));
 
-    /* 前 16 字节 = 记录内容, 其余必须补零 (修复前: 残留 0x55) */
+    /* 前 16 字节 = 记录内容, 其余必须补零 (若不清零尾部, 这里会残留 0x55) */
     uint8_t expect[TEST_BLOB_SIZE];
     memset(expect, 0x00, sizeof(expect));
     memset(expect, 0xAA, 16);
