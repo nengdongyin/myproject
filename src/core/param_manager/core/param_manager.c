@@ -1741,10 +1741,17 @@ static void save_all_visit(param_entry_t *e, void *ctx)
  */
 int param_save_all(void)
 {
-    int ret = param_storage_require(PARAM_CAP_SAVE, NULL);
+    const param_storage_drv_t *drv = NULL;
+    int ret = param_storage_require(PARAM_CAP_SAVE, &drv);
     if (ret != PARAM_OK)
         return ret;
 
+    /* 后端提供批量通路 → 锁外交给它 (它内部会自行遍历条目, 而遍历 API
+       会加锁; 非递归锁下锁内调用会自死锁)。同时避免持久化全程持锁。 */
+    if (drv->save_all)
+        return param_status_from_backend(drv->save_all(drv->ctx));
+
+    /* 兜底: 逐条保存 (后端未提供批量通路) */
     int first_err = PARAM_OK;
 
     system_lock(SYS_LOCK_PARAM);

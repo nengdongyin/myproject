@@ -581,6 +581,19 @@ extern "C"
          *  @return 0 = 已写入; 非 0 = 失败。失败原因不区分 (含后端统一为 -1 的
          *          情形), 框架在 API 边界统一翻译为 PARAM_ERR_FLASH_FAIL。 */
         int (*save)(void *ctx, uint32_t param_id, const uint8_t *data, uint16_t len);
+        /** 批量保存全部参数。NULL = 走逐条 save；非 NULL = param_save_all 优先调用。
+         *
+         *  后端自行遍历条目（典型做法: param_foreach + 各条目的 vtable->save，
+         *  将"逐条落盘"合并为"全部算完再落盘一次"，把 N 次全文件重写降为 1 次）。
+         *  逐条的 PERSIST 过滤仍由 param_data_ops 层负责。
+         *
+         *  @note save 仍为**必需**: 本回调只是 param_save_all 的批量优化，
+         *        param_save_one / 未提供本回调的后端依旧走 save。
+         *  @note 框架在 SYS_LOCK_PARAM **之外**调用本回调: 后端内部的遍历 API
+         *        会自行加锁，非递归锁下锁内调用会自死锁。
+         *  @return 0 = 全部已保存；<0 = 失败
+         *          (经 param_status_from_backend 归一为 param_status_t)。 */
+        int (*save_all)(void *ctx);
         /** 删除单个参数的持久化数据 (NULL = 后端不支持)
          *  @return 0 = 已删除; 非 0 = 失败 → PARAM_ERR_FLASH_FAIL */
         int (*delete)(void *ctx, uint32_t param_id);
@@ -969,7 +982,8 @@ extern "C"
     /** @brief 保存所有参数到持久化存储 (仅 PARAM_FLAG_PERSIST 标记的参数)
      *
      *  @return PARAM_OK 全部成功 (含未标记 PERSIST、因而未写介质的条目);
-     *          PARAM_ERR_FLASH_FAIL 首个失败条目; PARAM_ERR_NOT_SUPPORTED 本固件
+     *          PARAM_ERR_FLASH_FAIL 任一失败 (逐条路径为首个失败条目; 批量路径由
+     *          后端 save_all 上报); PARAM_ERR_NOT_SUPPORTED 本固件
      *          不持久化; PARAM_ERR_NOT_FOUND 框架未初始化
      *  @note 写介质失败统一译作 PARAM_ERR_FLASH_FAIL —— 后端以 -1 报错, 若
      *        直接上抛会与 PARAM_ERR_INVALID_ID 撞码。 */
