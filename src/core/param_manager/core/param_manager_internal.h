@@ -225,16 +225,11 @@ extern "C"
     /**
      * @brief 条目数据区的字节数 — 全部"长度"语义的唯一定义
      *
-     * - 值类型 (UINT/INT/FLOAT/BOOL/ENUM/EXEC) → sizeof(param_value_t)
-     * - BLOB                                   → blob_size
-     * - STRING                                 → max_len + 1 (含结尾 '\0')
-     * - 类型越界                               → 0
+     * 值类型 → sizeof(param_value_t); BLOB → blob_size; STRING → max_len+1
+     * (含 '\0'); 类型越界 → 0。param_read_raw / param_get_size 必须共用本函数,
+     * 否则同一参数在不同入口各自推导长度, 会出现"一处含 '\0' 一处不含"。
      *
-     * param_read_raw / param_get_size 必须共用本函数: 同一参数在不同入口上
-     * 若各自推导长度, 很容易出现"一处含 '\0' 一处不含"的隐形不一致。
-     *
-     * @note 返回值 0 有两义 —— 类型越界, 或 BLOB 的 blob_size 本就是 0。
-     *       需要区分时请先用 entry_type() 判类型。
+     * @note 返回值 0 有两义: 类型越界, 或 BLOB 的 blob_size 本就是 0。
      * @param e 参数条目
      * @return 字节数
      */
@@ -282,9 +277,7 @@ extern "C"
         ((param_entry_head_t *)e)->dirty = v;
     }
 
-    /**
-     * @brief 清除参数 dirty 标志并同步全局统计
-     */
+    /** @brief 清除参数 dirty 标志并同步全局统计 */
     static inline void param_entry_clear_dirty(param_entry_t *e)
     {
         if (entry_dirty(e))
@@ -294,9 +287,7 @@ extern "C"
         }
     }
 
-    /**
-     * @brief 标记参数 dirty 并同步全局统计
-     */
+    /** @brief 标记参数 dirty 并同步全局统计 */
     static inline void param_entry_mark_dirty(param_entry_t *e)
     {
         if (!entry_dirty(e))

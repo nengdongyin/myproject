@@ -52,15 +52,9 @@ static int ip_param_load(param_entry_t *e)
 /**
  * @brief 单条目刷入 — take-and-clear + 锁外写硬件
  *
- * @details
- * 分三步，保证"清脏"与"硬件写入"之间不会吞掉并发写入:
- *   1. **锁内取快照 + 清脏**: 一次性读出缓存值并清除 dirty 标志。
- *      此后若有并发 param_write 更新缓存并重新标脏，新脏位保留，
- *      下一轮 param_flush 会再次下发。
- *   2. **锁外写硬件**: inst->write() 是用户回调，期间允许其调用
- *      param_read / param_read_cache / param_save_one 等加锁 API。
- *   3. **失败回滚脏位 (锁内)**: 硬件写失败恢复 dirty，下次
- *      param_flush() 自动重试 (缓存不回滚)。
+ * 三步, 保证"清脏"与"写硬件"之间不吞掉并发写入: 锁内取快照并清脏
+ * (并发新置的脏位留给下一轮) → 锁外调 inst->write (回调内可用加锁 API)
+ * → 失败时锁内回滚脏位 (缓存不回滚, 下次 flush 重试)。
  *
  * @param e    参数条目
  * @param inst IP 实例

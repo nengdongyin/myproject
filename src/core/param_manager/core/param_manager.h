@@ -276,12 +276,8 @@ extern "C"
          *   - App 参数: 跳过 apply 回调，仅更新缓存 + 标记 dirty
          *   - IP 参数:  与 write 行为相同 (IP 无 apply 回调) */
         int (*write_cache)(param_entry_t *e, param_value_t value);
-        /** 立即写入参数 — "立即" = 写到本模块可及的最深层:
-         *   - IP 且注册了 write 回调: 直通硬件 (返回时寄存器已更新), 不产生 dirty;
-         *   - App, 或 IP 未注册 write 回调: 更新缓存 + 清除 dirty,
-         *     "立即"仅到缓存层, 硬件生效仍需 param_flush() 触发模块 flush。
-         *   write 是**可选钩子** (App 与 IP 一视同仁), 缺失不报错 —— 与
-         *   param_write / param_write_apply 及 IP flush 路径的既有语义一致。 */
+        /** 立即写入参数 ("立即" = 写到本模块可及的最深层, 不保证硬件已更新)。
+         *  语义与 App/IP 差异、write 作为可选钩子的约定见 param_write_immediate。 */
         int (*write_immediate)(param_entry_t *e, param_value_t value);
         /** 原始字节流写入 */
         int (*write_raw)(param_entry_t *e, const uint8_t *data, uint16_t len);
@@ -289,10 +285,8 @@ extern "C"
         int (*flush)(param_entry_t *e);
         /** 将参数持久化到 Flash */
         int (*save)(param_entry_t *e);
-        /** 从 Flash 恢复参数
-         *  返回 param_status_t (PARAM_OK = 已恢复或存储中无该键;
-         *  负值 = 错误), 与其余槽位保持一致 —— 不返回字节数,
-         *  "读了多少字节"是存储后端层 (param_storage_drv_t::load) 的契约。 */
+        /** 从 Flash 恢复参数 (返回 param_status_t: PARAM_OK = 已恢复或无该键,
+         *  负值 = 错误; 不返回字节数 —— 那是后端层 load 的契约) */
         int (*load)(param_entry_t *e);
         /** 重置参数为默认值 */
         int (*reset)(param_entry_t *e);

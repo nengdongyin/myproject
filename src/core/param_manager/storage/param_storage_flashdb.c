@@ -297,8 +297,7 @@ const param_storage_drv_t *param_storage_flashdb_create(void)
  *
  *   2. 创建新实例: 若无匹配，分配第一个空闲槽位 (used==false)。
  *      初始化 flashdb_ctx_t 结构体，填充所有 8 个存储驱动回调:
- *        load / save / delete / erase_all / deinit /
- *        get_active_partition / set_active_partition / get_partition
+ *      load/save/delete/erase_all/deinit/分区读写/get_partition。
  *      设置 used=true，惰性初始化 FAL，调用 flashdb_init_kvdb。
  *
  *   3. 池耗尽: 所有 MAX_INSTANCES 个槽位均已使用时返回 NULL。

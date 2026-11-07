@@ -36,9 +36,8 @@ static int app_module_flush(param_module_node_t *m)
     m->dirty = 0;
     system_unlock(SYS_LOCK_PARAM);
 
-    /* 用户回调 (锁外): 回调内可安全调用 param_read / param_save_one /
-       param_read_cache 等加锁 API。失败时恢复模块级脏位, 下次
-       param_flush() 自动重试 (与 IP 路径失败语义一致) */
+    /* 用户回调 (锁外): 可安全调用 param_read / param_save_one 等加锁 API。
+       失败时恢复模块级脏位, 下一轮 param_flush 自动重试 (与 IP 路径一致) */
     if (mod->flush) {
         int ret = mod->flush(mod->ctx);
         if (ret != PARAM_OK) {

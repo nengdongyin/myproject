@@ -1,15 +1,11 @@
 /**
  * @file param_manager.c
- * @brief 参数管理核心框架实现
+ * @brief 参数管理核心框架实现 — 生命周期、哈希表、模块注册、读写分派
+ *        以及 flush/save/load/reset 的运行时实现
  *
- * 提供全局生命周期管理、哈希表操作、模块注册、读写分派、
- * flush/save/load/reset 等所有功能的运行时实现。
- *
- * 全局状态: 单例 g_pm 结构体，包含:
- *   - module_head / module_tail  模块链表 (按 MODULE_INIT_ORDER 排序)
- *   - hash[PARAM_HASH_SIZE]      参数哈希表 (开放寻址/线性探测)
- *   - storage                    持久化后端驱动
- *   - stats                      运行时统计信息
+ * 运行时状态集中在单例 g_pm (模块链表 + 参数哈希表 + 存储驱动 + 统计),
+ * 各字段含义见其自身定义。架构分层、两级 vtable 与锁纪律分别见
+ * param_manager.h / param_manager_internal.h。
  */
 
 #include "param_manager.h"
@@ -52,10 +48,6 @@ const param_storage_drv_t *param_get_storage(void)
 /**
  * @brief 运行时替换持久化后端驱动 — 纯指针替换
  *
- * @details
- * 仅替换 g_pm.storage 指针，不触发旧驱动的 deinit，不触发 save/load。
- * 这意味着旧驱动在替换后仍然有效，调用者可以保存旧指针并在之后切回。
- *
  * 典型用法 (临时切分区):
  * @code
  *   const param_storage_drv_t *saved = param_get_storage();
@@ -66,7 +58,7 @@ const param_storage_drv_t *param_get_storage(void)
  * @endcode
  *
  * @param storage 新的存储后端驱动 (可为 NULL 停用持久化)
- * @note 若传入非 NULL 但缺少 load/save 回调的驱动，调用被静默忽略
+ * @note 传入非 NULL 但缺少 load/save 回调的驱动时, 调用被静默忽略
  */
 void param_set_storage(const param_storage_drv_t *storage)
 {
@@ -345,15 +337,8 @@ param_entry_t *param_entry_find(uint32_t param_id)
 /**
  * @brief 初始化参数管理框架
  *
- * 驱动由工厂函数预初始化后传入，此函数仅存储指针。
- *
- * @note 假定系统启动阶段单线程调用，因此不加锁。
- *       反初始化 param_deinit 会加锁以安全清理多线程环境中
- *       可能仍被持有的资源。
- *
- * @param storage 持久化后端驱动 (可为 NULL)
- * @param notify  参数变化通知回调 (可为 NULL)
- * @return PARAM_OK 成功，PARAM_ERR_BUSY 重复初始化
+ * 仅存储驱动指针 —— 驱动由工厂函数预初始化 (见 param_storage_*_create)。
+ * @note 假定启动阶段单线程调用, 故不加锁; 公共契约见头文件同名声明。
  */
 int param_init(const param_storage_drv_t *storage, param_notify_fn notify)
 {
@@ -413,35 +398,20 @@ bool param_module_is_initialized(uint16_t module_id)
 }
 
 /* ================================================================
- *  模块注册
- *
- *  param_module_register_node() 为通用注册入口 (App/IP 共用)。
- *  param_module_register() 为 App 便捷包装。
- *
- *  注册流程:
- *    1. 检查模块是否已注册 (module_id 重复)
- *    2. 检查所有参数 ID 是否冲突
- *    3. 参数插入哈希表
- *    4. 模块节点按 ORDER 插入有序链表
- *    5. 更新统计信息
+ *  模块注册 — param_module_register_node() 为通用入口 (App/IP 共用),
+ *  param_module_register() 为 App 侧便捷包装。流程见函数注释。
  * ================================================================ */
 
 /**
  * @brief 通用模块注册入口 — 将模块节点及参数表注册到框架
  *
  * @details
- * 注册流程分 5 步，全程持锁以保证哈希表 + 链表插入的原子性:
+ * 全程持锁完成五步: module_id 去重 → 逐条 param_id 查重 → 哈希插入
+ * (开放寻址 + 线性探测) → 按 MODULE_INIT_ORDER 插入有序链表 → 更新统计。
+ * 任一步失败即返回, 不继续后续步骤。
  *
- *   1. **去重检查**: 检查 module_id 是否已注册 → 返回 PARAM_ERR_ALREADY_REG
- *   2. **参数冲突检查**: 遍历所有参数条目，检查 param_id 是否已存在于哈希表
- *      → 返回 PARAM_ERR_ALREADY_REG
- *   3. **哈希插入**: 逐条将参数条目插入哈希表（开放寻址 + 线性探测）
- *      → 表满返回 PARAM_ERR_NO_MEMORY
- *   4. **有序链表插入**: 按 MODULE_INIT_ORDER 顺序将模块节点插入全局链表
- *   5. **统计更新**: 更新 module_count / param_count / persist_count
- *
- * App 和 IP 模块均通过此接口注册，消除双轨注册。
- * 注册前调用者必须先设置 node->vtable 和 node->module_id。
+ * App 与 IP 模块共用本入口, 不存在双轨注册; 调用前必须已设置
+ * node->vtable 与 node->module_id。
  *
  * @note 模块应在 param_load_all / param_reset_all 之前注册。
  *       晚注册的模块不会自动初始化 (initialized 保持 0),
@@ -1565,33 +1535,13 @@ static bool flush_visit(param_module_node_t *m, void *ctx)
 /**
  * @brief 将所有模块的 dirty 参数刷入硬件
  *
- * @details
- * 两阶段执行 (与 param_load_all 的锁策略对齐), 全局锁只保护框架状态,
- * **不覆盖任何用户回调或硬件访问**:
+ * 三段式: 锁内抢占单 flusher (重入返回 PARAM_ERR_BUSY) → 分批快照模块指针、
+ * 在**锁外**调 vtable->flush (慢速总线写不阻塞其他任务的参数访问) → 锁内
+ * 回写统计并释放 flusher。单模块失败不中断整轮, 失败计数饱和累加。
  *
- *   **阶段 1 (锁内)**: 遍历模块链表 (按 MODULE_INIT_ORDER 顺序)，
- *     仅把 dirty 模块的**指针**快照到栈上数组，不执行任何回调
- *     (分批机制与谓词由 param_module_scan / flush_accept 提供)。
- *     单批容量 PARAM_MODULE_BATCH_MAX，超出则分批: 每批处理完重新进锁
- *     续扫 (cursor 游标)，因此栈占用有界、模块数无上限。
- *
- *   **阶段 2 (锁外)**: 逐模块调用 module->vtable->flush。所有硬件访问与
- *     用户回调均在此阶段执行 —— 期间其他任务可正常调用 param_read /
- *     param_write / param_save_one 等加锁 API，不会被一次慢速总线写
- *     阻塞; 回调内也不会因重入全局锁而自死锁 (非递归 mutex 语义)。
- *
- * 并发语义:
- *   - 同一时刻只允许一个 flusher (g_pm.flushing)。回调内递归调用
- *     param_flush() 返回 PARAM_ERR_BUSY，而不是死锁或无限递归。
- *   - 阶段 2 期间被并发置脏的参数/模块由下一轮 param_flush 补发:
- *     脏位清理采用 take-and-clear (锁内"取值 + 清脏"原子完成),
- *     新脏位不会被本次 flush 吞掉。
- *
- * 即使某个模块 flush 失败，仍会继续处理后续模块，
- * 错误计数累加到 flush_error_count。
- *
- * @return PARAM_OK 全部成功，或最后一个失败的错误码，
- *         PARAM_ERR_BUSY 已有 flush 在进行中
+ * @note 脏位 take-and-clear: 阶段 2 期间新置的脏位留给下一轮, 不会被吞。
+ *       失败重试语义与锁粒度见头文件同名声明。
+ * @return PARAM_OK 或最后一个失败的错误码; PARAM_ERR_BUSY 已有 flush 在进行
  */
 int param_flush(void)
 {
@@ -2073,23 +2023,12 @@ static void load_all_visit(param_entry_t *e, void *ctx)
 /**
  * @brief 从持久化存储加载所有参数
  *
- * 两阶段执行:
- *   1. LOAD 阶段: 遍历哈希表，对所有 entry 调用 entry->vtable->load()
- *      将存储的值恢复到 entry->cache。仅收集第一个错误码。
- *      (即使某个 entry 加载失败，仍继续加载后续 entry)
- *   2. INIT 阶段: 按链表顺序遍历模块 (即 MODULE_INIT_ORDER)，
- *      对每个模块调用 vtable->init()。
+ * LOAD 阶段恢复缓存 (优先走后端批量通路 sink, 不完整时回退逐条 load),
+ * INIT 阶段按 MODULE_INIT_ORDER 调用各模块 init —— 两者分离是为了让 init
+ * 中的 param_read() 能读到已恢复的完整缓存。
  *
- * 两阶段分离的意义: 确保 init 回调中通过 param_read() 能读到正确的缓存值。
- *
- * 恢复后的生效契约 (全量重初始化模型): 恢复后不逐条 apply/write
- * (批量加载无可用顺序, 逐条校验会产生假拒绝与 N 次副作用)。
- * init 回调是批量校验/下发的唯一入口; 未实现 init 的模块其恢复值
- * 仅回填缓存、不做校验。单参数路径 param_load_one 无 init 阶段,
- * 以 write 回调作为重新校验入口 —— 两者契约互补。
- *
- * @note 存储后端不可用时跳过 LOAD 阶段, INIT 阶段仍执行
- *       (param_init 允许 storage=NULL 的系统依赖此路径完成模块初始化)。
+ * @note 恢复后的生效契约 (不逐条 apply/write, init 为唯一校验入口) 见头文件
+ *       同名声明; 无存储后端时跳过 LOAD 阶段, INIT 照常执行。
  */
 int param_load_all(void)
 {
