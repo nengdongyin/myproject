@@ -68,6 +68,22 @@ extern "C"
     /** @brief 获取当前持久化后端驱动 */
     const param_storage_drv_t *param_get_storage(void);
 
+    /**
+     * @brief 读取指定后端的存储格式版本号 (PID_SCHEMA_VER) — 三态探测
+     *
+     * @param[in]  drv     目标后端 (需具备 load + save 回调)
+     * @param[out] version 读到的版本号 (4 字节宽度, 与 PARAM_SCHEMA_VERSION 同宽)
+     * @return PARAM_OK               记录存在, 已写入 *version
+     *         PARAM_ERR_NOT_FOUND    该分区尚无版本键 (首次使用 / 空分区)
+     *         其他负值               读失败 (记录损坏)
+     *
+     * @note 三态必须彼此可分: 调用方靠 NOT_FOUND 判"首次", 靠其他负值判"损坏",
+     *       两者处理方式相反 (前者可补写, 后者不应动存储)。
+     * @note 宽度固定为 4 字节 (sizeof(param_value_t)), 与 value_type_save 一致;
+     *       旧固件的 1 字节短记录会回填到低字节, 高位由调用方的零初始化保证。
+     */
+    int param_schema_version_read(const param_storage_drv_t *drv, uint32_t *version);
+
     /** @brief 通过 module_id 查找模块节点 (遍历链表) */
     param_module_node_t *param_module_find(uint16_t module_id);
 

@@ -26,6 +26,7 @@
 #include "auto_exp_control.h"
 #include "ip_param_manager.h"
 #include "param_dump.h"
+#include "param_service.h"
 
 /**
  * @brief dump 输出回调 — 将格式化文本行输出到控制台
@@ -159,8 +160,9 @@ static const param_storage_drv_t *param_storage_create_selected(void)
  *   2. **事件系统**: lwevt_init() 初始化轻量级事件总线
  *   3. **框架初始化**: param_init(storage, on_param_changed)
  *      注册存储驱动和参数变化通知回调
- *   4. **版本迁移**: param_migrate_storage(storage, NULL, 0)
- *      当前 V1 无迁移，保留接口用于未来固件升级
+ *   4. **元数据 + 版本迁移 + 服务模块**: param_service_init(NULL, 0)
+ *      依次: 注册 g_schema_ver (MODULE_META) → 版本校验/迁移 → 注册
+ *      分区/存盘/加载/热切换旋钮 (MODULE_SYS)。当前 V1 无迁移表。
  *   5. **模块注册**: 根据 PARAM_MODULE_AUTO_REGISTER_ENABLE 选择:
  *      - 自动模式: param_modules_register_all() 遍历链接器段
  *      - 手动模式: sensor_module_init() + auto_exp_module_init()
@@ -188,8 +190,12 @@ void param_manager_init(void)
     /* 步骤 3: 框架初始化 */
     param_init(storage, on_param_changed);
 
-    /* 步骤 4: 存储版本迁移（模块注册和 load_all 之前执行） */
-    param_migrate_storage(storage, NULL, 0);
+    /* 步骤 4: 框架元数据 + 存储版本迁移 + 运维服务模块 (三合一入口)
+       - 先注册 g_schema_ver: 迁移写版本键时 ini 里留下可读名而非 "?"
+       - 迁移失败不影响模块注册 (返回值仅用于报告) */
+    int mig_ret = param_service_init(NULL, 0);
+    if (mig_ret != PARAM_OK)
+        printf("[PM] param_service_init ret=%d\n", mig_ret);
 
     /* 步骤 5: 模块注册 */
 #if PARAM_MODULE_AUTO_REGISTER_ENABLE

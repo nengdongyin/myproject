@@ -54,7 +54,6 @@ target_sources(app PRIVATE
       src/app/init/init_thread.c
       src/app/init/protocol_chain_init.c
       src/app/init/param_manager_init.c
-      src/app/init/sys_param.c
       src/app/init/file_storage_init.c
       src/app/init/protocol_parser_thread.c
       src/core/protocol_parser/protocol_chain.c
@@ -64,6 +63,7 @@ target_sources(app PRIVATE
       src/core/param_manager/core/ip_param_manager.c
       src/core/param_manager/core/param_data_ops.c
       src/core/param_manager/core/param_dump.c
+      src/core/param_manager/core/param_service.c
       src/platform/port/port_impl.c
       src/core/param_manager/storage/param_storage_flashdb.c
       src/core/param_manager/storage/param_storage_mkv.c

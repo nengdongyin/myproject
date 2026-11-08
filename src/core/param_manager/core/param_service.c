@@ -43,6 +43,7 @@
  */
 
 #include "param_manager.h"
+#include "param_manager_internal.h" /* param_schema_version_read */
 #include "app_param_manager.h"
 #include "module_ids.h"
 #include "param_service.h"

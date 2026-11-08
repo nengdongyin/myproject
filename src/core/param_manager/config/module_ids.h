@@ -22,7 +22,7 @@ extern "C"
  * @{
  */
 
-#define MODULE_META 0x00u         /**< 框架元数据模块 (版本号等) */
+#define MODULE_META 0x00u         /**< 框架元数据模块 (版本号等), 见 core/param_service.c */
 #define PID_SCHEMA_VER MAKE_PARAM_ID(MODULE_META, 0x00) /**< 存储格式版本号 */
 
 /** @name 业务逻辑模块 (App) */
@@ -46,9 +46,15 @@ extern "C"
  * 决定 param_load_all() 的 init 阶段以及 param_flush() 的遍历顺序。
  * 越靠前越先执行。IP 硬件在前，业务模块在后。
  * 未注册的模块自动跳过，不报错。
+ *
+ * MODULE_META 必须列在首位且**不得缺省**：
+ *   1. 它是框架元数据（存储格式版本号），没有硬件可刷，先执行无副作用；
+ *   2. param_check_flush_integrity() 把"已注册但不在本表"的模块计入
+ *      flush_order_miss_count 并返回 PARAM_ERR_NOT_FOUND，遗漏会让自检失败。
  */
 #define MODULE_INIT_ORDER \
-    IP_SENSOR,            \
+        MODULE_META,      \
+        IP_SENSOR,        \
         IP_ACQUISITION,   \
         IP_LVDS_RX,       \
         IP_PWM,           \

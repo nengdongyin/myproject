@@ -45,6 +45,11 @@ const param_storage_drv_t *param_get_storage(void)
     return g_pm.storage;
 }
 
+/* 存储格式版本键的补齐入口 — 后端无关, 只经 drv->load / drv->save。
+   只在**落盘**时调用 (param_save_all / param_save_one), 定义见
+   param_migrate_storage 附近。 */
+static void param_schema_version_ensure(const param_storage_drv_t *drv);
+
 /**
  * @brief 运行时替换持久化后端驱动 — 纯指针替换
  *
@@ -1758,6 +1763,15 @@ int param_save_all(void)
             return param_status_from_backend(bret); /* 不退化: 免得"批量不可用"被静默掩盖 */
     }
 
+    /* 全量保存前确保版本键就位 (缺则补, 已有不动)。
+       @note 位置在 begin **之后**: 批量后端下这一步只改内存 (iniparser 的
+             defer_dump), 由 commit 与其他条目一起落盘 —— 既避免首次保存
+             写两遍文件, 也让"begin 失败即完全不写介质"成立。
+       @note 必须在锁内: 后端内部状态靠 SYS_LOCK_PARAM 串行化。 */
+    system_lock(SYS_LOCK_PARAM);
+    param_schema_version_ensure(drv);
+    system_unlock(SYS_LOCK_PARAM);
+
     /* 逐条保存 (无批量后端走同一路径): 收集首个错误码, 不提前退出。
        遍历经 param_hash_scan: 锁内只快照条目指针, 回调内再单独持锁包住
        单条 save —— 两次并发保存因此不会同时进入后端 (见 save_all_visit),
@@ -1785,7 +1799,8 @@ int param_save_all(void)
  */
 int param_save_one(uint32_t param_id)
 {
-    int ret = param_storage_require(PARAM_CAP_SAVE, NULL);
+    const param_storage_drv_t *drv = NULL;
+    int ret = param_storage_require(PARAM_CAP_SAVE, &drv);
     if (ret != PARAM_OK)
         return ret;
 
@@ -1794,6 +1809,10 @@ int param_save_one(uint32_t param_id)
         return PARAM_ERR_INVALID_ID;
 
     system_lock(SYS_LOCK_PARAM);
+    /* 本分区的首次落盘 → 顺手补齐存储格式版本键 (缺则补, 已有则一次读就返回)。
+       必须在锁内: 后端内部状态没有自己的锁, SYS_LOCK_PARAM 是唯一串行化来源。
+       @note 已有键时本调用只多一次 drv->load (字典查找级), 不产生写。 */
+    param_schema_version_ensure(drv);
     ret = e->vtable->save(e);
     system_unlock(SYS_LOCK_PARAM);
 
@@ -1856,13 +1875,81 @@ const param_storage_drv_t *param_get_storage_partition(uint8_t index)
  * ================================================================ */
 
 /**
+ * @brief 读取指定后端的存储格式版本号 — 三态探测 (见头文件同名声明)
+ *
+ * @note 这是版本号读取的**唯一实现**: param_migrate_storage 阶段 1、
+ *       param_schema_version_ensure、热切换前的版本探测均走本函数。
+ *       三份逻辑若各写一份, 宽度 (4 字节) 或三态语义极易漂移。
+ */
+int param_schema_version_read(const param_storage_drv_t *drv, uint32_t *version)
+{
+    if (!drv || !drv->load || !version)
+        return PARAM_ERR_NOT_SUPPORTED;
+
+    uint32_t ver = 0;
+    uint16_t got = 0;
+    int ret = drv->load(drv->ctx, PID_SCHEMA_VER, (uint8_t *)&ver,
+                        (uint16_t)sizeof(ver), &got);
+    if (ret != PARAM_OK)
+        return ret;  /* NOT_FOUND 原样上抛; 其余为读失败 */
+
+    *version = ver;
+    return PARAM_OK;
+}
+
+/**
+ * @brief 确保指定分区已带存储格式版本键 (PID_SCHEMA_VER) — 缺则补写当前版本
+ *
+ * @details
+ * 版本号既是“存储格式的自描述”, 也是“该分区已被本框架初始化过”的标记。
+ * param_migrate_storage() 只在启动阶段对**当时激活的那个**分区处理一次;
+ * 运行期热切换出来的分区 (param_get_storage_partition → 后端工厂) 不会经过它,
+ * 于是那个分区会缺版本键 —— 这就是“param_user0.ini 里没有 0x00000000”的成因。
+ *
+ * 本函数是“补齐”的**唯一实现**, 故意放在框架层而不是后端层:
+ *   - 只经 drv->load / drv->save, 后端无需认识 PID_SCHEMA_VER, 也无需
+ *     引入 module_ids.h (若放后端, 三个后端要各改一份);
+ *   - 与 param_migrate_storage / value_type_save 共用同一宽度 (4 字节);
+ *   - 自带条目名解析 (后端 make_value 会查到 g_schema_ver), 名字依旧可读。
+ *
+ * 只在**确实读不到键**时写: 读失败 (记录损坏) 不动存储 —— 与迁移阶段 1
+ * 同策略, 避免用当前版本号覆盖一个损坏但可能可修复的分区。
+ *
+ * @note 调用点只有两处: **两个落盘入口** param_save_all() 与 param_save_one()。
+ *       切换分区 (param_set_storage) **不**补写 —— 原因有两个, 都很硬:
+ *         1. 一个只有版本键的文件会被后端的 dict_is_empty() 判为非空,
+ *            从而绕开 param_storage_iniparser_create() 的“空分区回退 factory”;
+ *         2. 版本键的“存在性”本身就是后端/迁移判定“已初始化”的信号。
+ *       同理也**不能**放进 param_init(): 那会让迁移阶段 1 误判“首次启动”。
+ *
+ * @note 放在两个落盘入口的效果: 切到新分区不产生任何文件;
+ *       首次 save 时随那次落盘一起把键补上 (之后每次 save 只多一次
+ *       drv->load, 到底层是字典查找级, 不产生写)。
+ *
+ * @param drv 目标后端 (需同时具备 load/save)
+ */
+static void param_schema_version_ensure(const param_storage_drv_t *drv)
+{
+    if (!drv || !drv->save)
+        return;
+
+    uint32_t ver = 0;
+    if (param_schema_version_read(drv, &ver) != PARAM_ERR_NOT_FOUND)
+        return;  /* 已有键 或 读失败 → 不动存储 */
+
+    ver = PARAM_SCHEMA_VERSION;
+    (void)drv->save(drv->ctx, PID_SCHEMA_VER,
+                    (const uint8_t *)&ver, (uint16_t)sizeof(ver));
+}
+
+/**
  * @brief 执行参数版本迁移（固件升级时自动转换旧参数格式）
  *
  * @details
  * 迁移流程分为三个阶段:
  *
  *   **阶段 1 — 版本检查:**
- *   从存储中读取 PID_SCHEMA_VER（1 字节版本号）:
+ *   从存储中读取 PID_SCHEMA_VER（4 字节, 与 PARAM_SCHEMA_VERSION 同宽）:
  *     - 返回 PARAM_ERR_NOT_FOUND: 首次启动 → 写入当前版本号，跳过迁移
  *     - 不匹配: 存储格式破坏性变更 → 全量 erase_all + 重写版本号
  *     - 匹配: 进入阶段 2
@@ -1898,16 +1985,23 @@ int param_migrate_storage(const param_storage_drv_t *storage,
         return PARAM_ERR_NOT_SUPPORTED;
 
     uint8_t buf[256];
-    uint8_t schema_ver;
-    uint16_t got = 0;
+    /* 版本号按 param_value_t 的宽度 (4 字节) 存取 ——
+       注册参数 g_schema_ver (core/param_service.c) 的 vtable->save 写的是
+       sizeof(param_value_t), 两端宽度必须一致: 若此处仍用 uint8_t + len=1 读,
+       后端的 hex_decode 会因记录长度 (4) 超出目标容量 (1) 返回
+       PARAM_ERR_OUT_OF_RANGE, 本函数随即判为 PARAM_ERR_FLASH_FAIL,
+       初始化直接失败且没有 erase 兜底。
+       schema_ver 必须初始化为 0: 短记录 (旧格式 1 字节) 只会回填首字节。 */
+    uint32_t schema_ver = 0;
     int ret;
 
-    /* ---- 阶段 1: 版本检查 ---- */
-    ret = storage->load(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1, &got);
+    /* ---- 阶段 1: 版本检查 (三态: OK / NOT_FOUND / 读失败) ---- */
+    ret = param_schema_version_read(storage, &schema_ver);
     if (ret == PARAM_ERR_NOT_FOUND) {
         /* 首次启动: 无版本键 → 写入当前版本, 跳过迁移 */
         schema_ver = PARAM_SCHEMA_VERSION;
-        ret = storage->save(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1);
+        ret = storage->save(storage->ctx, PID_SCHEMA_VER,
+                            (const uint8_t *)&schema_ver, (uint16_t)sizeof(schema_ver));
         return (ret < 0) ? PARAM_ERR_FLASH_FAIL : PARAM_OK;
     }
     if (ret != PARAM_OK)
@@ -1918,7 +2012,8 @@ int param_migrate_storage(const param_storage_drv_t *storage,
         if (storage->erase_all)
             storage->erase_all(storage->ctx);
         schema_ver = PARAM_SCHEMA_VERSION;
-        ret = storage->save(storage->ctx, PID_SCHEMA_VER, &schema_ver, 1);
+        ret = storage->save(storage->ctx, PID_SCHEMA_VER,
+                            (const uint8_t *)&schema_ver, (uint16_t)sizeof(schema_ver));
         return (ret < 0) ? PARAM_ERR_FLASH_FAIL : PARAM_OK;
     }
 

@@ -33,6 +33,13 @@ extern "C" {
 #define PARAM_DUMP_ENABLE 1
 #endif
 
+/** @brief 启用 param_service.c 的运维日志 (分区切换 / 存盘 / 加载结果)
+ *  1=开 0=关。开启时 param_service.c 打印 printf 日志; 裸机产品置 0
+ *  可完全去掉 stdio 依赖。 */
+#ifndef PARAM_SERVICE_LOG_ENABLE
+#define PARAM_SERVICE_LOG_ENABLE 1
+#endif
+
 /** @brief 启用 linker-section 自动模块注册
  *  1=开 0=关。开启后 param_modules_register_all() 遍历 .rodata.param_modules 段 */
 #ifndef PARAM_MODULE_AUTO_REGISTER_ENABLE
