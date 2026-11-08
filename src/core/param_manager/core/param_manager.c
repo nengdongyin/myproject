@@ -1910,7 +1910,7 @@ int param_schema_version_read(const param_storage_drv_t *drv, uint32_t *version)
  *   - 只经 drv->load / drv->save, 后端无需认识 PID_SCHEMA_VER, 也无需
  *     引入 module_ids.h (若放后端, 三个后端要各改一份);
  *   - 与 param_migrate_storage / value_type_save 共用同一宽度 (4 字节);
- *   - 自带条目名解析 (后端 make_value 会查到 g_schema_ver), 名字依旧可读。
+ *   - 自带条目名解析 (后端 make_value 会查到 schema_ver), 名字依旧可读。
  *
  * 只在**确实读不到键**时写: 读失败 (记录损坏) 不动存储 —— 与迁移阶段 1
  * 同策略, 避免用当前版本号覆盖一个损坏但可能可修复的分区。
@@ -1986,7 +1986,7 @@ int param_migrate_storage(const param_storage_drv_t *storage,
 
     uint8_t buf[256];
     /* 版本号按 param_value_t 的宽度 (4 字节) 存取 ——
-       注册参数 g_schema_ver (core/param_service.c) 的 vtable->save 写的是
+       注册参数 schema_ver (core/param_service.c) 的 vtable->save 写的是
        sizeof(param_value_t), 两端宽度必须一致: 若此处仍用 uint8_t + len=1 读,
        后端的 hex_decode 会因记录长度 (4) 超出目标容量 (1) 返回
        PARAM_ERR_OUT_OF_RANGE, 本函数随即判为 PARAM_ERR_FLASH_FAIL,

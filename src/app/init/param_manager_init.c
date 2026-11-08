@@ -161,7 +161,7 @@ static const param_storage_drv_t *param_storage_create_selected(void)
  *   3. **框架初始化**: param_init(storage, on_param_changed)
  *      注册存储驱动和参数变化通知回调
  *   4. **元数据 + 版本迁移 + 服务模块**: param_service_init(NULL, 0)
- *      依次: 注册 g_schema_ver (MODULE_META) → 版本校验/迁移 → 注册
+ *      依次: 注册 schema_ver (MODULE_META) → 版本校验/迁移 → 注册
  *      分区/存盘/加载/热切换旋钮 (MODULE_SYS)。当前 V1 无迁移表。
  *   5. **模块注册**: 根据 PARAM_MODULE_AUTO_REGISTER_ENABLE 选择:
  *      - 自动模式: param_modules_register_all() 遍历链接器段
@@ -191,7 +191,7 @@ void param_manager_init(void)
     param_init(storage, on_param_changed);
 
     /* 步骤 4: 框架元数据 + 存储版本迁移 + 运维服务模块 (三合一入口)
-       - 先注册 g_schema_ver: 迁移写版本键时 ini 里留下可读名而非 "?"
+       - 先注册 schema_ver: 迁移写版本键时 ini 里留下可读名而非 "?"
        - 迁移失败不影响模块注册 (返回值仅用于报告) */
     int mig_ret = param_service_init(NULL, 0);
     if (mig_ret != PARAM_OK)
