@@ -1830,7 +1830,8 @@ int param_storage_get_active_partition(uint8_t *index)
     if (ret != PARAM_OK)
         return ret;
 
-    return param_status_from_backend(drv->get_active_partition(drv->ctx, index));
+    int err = drv->get_active_partition(drv->ctx, index);
+    return param_status_from_backend(err);
 }
 
 int param_storage_set_active_partition(uint8_t index)
@@ -1840,7 +1841,8 @@ int param_storage_set_active_partition(uint8_t index)
     if (ret != PARAM_OK)
         return ret;
 
-    return param_status_from_backend(drv->set_active_partition(drv->ctx, index));
+    int err = drv->set_active_partition(drv->ctx, index);
+    return param_status_from_backend(err);
 }
 /**
  * @brief 按分区索引获取存储后端驱动实例
@@ -2000,21 +2002,24 @@ int param_migrate_storage(const param_storage_drv_t *storage,
     if (ret == PARAM_ERR_NOT_FOUND) {
         /* 首次启动: 无版本键 → 写入当前版本, 跳过迁移 */
         schema_ver = PARAM_SCHEMA_VERSION;
-        ret = storage->save(storage->ctx, PID_SCHEMA_VER,
-                            (const uint8_t *)&schema_ver, (uint16_t)sizeof(schema_ver));
-        return (ret < 0) ? PARAM_ERR_FLASH_FAIL : PARAM_OK;
+        int err = storage->save(storage->ctx, PID_SCHEMA_VER,
+                                (const uint8_t *)&schema_ver, (uint16_t)sizeof(schema_ver));
+        return param_status_from_backend(err);
     }
     if (ret != PARAM_OK)
         return PARAM_ERR_FLASH_FAIL;  /**< 读失败: 无法判定版本, 不动存储 */
 
     if (schema_ver != PARAM_SCHEMA_VERSION) {
         /* 存储格式破坏性变更 → 全量擦除, 写版本号, 跳过迁移 */
-        if (storage->erase_all)
-            storage->erase_all(storage->ctx);
+        if (storage->erase_all) {
+            int err = storage->erase_all(storage->ctx);
+            if (param_status_from_backend(err) != PARAM_OK)
+                return PARAM_ERR_FLASH_FAIL;  /**< 擦不掉就不能声称已重建 */
+        }
         schema_ver = PARAM_SCHEMA_VERSION;
-        ret = storage->save(storage->ctx, PID_SCHEMA_VER,
-                            (const uint8_t *)&schema_ver, (uint16_t)sizeof(schema_ver));
-        return (ret < 0) ? PARAM_ERR_FLASH_FAIL : PARAM_OK;
+        int err = storage->save(storage->ctx, PID_SCHEMA_VER,
+                                (const uint8_t *)&schema_ver, (uint16_t)sizeof(schema_ver));
+        return param_status_from_backend(err);
     }
 
     /* ---- 阶段 2: 版本匹配 → 执行迁移表 ---- */
@@ -2043,13 +2048,13 @@ int param_migrate_storage(const param_storage_drv_t *storage,
             if (ret < 0 && ret != -1)
                 return ret;  /**< 致命错误 → 中断迁移 */
             if (ret == PARAM_OK && new_len > 0) {
-                ret = storage->save(storage->ctx, new_id, buf, new_len);
-                saved = (ret >= 0);
+                int err = storage->save(storage->ctx, new_id, buf, new_len);
+                saved = (param_status_from_backend(err) == PARAM_OK);
             }
         } else {
             /* 简单改名: 数据不变，仅变更 ID */
-            ret = storage->save(storage->ctx, e->new_id, buf, old_len);
-            saved = (ret >= 0);
+            int err = storage->save(storage->ctx, e->new_id, buf, old_len);
+            saved = (param_status_from_backend(err) == PARAM_OK);
         }
 
         /* 先写后删: 仅在新值保存成功后才删除旧键，
@@ -2210,7 +2215,8 @@ int param_delete_one(uint32_t param_id)
     if (ret != PARAM_OK)
         return ret;
 
-    return param_status_from_backend(drv->delete(drv->ctx, param_id));
+    int err = drv->delete(drv->ctx, param_id);
+    return param_status_from_backend(err);
 }
 
 /** @brief 擦除全部持久化数据 */
@@ -2221,7 +2227,8 @@ int param_delete_all(void)
     if (ret != PARAM_OK)
         return ret;
 
-    return param_status_from_backend(drv->erase_all(drv->ctx));
+    int err = drv->erase_all(drv->ctx);
+    return param_status_from_backend(err);
 }
 
 /* ================================================================

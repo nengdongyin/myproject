@@ -49,20 +49,33 @@ extern "C" {
 /* local_id 按 SFNC §16 特征编号递增排列, 便于与标准文档逐条对照:
      16.2 Selector → 16.4 Load → 16.5 Save → 16.6 Default → 16.7 Reset
    (16.3 Description / 16.8 DefaultSelector / 16.9-10 Feature* 未实现)
-   这些参数均不持久化, 因此调整 local_id 不影响已存的 param_*.ini。 */
+   这些参数均不持久化, 因此调整 local_id 不影响已存的 param_*.ini。
 
-/** @brief [SFNC 16.2 UserSetSelector] 选中 SAVE/LOAD/RESET 作用的 set
- *  @note UINT: 写入即切换落盘目标分区 (只换驱动, 不加载内容) */
-#define PID_SYS_USERSET_SELECTOR   MAKE_PARAM_ID(MODULE_SYS, 0x00)
+   出厂分区 (set 0) 是**只读**的: Save / Reset 拒绝作用于它; 要改出厂分区
+   只能走 DEFAULT_SAVE / DEFAULT_DELETE。 */
+
+/** @brief [SFNC 16.2 UserSetSelector] 选中 SAVE/LOAD/RESET 作用的 set (枚举)
+ *  @note 写入即切换落盘目标分区 (只换驱动, 不加载内容) */
+#define PID_SYS_USERSET_SELECTOR        MAKE_PARAM_ID(MODULE_SYS, 0x00)
 /** @brief [SFNC 16.4 UserSetLoad] 把当前选中的 set 加载为活动参数 (EXEC) */
-#define PID_SYS_USERSET_LOAD       MAKE_PARAM_ID(MODULE_SYS, 0x01)
-/** @brief [SFNC 16.5 UserSetSave] 把活动参数存入当前选中的 set (EXEC) */
-#define PID_SYS_USERSET_SAVE       MAKE_PARAM_ID(MODULE_SYS, 0x02)
-/** @brief [SFNC 16.6 UserSetDefault] 上电时加载哪个 set; 写 = 设置下次启动用哪个
- *  @note 值 == 分区索引: 0 = Default (param_factory), 1..N = UserSetN (param_userN-1) */
-#define PID_SYS_USERSET_DEFAULT    MAKE_PARAM_ID(MODULE_SYS, 0x03)
-/** @brief [SFNC 16.7 UserSetReset] 把当前选中的 set 清空 (后端 erase) (EXEC) */
-#define PID_SYS_USERSET_RESET      MAKE_PARAM_ID(MODULE_SYS, 0x04)
+#define PID_SYS_USERSET_LOAD            MAKE_PARAM_ID(MODULE_SYS, 0x01)
+/** @brief [SFNC 16.5 UserSetSave] 把活动参数存入当前选中的 set (EXEC)
+ *  @note SELECTOR == 出厂分区 时返回 PARAM_ERR_READONLY */
+#define PID_SYS_USERSET_SAVE            MAKE_PARAM_ID(MODULE_SYS, 0x02)
+/** @brief [SFNC 16.6 UserSetDefault] 上电时加载哪个 set (枚举) */
+#define PID_SYS_USERSET_DEFAULT         MAKE_PARAM_ID(MODULE_SYS, 0x03)
+/** @brief [SFNC 16.7 UserSetReset] 清空当前选中的 set (EXEC)
+ *  @note SELECTOR == 出厂分区 时返回 PARAM_ERR_READONLY */
+#define PID_SYS_USERSET_RESET           MAKE_PARAM_ID(MODULE_SYS, 0x04)
+/** @brief [厂商扩展] 出厂分区写入: 把活动参数存入出厂分区 (不受 SELECTOR 限制) (EXEC)
+ *  @note SFNC 不允许操作出厂集 (Default 仅用作"上电加载哪个"), 但产线要烧写出厂
+ *        默认、售后要重建出厂集, 所以以厂商扩展补上。不是 SFNC 特征。
+ *  @note **仅供自用** (产线 / 售后), **不经 GenICam XML 对外暴露** —— 第三方工具
+ *        看不到也不应依赖这两条。 */
+#define PID_SYS_USERSET_DEFAULT_SAVE    MAKE_PARAM_ID(MODULE_SYS, 0x05)
+/** @brief [厂商扩展] 出厂分区清除: 清空出厂分区存储 (不受 SELECTOR 限制) (EXEC)
+ *  @note 同上 —— SFNC 无对应特征, 仅供自用。 */
+#define PID_SYS_USERSET_DEFAULT_DELETE  MAKE_PARAM_ID(MODULE_SYS, 0x06)
 
 /* ================================================================
  *  注册入口
