@@ -69,7 +69,7 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
             uint32_t val = endian_swap32(raw);
             /* 字节级协议接口用 param_write_raw: 按条目类型落位
                (UINT/INT/FLOAT 的 32-bit 位模式都正确), 而 typed 包装
-               现在会校验类型 —— 对 FLOAT 参数 (如 gain) 调
+               校验类型 —— 对 FLOAT 参数 (如 gain) 调
                param_write_u32 会被拒绝 */
             int ret = param_write_raw(e->param_id, (const uint8_t *)&val, sizeof(val));
             (void)ret;

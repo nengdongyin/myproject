@@ -183,10 +183,12 @@ extern "C"
     int param_entry_read(param_entry_t *e, param_value_t *value);
     /** @brief 写入 (无 apply): 更新缓存 + 标脏 */
     int param_entry_write(param_entry_t *e, param_value_t value);
-    /** @brief 写入 (带 apply): 缓存先行 + 模块业务回调, 拒绝不标脏 */
+    /** @brief 写入 (带 apply): 缓存先行 + 模块业务回调, 拒绝回滚缓存 */
     int param_entry_write_apply(param_entry_t *e, param_value_t value);
-    /** @brief 立即写入: EXEC 路由 / 可选 write 钩子 / 清脏 (App 与 IP 共用) */
-    int param_entry_write_immediate(param_entry_t *e, param_value_t value);
+    /** @brief 同步写入 (IP 槽位): EXEC 路由 / 可选 write 钩子 / 清脏 */
+    int param_entry_write_sync(param_entry_t *e, param_value_t value);
+    /** @brief 同步写入 (App 槽位): EXEC 路由 / apply 校验 + 标脏 */
+    int param_entry_write_sync_apply(param_entry_t *e, param_value_t value);
     /** @brief 原始字节流写入 (委托 param_entry_write) */
     int param_entry_write_raw(param_entry_t *e, const uint8_t *data, uint16_t len);
     /** @brief 原始字节流写入 (委托 param_entry_write_apply) */

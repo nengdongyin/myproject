@@ -72,13 +72,7 @@ PARAM_UINT(schema_ver, PID_SCHEMA_VER,
 PARAM_TABLE(meta_params, &schema_ver.base);
 
 /** @brief 元数据模块: 纯静态数据, 无任何回调 */
-PARAM_MODULE_DEFINE(param_meta, MODULE_META, "Meta",
-                    NULL,           /* ctx */
-                    NULL,           /* init  */
-                    NULL,           /* read  — 直接返缓存 */
-                    NULL,           /* write — READONLY, 到不了这里 */
-                    NULL,           /* exec  */
-                    NULL);          /* flush — 无硬件 */
+PARAM_MODULE_DEFINE(param_meta, MODULE_META, "Meta");
 
 PARAM_MODULE_INIT(param_meta, meta_params);
 
@@ -162,7 +156,7 @@ static int sys_select(uint8_t idx)
         return PARAM_ERR_NOT_SUPPORTED;
     }
 
-    /* param_set_storage 现已返回状态码 (缺 load/save 的驱动被拒绝) */
+    /* param_set_storage 返回状态码 (缺 load/save 的驱动被拒绝) */
     int sret = param_set_storage(drv);
     if (sret != PARAM_OK) {
         SYS_LOG("[SYS] select: set %u rejected by storage layer (%s)\n",
@@ -238,7 +232,6 @@ static int sys_userset_save(void)
  *
  * @note 不动活动缓存 —— 重置活动 set 后需再 LOAD 一次才回到默认值。
  * @note 出厂分区只读 —— 清出厂集请用 USERSET_DEFAULT_DELETE。
- * @warning flashdb 后端的 erase_all 是 deinit+init, 在该后端上本命令不生效。
  */
 static int sys_userset_reset(void)
 {
@@ -278,7 +271,7 @@ static int sys_factory_op(int (*op)(void))
     if (!factory || !back)
         return PARAM_ERR_NOT_FOUND;
 
-    /* param_set_storage 现已返回状态码, 不再需要回读比对 */
+    /* param_set_storage 返回状态码 */
     if (param_set_storage(factory) != PARAM_OK)
         return PARAM_ERR_NOT_SUPPORTED;
 
@@ -377,12 +370,10 @@ static int sys_module_init(void *ctx)
  * ═══════════════════════════════════════════════════════════════════════ */
 
 PARAM_MODULE_DEFINE(param_service, MODULE_SYS, "UserSetControl",
-                    NULL,            /* ctx */
-                    sys_module_init, /* init */
-                    sys_read_cb,     /* read  — Default 回读 */
-                    sys_write_cb,    /* write — Default / Selector */
-                    sys_exec_cb,     /* exec  — Save / Load / Reset */
-                    NULL);           /* flush — 无硬件 */
+                    .init  = sys_module_init, /* init */
+                    .read  = sys_read_cb,     /* read  — Default 回读 */
+                    .write = sys_write_cb,    /* write — Default / Selector */
+                    .exec  = sys_exec_cb);    /* exec  — Save / Load / Reset */
 
 PARAM_MODULE_INIT(param_service, sys_params);
 

@@ -14,13 +14,13 @@ PARAM_BLOB     (lblb,  TID_APPLET_BLOB, PARAM_FLAG_PERSIST, g_blob_data, TEST_BL
 
 PARAM_TABLE(applet_params, &lu32.base, &lf32.base, &lboo.base, &lnop.base, &lblb.base);
 PARAM_TABLE(ip_params, &lipu.base, &lipf.base);
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "LSApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
-IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "LSIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "LSApplet", .write = mock_apply_ok);
+IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "LSIP", .write = mock_ip_write_ok);
 
 static void register_all(void)
 {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
-    ip_driver_register(&test_ip_instance, ip_params, PARAM_COUNT(ip_params));
+    param_module_register(&test_ip_module, ip_params, PARAM_COUNT(ip_params));
     test_reset_entry(&lu32.base);  test_reset_entry(&lf32.base);
     test_reset_entry(&lboo.base);  test_reset_entry(&lnop.base);
     test_reset_entry(&lblb.base);
@@ -191,7 +191,7 @@ void test_load_blob_short_record_zeros_tail(void) {
     /* 缓存先填 0x55, 用于区分"补零"与"残留旧值" */
     uint8_t old[TEST_BLOB_SIZE];
     memset(old, 0x55, sizeof(old));
-    TEST_ASSERT_PARAM_OK(param_write_blob(TID_APPLET_BLOB, old, sizeof(old)));
+    TEST_ASSERT_PARAM_OK(param_write_raw(TID_APPLET_BLOB, old, sizeof(old)));
 
     /* 存储里只有前 16 字节 (短记录: 旧固件 / 数据损坏 / 格式变更) */
     uint8_t short_rec[16];
@@ -276,8 +276,8 @@ void test_save_blob(void) {
 
     uint8_t data[TEST_BLOB_SIZE];
     memset(data, 0xAB, TEST_BLOB_SIZE);
-    /* BLOB 走带长度的专用入口 (param_write 拒收 BLOB/STRING) */
-    TEST_ASSERT_PARAM_OK(param_write_blob(TID_APPLET_BLOB, data, sizeof(data)));
+    /* BLOB 走带长度的专用入口 param_write_raw (param_write 拒收 BLOB/STRING) */
+    TEST_ASSERT_PARAM_OK(param_write_raw(TID_APPLET_BLOB, data, sizeof(data)));
 
     TEST_ASSERT_PARAM_OK(param_save_one(TID_APPLET_BLOB));
 }

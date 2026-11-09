@@ -72,9 +72,9 @@ const param_vtable_t app_vtable = {
     .read             = param_entry_read,
     .write            = param_entry_write_apply,
     .write_cache      = param_entry_write,
-    /* write_immediate 与 IP 共用同一实现: write 是可选的校验/下发钩子,
-       缺失时"立即"只到缓存层 (硬件生效由 param_flush 触发) */
-    .write_immediate  = param_entry_write_immediate,
+    /* write_sync (App): EXEC 路由 + apply 校验 + 标脏 —— "同步"指立即
+       校验, 硬件由 param_flush 按 dirty 下发 */
+    .write_sync       = param_entry_write_sync_apply,
     .write_raw        = param_entry_write_raw_apply,
     .flush            = param_entry_flush_nop,
     .save             = param_vtable_save,
@@ -96,7 +96,6 @@ const param_module_vtable_t app_module_vtable = {
 /* ================================================================
  *  App 模块注册 (公开 API)
  *
- *  (与 ip_param_manager.c 的 ip_driver_register 位置对称:
- *   App 侧注册实现位于 param_manager.c —
- *   param_module_register / param_module_register_node)
+ *  (与 ip_param_manager.c 对应位置对称: 注册实现位于 param_manager.c,
+ *  App 与 IP 共用 param_module_register / param_module_register_node)
  * ================================================================ */

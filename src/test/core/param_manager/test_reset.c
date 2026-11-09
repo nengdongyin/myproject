@@ -14,13 +14,13 @@ PARAM_BLOB     (rblb, TID_APPLET_BLOB, PARAM_FLAG_PERSIST, g_blob_buf2, TEST_BLO
 PARAM_TABLE(applet_params, &ru32.base, &rboo.base, &rrdo.base, &rblb.base);
 PARAM_TABLE(ip_params, &ripu.base, &ripf.base);
 
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ResetApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
-IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ResetIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ResetApplet", .write = mock_apply_ok);
+IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ResetIP", .write = mock_ip_write_ok);
 
 static void register_all(void)
 {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
-    ip_driver_register(&test_ip_instance, ip_params, PARAM_COUNT(ip_params));
+    param_module_register(&test_ip_module, ip_params, PARAM_COUNT(ip_params));
     test_reset_entry(&ru32.base); test_reset_entry(&rboo.base);
     test_reset_entry(&rrdo.base); test_reset_entry(&rblb.base);
     test_reset_entry(&ripu.base); test_reset_entry(&ripf.base);
@@ -147,7 +147,7 @@ void test_reset_blob(void) {
 
     uint8_t new_data[TEST_BLOB_SIZE];
     memset(new_data, 0xCC, TEST_BLOB_SIZE);
-    TEST_ASSERT_PARAM_OK(param_write_blob(TID_APPLET_BLOB, new_data, sizeof(new_data)));
+    TEST_ASSERT_PARAM_OK(param_write_raw(TID_APPLET_BLOB, new_data, sizeof(new_data)));
 
     TEST_ASSERT_PARAM_OK(param_reset_one(TID_APPLET_BLOB));
 }

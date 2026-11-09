@@ -6,16 +6,16 @@ DEF_TEST_UINT (eu32, TID_APPLET_UINT, PARAM_FLAG_PERSIST, 100, 0, 200);
 PARAM_BOOL    (erdo, TID_APPLET_RDONLY, PARAM_FLAG_PERSIST|PARAM_FLAG_READONLY, false);
 
 PARAM_TABLE(applet_params, &eu32.base, &erdo.base);
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ErrApplet", NULL, NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "ErrApplet", .write = mock_apply_ok, .flush = mock_flush_ok);
 
 PARAM_IP_UINT  (eip, TID_IP_UINT, PARAM_FLAG_PERSIST, 500,   500,   500);
 PARAM_TABLE(ip_params, &eip.base);
-IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ErrIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
+IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "ErrIP", .write = mock_ip_write_ok);
 
 static void register_all(void)
 {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
-    ip_driver_register(&test_ip_instance, ip_params, PARAM_COUNT(ip_params));
+    param_module_register(&test_ip_module, ip_params, PARAM_COUNT(ip_params));
     test_reset_entry(&eu32.base); test_reset_entry(&erdo.base);
     test_reset_entry(&eip.base);
 }
@@ -32,10 +32,10 @@ void test_api_no_init_write_raw(void) {
     TEST_ASSERT_PARAM_ERR(param_write_raw(TID_APPLET_UINT, d, 4), PARAM_ERR_NOT_INITIALIZED);
 }
 
-void test_api_no_init_write_immediate(void) {
+void test_api_no_init_write_sync(void) {
     param_deinit();
     param_value_t v = { .u32 = 1 };
-    TEST_ASSERT_PARAM_ERR(param_write_immediate(TID_APPLET_UINT, v), PARAM_ERR_NOT_INITIALIZED);
+    TEST_ASSERT_PARAM_ERR(param_write_sync(TID_APPLET_UINT, v), PARAM_ERR_NOT_INITIALIZED);
 }
 
 void test_api_no_init_flush(void) {
@@ -98,7 +98,7 @@ void test_flush_applet_cb_fails(void) {
 }
 
 void test_flush_ip_write_cb_fails(void) {
-    test_ip_instance.write = mock_ip_write_fail;
+    test_ip_module.write = mock_ip_write_fail;
     register_all();
 
     param_value_t v = { .u32 = 100 };
@@ -120,10 +120,10 @@ void test_flush_ip_fail_keeps_dirty_and_retries(void) {
                   PARAM_FLAG_PERSIST, 0, 0, 1000);
     PARAM_TABLE(retry_params, &rpu.base);
     IP_DRIVER_DEFINE(retry_ip, TEST_MODULE_IP2, "RetryIP",
-                     NULL, NULL, NULL, mock_ip_write_retry, NULL, NULL);
+                     .write = mock_ip_write_retry);
 
-    ip_driver_register(&retry_ip_instance, retry_params,
-                       PARAM_COUNT(retry_params));
+    param_module_register(&retry_ip_module, retry_params,
+                          PARAM_COUNT(retry_params));
     test_reset_entry(&rpu.base);
 
     param_value_t v = { .u32 = 777 };
@@ -156,22 +156,22 @@ void test_flush_ip_fail_keeps_dirty_and_retries(void) {
 /* ================================================================
  *  flush integrity check
  * ================================================================ */
-void test_flush_integrity_all_covered(void) {
-    PARAM_MODULE_DEFINE(tmod, MODULE_AUTO_EXP, "Tmod", NULL, NULL, NULL, NULL, NULL, NULL);
+void test_module_order_all_covered(void) {
+    PARAM_MODULE_DEFINE(tmod, MODULE_AUTO_EXP, "Tmod");
     DEF_TEST_UINT(tp, MAKE_PARAM_ID(MODULE_AUTO_EXP, 0), 0, 50, 0, 100);
     PARAM_TABLE(tparams, &tp.base);
     param_module_register(&tmod_module, tparams, PARAM_COUNT(tparams));
-    TEST_ASSERT_PARAM_OK(param_check_flush_integrity());
+    TEST_ASSERT_PARAM_OK(param_check_module_order());
 }
 
-void test_flush_integrity_unordered_module(void) {
-    PARAM_MODULE_DEFINE(unord, TEST_MODULE_UNORDERED, "Unordered", NULL, NULL, NULL, NULL, NULL, NULL);
+void test_module_order_unordered_module(void) {
+    PARAM_MODULE_DEFINE(unord, TEST_MODULE_UNORDERED, "Unordered");
     DEF_TEST_UINT(uparam, TID_APPLET2_UINT, 0, 50, 0, 100);
     PARAM_TABLE(uparams, &uparam.base);
 
     param_module_register(&unord_module, uparams, PARAM_COUNT(uparams));
 
-    TEST_ASSERT_PARAM_ERR(param_check_flush_integrity(), PARAM_ERR_NOT_FOUND);
+    TEST_ASSERT_PARAM_ERR(param_check_module_order(), PARAM_ERR_NOT_FOUND);
 
     param_stats_t stats;
     param_get_stats(&stats);
@@ -189,7 +189,7 @@ void test_apply_cb_returns_error(void) {
     int ret = param_write(TID_APPLET_UINT, v);
     TEST_ASSERT_PARAM_ERR(ret, PARAM_ERR_INVALID_ID);
 
-    /* D2: apply 拒绝回滚缓存 —— 返回错误 = 无任何变化 (默认 100) */
+    /* apply 拒绝回滚缓存 —— 返回错误 = 无任何变化 (默认 100) */
     param_read(TID_APPLET_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(100, v.u32);
     test_applet_module.write = mock_apply_ok;
@@ -252,7 +252,7 @@ void test_stats_clear(void) {
 void run_test_error_handling(void)
 {
     RUN_TEST(test_api_no_init_write_raw);
-    RUN_TEST(test_api_no_init_write_immediate);
+    RUN_TEST(test_api_no_init_write_sync);
     RUN_TEST(test_api_no_init_flush);
     RUN_TEST(test_api_no_init_save_all);
     RUN_TEST(test_api_no_init_save_one);
@@ -264,8 +264,8 @@ void run_test_error_handling(void)
     RUN_TEST(test_flush_applet_cb_fails);
     RUN_TEST(test_flush_ip_write_cb_fails);
     RUN_TEST(test_flush_ip_fail_keeps_dirty_and_retries);
-    RUN_TEST(test_flush_integrity_all_covered);
-    RUN_TEST(test_flush_integrity_unordered_module);
+    RUN_TEST(test_module_order_all_covered);
+    RUN_TEST(test_module_order_unordered_module);
     RUN_TEST(test_apply_cb_returns_error);
     RUN_TEST(test_stats_module_param_counts);
     RUN_TEST(test_stats_dirty_inc_dec);

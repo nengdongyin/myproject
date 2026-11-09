@@ -156,7 +156,10 @@ extern "C"
  * 使用示例:
  * @code
  * PARAM_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
- *                     &g_ae_instance, ae_init, NULL, ae_write, NULL, ae_flush);
+ *                     .ctx   = &g_ae_instance,
+ *                     .init  = ae_init,
+ *                     .write = ae_write,
+ *                     .flush = ae_flush);
  * @endcode
  *
  * App 与 IP 回调语义对称，按生命周期排列:
@@ -169,17 +172,13 @@ extern "C"
  * @param _mod_name   模块变量名 (生成 _mod_name##_module)
  * @param _mod_id     模块 ID (来自 module_ids.h)
  * @param _label      模块调试名称
- * @param _ctx        模块私有上下文
- * @param _init_fn    初始化回调 (可 NULL)
- * @param _read_fn    read 回调 (可 NULL = 直接返缓存)
- * @param _write_fn   write 回调 (校验/转换)
- * @param _exec_fn    exec 命令回调 (可 NULL)
- * @param _flush_fn   flush 回调函数
+ * @param ...         具名字段初始化器 (.ctx / .init / .read / .write /
+ *                    .exec / .flush; 省略字段为 NULL —— 具名可任意顺序,
+ *                    杜绝位置参数写反)
  */
-#define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, _ctx, _init_fn, _read_fn, _write_fn, _exec_fn, _flush_fn) \
-    PARAM_MODULE_DEFINE_CORE(&app_module_vtable, _mod_name##_module,                                               \
-                             _mod_id, _label, _ctx, _init_fn, _read_fn,                                            \
-                             _write_fn, _exec_fn, _flush_fn)
+#define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, ...)          \
+    PARAM_MODULE_DEFINE_CORE(&app_module_vtable, _mod_name##_module,  \
+                             _mod_id, _label, __VA_ARGS__)
 
 /**
  * @brief 定义模块注册函数 (一键式)
@@ -198,63 +197,27 @@ extern "C"
     PARAM_MODULE_REGISTER(_mod_name, _mod_name##_module_init)
 
 /**
- * @brief 模块注册函数前缀 (手动指定 init 回调时使用)
+ * @brief 需要自定义注册尾巴的模块
  *
- * 配合 PARAM_MODULE_INIT_END 使用，允许在 register 和自动注册之间插入自定义 init 设置。
- *
- * @param _mod_name 模块名
- * @param _params   参数表数组
+ * 手工写注册函数即可 (模式见 sensor_module.c 的 sensor_module_init):
+ * @code
+ * void xxx_module_init(void)
+ * {
+ *     param_module_register(&xxx_module, xxx_params, PARAM_COUNT(xxx_params));
+ *     // ... 自定义初始化 (事件注册 / 额外配置) ...
+ * }
+ * PARAM_MODULE_REGISTER(xxx, xxx_module_init); // 自动注册开启时挂入链接器段
+ * @endcode
  */
-#define PARAM_MODULE_INIT_BEGIN(_mod_name, _params) \
-    void _mod_name##_module_init(void)              \
-    {                                               \
-        param_module_register(&_mod_name##_module,  \
-                              (_params),            \
-                              sizeof(_params) / sizeof((_params)[0]))
 
 /**
- * @brief 模块注册函数后缀
+ * @brief 编译器段自动注册
  *
- * @param _mod_name 模块名
+ * 启用 PARAM_MODULE_AUTO_REGISTER_ENABLE 后，所有模块 (App 与 IP) 的
+ * init 函数指针收集到 .rodata.param_modules 段,
+ * param_modules_register_all() 遍历该段并逐个调用。
+ * 机制定义见 param_manager.h (基类头, App/IP 共用)。
  */
-#define PARAM_MODULE_INIT_END(_mod_name) \
-    }                                    \
-    PARAM_MODULE_REGISTER(_mod_name, _mod_name##_module_init)
-
-    /**
-     * @brief 编译器段自动注册
-     *
-     * 启用 PARAM_MODULE_AUTO_REGISTER_ENABLE 后，所有模块的 init 函数指针收集到
-     * .rodata.param_modules 段。param_modules_register_all() 遍历该段并逐个调用。
-     */
-
-    /** 编译器段自动注册的条目 */
-    typedef struct
-    {
-        void (*init)(void);
-    } param_module_reg_t;
-
-/**
- * @brief 将一个模块的 init 函数放入指定链接器段 (.rodata.param_modules)
- *
- * 启用 PARAM_MODULE_AUTO_REGISTER_ENABLE 后，param_modules_register_all() 遍历该段并逐个调用 init。
- * @param _name 模块名 (用于段符号名唯一性)
- * @param _init 模块 register 函数
- */
-#if PARAM_MODULE_AUTO_REGISTER_ENABLE
-
-/** 将模块 init 函数放入 .rodata.param_modules 段 */
-#define PARAM_MODULE_REGISTER(_name, _init)                                                                          \
-    __attribute__((used, section(".rodata.param_modules"))) static const param_module_reg_t _pm_auto_reg_##_name = { \
-        .init = (_init)}
-    int param_modules_register_all(void);
-
-#else
-
-#define PARAM_MODULE_REGISTER(_name, _init)
-/* auto-register disabled, call xxx_module_init() manually */
-
-#endif
 
 #ifdef __cplusplus
 }

@@ -13,9 +13,9 @@ PARAM_TABLE(applet_params,  &fu32.base, &fboo.base);
 PARAM_TABLE(applet2_params, &fu2.base);
 PARAM_TABLE(ip_params, &fipu.base, &fipf.base, &fipb.base);
 
-PARAM_MODULE_DEFINE(test_applet,  TEST_MODULE_APPLET,  "FlushApplet",  NULL, NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
-PARAM_MODULE_DEFINE(test_applet2, TEST_MODULE_APPLET2, "FlushApplet2", NULL, NULL, NULL, mock_apply_ok, NULL, mock_flush_ok);
-IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "FlushIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet,  TEST_MODULE_APPLET,  "FlushApplet",  .write = mock_apply_ok, .flush = mock_flush_ok);
+PARAM_MODULE_DEFINE(test_applet2, TEST_MODULE_APPLET2, "FlushApplet2", .write = mock_apply_ok, .flush = mock_flush_ok);
+IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "FlushIP", .write = mock_ip_write_ok);
 
 /* P0-2 回归: READONLY / EXEC 条目不得进入写硬件路径 */
 PARAM_IP_UINT(fip_ro,   TID_IP_RDONLY, PARAM_FLAG_READONLY, 0, 0, 0);
@@ -24,13 +24,13 @@ PARAM_IP_EXEC(fip_exec, TID_IP_EXEC);
 PARAM_TABLE(ip_roexec_params, &fipu.base, &fip_ro.base, &fip_exec.base);
 
 IP_DRIVER_DEFINE(roexec_ip, TEST_MODULE_IP, "RoExecIP",
-                 NULL, NULL, NULL, mock_ip_write_record, NULL, NULL);
+                 .write = mock_ip_write_record);
 
 static void register_all(void)
 {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
     param_module_register(&test_applet2_module, applet2_params, PARAM_COUNT(applet2_params));
-    ip_driver_register(&test_ip_instance, ip_params, PARAM_COUNT(ip_params));
+    param_module_register(&test_ip_module, ip_params, PARAM_COUNT(ip_params));
     test_reset_entry(&fu32.base); test_reset_entry(&fboo.base);
     test_reset_entry(&fu2.base);
     test_reset_entry(&fipu.base); test_reset_entry(&fipf.base);
@@ -137,8 +137,8 @@ void test_flush_applet_then_ip_order(void) {
  *  P0-2: READONLY / EXEC 永不进入写硬件路径
  * ================================================================ */
 void test_flush_skips_ip_readonly_and_exec(void) {
-    ip_driver_register(&roexec_ip_instance, ip_roexec_params,
-                       PARAM_COUNT(ip_roexec_params));
+    param_module_register(&roexec_ip_module, ip_roexec_params,
+                          PARAM_COUNT(ip_roexec_params));
     test_reset_entry(&fipu.base);
     test_reset_entry(&fip_ro.base);
     test_reset_entry(&fip_exec.base);

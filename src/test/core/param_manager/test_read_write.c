@@ -16,7 +16,7 @@ PARAM_TABLE(applet_params,
 );
 
 PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "TestApplet",
-                    NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+                    .write = mock_apply_ok);
 
 static void register_params(void)
 {
@@ -177,7 +177,7 @@ void test_write_apply_rejects(void) {
     register_params();
     param_value_t v = { .u32 = 42 };
     TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_INVALID_ID);
-    /* D2: apply 拒绝回滚缓存 —— 返回错误 = 无任何变化 */
+    /* apply 拒绝回滚缓存 —— 返回错误 = 无任何变化 */
     param_read(TID_APPLET_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(100, v.u32);
     TEST_ASSERT_DIRTY(&tu32.base, 0);
@@ -248,7 +248,7 @@ void test_write_bool_wrapper(void) {
 }
 
 /* ================================================================
- *  typed 包装的类型校验 (易用性: 位模式静默损坏已被拦截)
+ *  typed 包装的类型校验 (位模式静默损坏被拦截)
  * ================================================================ */
 void test_write_typed_type_mismatch(void) {
     register_params();

@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "param_manager.h"
+#include "param_boot.h"
 #include "lwevt/lwevt.h"
 #include "param_storage_flashdb.h"
 #include "param_storage_iniparser.h"
@@ -152,83 +153,61 @@ static const param_storage_drv_t *param_storage_create_selected(void)
  * @brief 参数管理器子系统初始化 — 系统启动时执行完整初始化序列
  *
  * @details
- * 启动流程按以下 10 步顺序执行，每步失败均有错误输出:
+ * 启动序列已封装为 param_boot_standard (core/param_boot.h), 本文件只注入
+ * 应用专属部分:
+ *   1. 存储后端工厂 param_storage_create_selected()
+ *   2. notify 桥 on_param_changed (lwevt 事件总线)
+ *   3. 手动模块注册清单 register_modules()
+ *   4. 动态范围校准 calibrate_ranges() (FPS → 曝光时间上限)
  *
- *   1. **存储后端创建**: param_storage_create_selected()
- *      按 PARAM_FLASHDB_ENABLE / PARAM_INIPARSER_ENABLE / PARAM_MKV_ENABLE
- *      选一个后端 (当前默认 mkv); 三者皆 0 则 storage=NULL 即不持久化
- *   2. **事件系统**: lwevt_init() 初始化轻量级事件总线
- *   3. **框架初始化**: param_init(storage, on_param_changed)
- *      注册存储驱动和参数变化通知回调
- *   4. **元数据 + 版本迁移 + 服务模块**: param_service_init(NULL, 0)
- *      依次: 注册 schema_ver (MODULE_META) → 版本校验/迁移 → 注册
- *      分区/存盘/加载/热切换旋钮 (MODULE_SYS)。当前 V1 无迁移表。
- *   5. **模块注册**: 根据 PARAM_MODULE_AUTO_REGISTER_ENABLE 选择:
- *      - 自动模式: param_modules_register_all() 遍历链接器段
- *      - 手动模式: sensor_module_init() + auto_exp_module_init()
- *   6. **参数加载**: param_load_all()
- *      两阶段: ① 哈希遍历恢复缓存 ② 链表遍历 init 回调下发硬件
- *   7. **完整性校验**: param_check_flush_integrity()
- *      确保所有已注册模块在 MODULE_INIT_ORDER 中有序
- *   8. **动态范围校准**: 根据传感器 FPS 计算曝光时间上限
- *      exposure_max = 990000 / (fps + 1) 微秒
- *      通过 param_set_range() 运行时调整 PID_IP_SENSOR_EXPOSURE 的 max
- *   9. **范围裁剪**: param_validate_all()
- *      遍历所有参数，将越界值裁剪到合法范围
- *  10. **硬件刷新**: param_flush()
- *      将所有 dirty 参数写入硬件寄存器
- *
- * @note 步骤 8 是应用特定的动态校准逻辑，其他项目可替换或删除。
  * @note printf 输出适合开发调试，生产环境应替换为日志框架。
  */
-void param_manager_init(void)
+
+/**
+ * @brief 手动模块注册清单 (PARAM_MODULE_AUTO_REGISTER_ENABLE=0 时由
+ *        param_boot_standard 调用; 开启自动注册时由链接段注册, 本函数不参与)
+ *
+ * 模块 ID 与顺序在 module_ids.h 的单一清单中登记;
+ * 新增模块时在此补一行注册调用。
+ */
+static void register_modules(void)
 {
-    /* 步骤 1: 存储后端创建 (由 PARAM_xxx_ENABLE 选择, 见 param_storage_create_selected) */
-    const param_storage_drv_t *storage = param_storage_create_selected();
-    /* 步骤 2: 事件系统初始化 */
-    lwevt_init();
-    /* 步骤 3: 框架初始化 */
-    param_init(storage, on_param_changed);
-
-    /* 步骤 4: 框架元数据 + 存储版本迁移 + 运维服务模块 (三合一入口)
-       - 先注册 schema_ver: 迁移写版本键时 ini 里留下可读名而非 "?"
-       - 迁移失败不影响模块注册 (返回值仅用于报告) */
-    int mig_ret = param_service_init(NULL, 0);
-    if (mig_ret != PARAM_OK)
-        printf("[PM] param_service_init ret=%d\n", mig_ret);
-
-    /* 步骤 5: 模块注册 */
-#if PARAM_MODULE_AUTO_REGISTER_ENABLE
-    param_modules_register_all();
-#else
     sensor_module_init();
     auto_exp_module_init();
-#endif
+}
 
-    /* 步骤 6: 从 Flash 加载所有参数 */
-    int ret = param_load_all();
-    if (ret != PARAM_OK)
-        printf("[PM] load_all ret=%d\n", ret);
-    param_dump(0, dump_cb, NULL);
-    /* 步骤 7: 校验 MODULE_INIT_ORDER 完整性 */
-    ret = param_check_flush_integrity();
-    if (ret != PARAM_OK)
-        printf("[PM] WARNING: MODULE_INIT_ORDER not covered!\n");
-
-    /* 步骤 8: 动态范围校准 — 根据 FPS 限制曝光时间 */
+/**
+ * @brief 动态范围校准 — 根据传感器 FPS 限制曝光时间
+ *
+ * 应用特定的校准逻辑, 由 param_boot_standard 在 load_all 之后、
+ * param_validate_all 之前调用; 其他项目可替换或删除。
+ */
+static void calibrate_ranges(void)
+{
     param_value_t fps, exposure_max;
-    param_read(PID_IP_SENSOR_FPS, &fps);
+    if (param_read(PID_IP_SENSOR_FPS, &fps) != PARAM_OK)
+        return;
     exposure_max.u32 = (uint32_t)(990000u / (fps.u32 + 1));
     param_set_range(PID_IP_SENSOR_EXPOSURE, NULL, &exposure_max);
     printf("[PM] fps=%u -> exposure_max=%u us\n", fps.u32, exposure_max.u32);
+}
 
-    /* 步骤 9: 裁剪所有越界值 */
-    param_validate_all();
+void param_manager_init(void)
+{
+    lwevt_init();
 
-    /* 步骤 10: 将恢复的参数刷入硬件 */
-    ret = param_flush();
+    param_boot_hooks_t hooks = {
+        .storage_factory  = param_storage_create_selected,
+        .notify           = on_param_changed,
+        .migrate_table    = NULL,
+        .migrate_count    = 0,
+        .calibrate        = calibrate_ranges,
+        .register_modules = register_modules,
+    };
 
-    printf("[PM] init done: load_all=%d flush=%d\n", ret, ret);
+    int ret = param_boot_standard(&hooks);
+    printf("[PM] boot ret=%d (%s)\n", ret, param_strerror(ret));
+
     printf("[PM] --- dump after init ---\n");
     param_dump(0, dump_cb, NULL);
 }

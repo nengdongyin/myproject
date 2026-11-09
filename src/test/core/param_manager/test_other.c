@@ -11,13 +11,13 @@ PARAM_IP_FLOAT (oipf, TID_IP_FLOAT, PARAM_FLAG_PERSIST, 2.0f,  2.0f,  2.0f);
 PARAM_TABLE(applet_params, &ou32.base, &oi32.base, &oboo.base);
 PARAM_TABLE(ip_params, &oipu.base, &oipf.base);
 
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "OtherApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
-IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "OtherIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "OtherApplet", .write = mock_apply_ok);
+IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "OtherIP", .write = mock_ip_write_ok);
 
 static void register_all(void)
 {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
-    ip_driver_register(&test_ip_instance, ip_params, PARAM_COUNT(ip_params));
+    param_module_register(&test_ip_module, ip_params, PARAM_COUNT(ip_params));
     test_reset_entry(&ou32.base); test_reset_entry(&oi32.base);
     test_reset_entry(&oboo.base);
     test_reset_entry(&oipu.base); test_reset_entry(&oipf.base);
@@ -39,7 +39,7 @@ void test_set_range_narrows(void) {
     param_value_t min = { .u32 = 50 }, max = { .u32 = 150 };
     TEST_ASSERT_PARAM_OK(param_set_range(TID_APPLET_UINT, &min, &max));
 
-    /* D1: 超范围写入拒绝, 缓存不变 (默认 100 在新范围内) */
+    /* 超范围写入拒绝, 缓存不变 (默认 100 在新范围内) */
     param_value_t v = { .u32 = 10 };
     TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_UINT, &v);
@@ -68,7 +68,7 @@ void test_validate_all_clamps(void) {
     param_value_t min = { .u32 = 0 }, max = { .u32 = 100 };
     TEST_ASSERT_PARAM_OK(param_set_range(TID_APPLET_UINT, &min, &max));
 
-    /* 维护工具: 显式裁剪收敛 (D1 的分界 —— 裁剪只发生在显式维护操作) */
+    /* 维护工具: 显式裁剪收敛 (裁剪只发生在显式维护操作) */
     TEST_ASSERT_PARAM_OK(param_validate_all());
 
     param_read(TID_APPLET_UINT, &v);
@@ -112,7 +112,7 @@ void test_foreach_specific_module(void) {
 
 void test_foreach_unknown_module(void) {
     register_all();
-    /* 指定未注册模块不再静默空转 (易用性: 错误可见) */
+    /* 指定未注册模块返回错误 (错误可见) */
     TEST_ASSERT_PARAM_ERR(param_foreach(0xDEAD, test_foreach_cb, NULL),
                           PARAM_ERR_NOT_FOUND);
 }
@@ -144,29 +144,30 @@ void test_module_foreach_count(void) {
 }
 
 /* ================================================================
- *  param_write_immediate
+ *  param_write_sync (App: apply+标脏; IP: 直通硬件+清脏)
  * ================================================================ */
-void test_write_immediate_applet(void) {
+void test_write_sync_applet(void) {
     register_all();
 
     mock_apply_reset();
     param_value_t v = { .u32 = 42 };
-    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_APPLET_UINT, v));
+    TEST_ASSERT_PARAM_OK(param_write_sync(TID_APPLET_UINT, v));
 
     TEST_ASSERT_EQUAL_INT(1, g_apply_call_count);
     TEST_ASSERT_EQUAL_UINT32(42, g_apply_last_value.u32);
 
     param_read(TID_APPLET_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(42, v.u32);
-    TEST_ASSERT_DIRTY(&ou32.base, 0);
+    /* apply 校验 + **标脏**, 硬件由 flush 按 dirty 下发 */
+    TEST_ASSERT_DIRTY(&ou32.base, 1);
 }
 
-void test_write_immediate_ip(void) {
+void test_write_sync_ip(void) {
     register_all();
 
     mock_ip_reset();
     param_value_t v = { .u32 = 777 };
-    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_IP_UINT, v));
+    TEST_ASSERT_PARAM_OK(param_write_sync(TID_IP_UINT, v));
 
     TEST_ASSERT_EQUAL_INT(1, g_ip_write_call_count);
     TEST_ASSERT_EQUAL_UINT32(777, g_ip_write_last_value.u32);
@@ -176,66 +177,67 @@ void test_write_immediate_ip(void) {
     TEST_ASSERT_DIRTY(&oipu.base, 0);
 }
 
-void test_write_immediate_ip_cb_sees_new_cache(void) {
-    test_ip_instance.write = mock_ip_write_readback;
+void test_write_sync_ip_cb_sees_new_cache(void) {
+    test_ip_module.write = mock_ip_write_readback;
     register_all();
 
     param_value_t v = { .u32 = 888 };
-    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_IP_UINT, v));
+    TEST_ASSERT_PARAM_OK(param_write_sync(TID_IP_UINT, v));
     /* 值类型缓存先行: driver write 回调执行期间缓存已是新值 */
     TEST_ASSERT_EQUAL_UINT32(888, g_ip_write_seen_cache.u32);
-    test_ip_instance.write = mock_ip_write_ok;
+    test_ip_module.write = mock_ip_write_ok;
 }
 
-void test_write_immediate_ip_fails_keeps_cache(void) {
-    test_ip_instance.write = mock_ip_write_fail;
+void test_write_sync_ip_fails_keeps_cache(void) {
+    test_ip_module.write = mock_ip_write_fail;
     register_all();
 
     param_value_t v = { .u32 = 555 };
-    TEST_ASSERT_PARAM_ERR(param_write_immediate(TID_IP_UINT, v), PARAM_ERR_NOT_FOUND);
-    /* 缓存先行且不回滚: 硬件写入失败后缓存保持新值, 不标记 dirty */
+    TEST_ASSERT_PARAM_ERR(param_write_sync(TID_IP_UINT, v), PARAM_ERR_NOT_FOUND);
+    /* 缓存先行且不回滚 (IP flush 重试模型): 硬件写入失败后缓存保持新值 */
     param_read(TID_IP_UINT, &v);
     TEST_ASSERT_EQUAL_UINT32(555, v.u32);
     TEST_ASSERT_DIRTY(&oipu.base, 0);
-    test_ip_instance.write = mock_ip_write_ok;
+    test_ip_module.write = mock_ip_write_ok;
 }
 
-/* IP 侧同样: write 是可选钩子, 缺失时"立即"仅到缓存层, 不视为错误。 */
-void test_write_immediate_ip_no_write_cb(void) {
-    test_ip_instance.write = NULL;
+/* IP 侧同样: write 是可选钩子, 缺失时"同步"仅到缓存层, 不视为错误。 */
+void test_write_sync_ip_no_write_cb(void) {
+    test_ip_module.write = NULL;
     register_all();
 
     param_value_t v = { .u32 = 1 };
-    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_IP_UINT, v));
+    TEST_ASSERT_PARAM_OK(param_write_sync(TID_IP_UINT, v));
 
     param_value_t cached;
     param_read_cache(TID_IP_UINT, &cached);
     TEST_ASSERT_EQUAL_UINT32(1, cached.u32);
     TEST_ASSERT_DIRTY(&oipu.base, 0);
 
-    test_ip_instance.write = mock_ip_write_ok; /* 恢复, 不泄漏给后续用例 */
+    test_ip_module.write = mock_ip_write_ok; /* 恢复, 不泄漏给后续用例 */
 }
 
-/* App 侧: write 只是可选的校验钩子, 缺失时必须退化为"仅写缓存 + 清 dirty" */
-void test_write_immediate_applet_no_write_cb(void) {
+/* App 侧: write 只是可选的校验钩子, 缺失时退化为"仅写缓存 + 标脏" */
+void test_write_sync_applet_no_write_cb(void) {
     param_write_fn saved = test_applet_module.write;
     test_applet_module.write = NULL;
     register_all();
 
     param_value_t v = { .u32 = 42 };
-    TEST_ASSERT_PARAM_OK(param_write_immediate(TID_APPLET_UINT, v));
+    TEST_ASSERT_PARAM_OK(param_write_sync(TID_APPLET_UINT, v));
 
     param_value_t cached;
     param_read_cache(TID_APPLET_UINT, &cached);
     TEST_ASSERT_EQUAL_UINT32(42, cached.u32);
-    TEST_ASSERT_DIRTY(&ou32.base, 0); /* 立即写: 已落缓存且清 dirty */
+    /* 标脏等 flush */
+    TEST_ASSERT_DIRTY(&ou32.base, 1);
 
     test_applet_module.write = saved;
 }
 
 /* ================================================================
  *  notify 回调必须携带"缓存生效值"而非调用者的原始入参;
- *  D1: 超范围写入被拒绝 → 不触发 notify
+ *  超范围写入被拒绝 → 不触发 notify
  * ================================================================ */
 static int g_notify_count;
 static uint32_t g_notify_last_id;
@@ -254,7 +256,7 @@ void test_notify_reports_effective_value(void) {
     register_all();
 
     g_notify_count = 0;
-    /* D1: 超范围写入拒绝, 不产生 notify, 缓存不变 */
+    /* 超范围写入拒绝, 不产生 notify, 缓存不变 */
     param_value_t v = { .u32 = 250 };
     TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_OUT_OF_RANGE);
     TEST_ASSERT_EQUAL_INT(0, g_notify_count);
@@ -320,7 +322,7 @@ void test_exec_no_callback(void) {
 }
 
 /* ================================================================
- *  D3: exec / load_one / reset_one 的 notify 一致性
+ *  exec / load_one / reset_one 的 notify 一致性
  * ================================================================ */
 static int g_exec_got;
 static param_value_t g_exec_last_arg;
@@ -342,8 +344,8 @@ void test_exec_notifies_with_payload(void) {
     PARAM_IP_EXEC(test_cmd, MAKE_PARAM_ID(TEST_MODULE_IP2, 0xF0));
     PARAM_TABLE(cmd_params, &test_cmd.base);
     IP_DRIVER_DEFINE(cmd_ip, TEST_MODULE_IP2, "CmdIP",
-                     NULL, NULL, NULL, NULL, test_exec_cb, NULL);
-    ip_driver_register(&cmd_ip_instance, cmd_params, PARAM_COUNT(cmd_params));
+                     .exec = test_exec_cb);
+    param_module_register(&cmd_ip_module, cmd_params, PARAM_COUNT(cmd_params));
 
     g_notify_count = 0;
     g_exec_got = 0;
@@ -407,11 +409,11 @@ void test_blob_write_read(void) {
 
     static param_entry_t *entries[] = { &test_blob.base };
     PARAM_MODULE_DEFINE(test_blob_mod, (uint16_t)PARAM_MODULE_ID(TID_APPLET_BLOB),
-                        "BlobMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+                        "BlobMod", .write = mock_apply_ok);
     param_module_register(&test_blob_mod_module, entries, 1);
 
-    /* BLOB 必须走带长度的专用入口 (param_write 拒收 BLOB/STRING) */
-    int ret = param_write_blob(TID_APPLET_BLOB, data, sizeof(data));
+    /* BLOB 走带长度的专用入口 param_write_raw (param_write 拒收 BLOB/STRING) */
+    int ret = param_write_raw(TID_APPLET_BLOB, data, sizeof(data));
     TEST_ASSERT_PARAM_OK(ret);
 
     TEST_ASSERT_EQUAL_UINT8(0xAB, g_blob_buf_other[0]);
@@ -437,7 +439,7 @@ static param_string_entry_t g_test_str = {
 };
 
 static param_entry_t *g_str_entries[] = { &g_test_str.base };
-PARAM_MODULE_DEFINE(test_str_mod, STR_TEST_MODULE, "StrMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_str_mod, STR_TEST_MODULE, "StrMod", .write = mock_apply_ok);
 
 void test_string_write_read(void) {
     param_module_register(&test_str_mod_module, g_str_entries, 1);
@@ -464,11 +466,12 @@ void test_string_truncation(void) {
     memset(buf, 0, sizeof(buf));
 
     static param_entry_t *trunc_entries[] = { &trunc_str.base };
-    PARAM_MODULE_DEFINE(trunc_mod, STR_TEST_MODULE, "TruncMod", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+    PARAM_MODULE_DEFINE(trunc_mod, STR_TEST_MODULE, "TruncMod", .write = mock_apply_ok);
     param_module_register(&trunc_mod_module, trunc_entries, 1);
 
     int ret = param_write_string(STR_TEST_ID, "HelloWorld");
-    TEST_ASSERT_PARAM_OK(ret);
+    /* 截断可感知: 成功但被截断返回正码 PARAM_OK_TRUNCATED */
+    TEST_ASSERT_EQUAL_INT(PARAM_OK_TRUNCATED, ret);
     TEST_ASSERT_EQUAL_STRING("Hello", buf);
 }
 
@@ -514,7 +517,7 @@ PARAM_STRING(ms_ptr, TID_MACRO_STR_PTR, PARAM_FLAG_PERSIST, g_ms_ptr_buf, 7);
 
 PARAM_TABLE(macro_str_params, &ms_ptr.base);
 PARAM_MODULE_DEFINE(macro_str_mod, MACRO_STR_MODULE, "MacroStrMod",
-                    NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+                    .write = mock_apply_ok);
 
 static void register_macro_str(void)
 {
@@ -580,7 +583,7 @@ static param_entry_t *g_hard_entries[] = {
 };
 
 PARAM_MODULE_DEFINE(hard_mod, HARDEN_MODULE, "HardenMod",
-                    NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+                    .write = mock_apply_ok);
 
 static void register_harden(void)
 {
@@ -601,11 +604,12 @@ void test_write_rejects_blob_and_string(void) {
     TEST_ASSERT_PARAM_ERR(param_write(HID_BLOB, v), PARAM_ERR_TYPE_MISMATCH);
     TEST_ASSERT_PARAM_ERR(param_write(HID_STR, v), PARAM_ERR_TYPE_MISMATCH);
     TEST_ASSERT_PARAM_ERR(param_write_cache(HID_BLOB, v), PARAM_ERR_TYPE_MISMATCH);
-    TEST_ASSERT_PARAM_ERR(param_write_immediate(HID_STR, v), PARAM_ERR_TYPE_MISMATCH);
+    TEST_ASSERT_PARAM_ERR(param_write_sync(HID_STR, v), PARAM_ERR_TYPE_MISMATCH);
 
-    /* 类型化 helper 不再能把整数当指针解引用 */
+    /* 类型化 helper 不会把整数当指针解引用 */
     TEST_ASSERT_PARAM_ERR(param_write_u32(HID_STR, 0x1234), PARAM_ERR_TYPE_MISMATCH);
-    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_STR, "x", 1), PARAM_ERR_TYPE_MISMATCH);
+    /* write_raw 是带长度的通用入口, 对 STRING 目标是合法路径 (此处验证其可用) */
+    TEST_ASSERT_PARAM_OK(param_write_raw(HID_STR, (const uint8_t *)"x", 1));
     TEST_ASSERT_PARAM_ERR(param_write_string(HID_BLOB, "x"), PARAM_ERR_TYPE_MISMATCH);
 
     /* 值类型路径不变 */
@@ -615,25 +619,79 @@ void test_write_rejects_blob_and_string(void) {
     TEST_ASSERT_EQUAL_UINT32(42, rv.u32);
 }
 
-/* param_write_blob: NULL / 长度 / 类型校验 */
-void test_write_blob_validates(void) {
+/* param_write_raw (BLOB 分支): NULL / 长度 / 类型校验 */
+void test_write_raw_blob_validates(void) {
     register_harden();
 
     uint8_t data[sizeof(g_hard_blob_buf)];
     memset(data, 0x5A, sizeof(data));
     memset(g_hard_blob_buf, 0, sizeof(g_hard_blob_buf));
 
-    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_BLOB, NULL, sizeof(data)), PARAM_ERR_INVALID_ID);
-    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_BLOB, data, sizeof(data) - 1), PARAM_ERR_OUT_OF_RANGE);
-    TEST_ASSERT_PARAM_ERR(param_write_blob(HID_BLOB, data, sizeof(data) + 1), PARAM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_PARAM_ERR(param_write_raw(HID_BLOB, NULL, sizeof(data)), PARAM_ERR_INVALID_ID);
+    TEST_ASSERT_PARAM_ERR(param_write_raw(HID_BLOB, data, sizeof(data) - 1), PARAM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_PARAM_ERR(param_write_raw(HID_BLOB, data, sizeof(data) + 1), PARAM_ERR_OUT_OF_RANGE);
 
     /* 被拒绝的写入不得改动缓存 */
     TEST_ASSERT_EQUAL_UINT8(0, g_hard_blob_buf[0]);
 
-    TEST_ASSERT_PARAM_OK(param_write_blob(HID_BLOB, data, sizeof(data)));
+    TEST_ASSERT_PARAM_OK(param_write_raw(HID_BLOB, data, sizeof(data)));
     TEST_ASSERT_EQUAL_UINT8(0x5A, g_hard_blob_buf[0]);
     TEST_ASSERT_EQUAL_UINT8(0x5A, g_hard_blob_buf[sizeof(g_hard_blob_buf) - 1]);
     TEST_ASSERT_DIRTY(&g_hard_blob.base, 1);
+}
+
+/* ================================================================
+ *  param_write_ex / param_write_bytes (CLAMP 旗标) + param_reapply
+ * ================================================================ */
+void test_write_ex_clamp(void) {
+    register_harden();
+
+    /* 默认 (flags=0): 超范围拒绝 (与 param_write 一致) */
+    param_value_t v = { .u32 = 250 };
+    TEST_ASSERT_PARAM_ERR(param_write_ex(HID_U32, v, 0), PARAM_ERR_OUT_OF_RANGE);
+
+    /* PARAM_WR_CLAMP: 裁剪到合法区间 (显式裁剪旗标) */
+    TEST_ASSERT_PARAM_OK(param_write_ex(HID_U32, v, PARAM_WR_CLAMP));
+    param_read_cache(HID_U32, &v);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
+}
+
+void test_write_ex_unknown_flag(void) {
+    register_harden();
+    param_value_t v = { .u32 = 1 };
+    /* 未定义旗标拒绝 (而非静默忽略) */
+    TEST_ASSERT_PARAM_ERR(param_write_ex(HID_U32, v, 0x80000000u),
+                          PARAM_ERR_NOT_SUPPORTED);
+}
+
+void test_write_bytes_value_clamp(void) {
+    register_harden();
+
+    uint32_t raw = 250;
+    TEST_ASSERT_PARAM_ERR(param_write_bytes(HID_U32, (const uint8_t *)&raw, sizeof(raw), 0),
+                          PARAM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_PARAM_OK(param_write_bytes(HID_U32, (const uint8_t *)&raw, sizeof(raw),
+                                           PARAM_WR_CLAMP));
+    param_value_t v;
+    param_read_cache(HID_U32, &v);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
+}
+
+void test_reapply_revalidates(void) {
+    register_all();
+
+    /* 先写合法值, 再运行时收紧范围, reapply 重放完整写入路径 */
+    param_value_t v = { .u32 = 150 };
+    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
+
+    param_value_t min = { .u32 = 0 }, max = { .u32 = 100 };
+    TEST_ASSERT_PARAM_OK(param_set_range(TID_APPLET_UINT, &min, &max));
+
+    mock_apply_reset();
+    TEST_ASSERT_PARAM_OK(param_reapply(TID_APPLET_UINT));
+    TEST_ASSERT_EQUAL_INT(1, g_apply_call_count); /* 重放触发 apply */
+    param_read_cache(TID_APPLET_UINT, &v);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
 }
 
 /* write_raw 的 STRING 分支按 len 定界 (不得越过 len 扫 '\0') */
@@ -656,7 +714,7 @@ void test_cache_restore_checks_record_len(void) {
 
     uint8_t good[sizeof(g_hard_blob_buf)];
     memset(good, 0x33, sizeof(good));
-    TEST_ASSERT_PARAM_OK(param_write_blob(HID_BLOB, good, sizeof(good)));
+    TEST_ASSERT_PARAM_OK(param_write_raw(HID_BLOB, good, sizeof(good)));
 
     /* BLOB: 短记录 → 拒绝, 缓存保持不变 (若按 blob_size 读会越过记录长度) */
     uint8_t short_rec[4];
@@ -688,12 +746,12 @@ void run_test_other(void)
     RUN_TEST(test_foreach_unknown_module);
     RUN_TEST(test_foreach_early_stop);
     RUN_TEST(test_module_foreach_count);
-    RUN_TEST(test_write_immediate_applet);
-    RUN_TEST(test_write_immediate_ip);
-    RUN_TEST(test_write_immediate_ip_cb_sees_new_cache);
-    RUN_TEST(test_write_immediate_ip_fails_keeps_cache);
-    RUN_TEST(test_write_immediate_ip_no_write_cb);
-    RUN_TEST(test_write_immediate_applet_no_write_cb);
+    RUN_TEST(test_write_sync_applet);
+    RUN_TEST(test_write_sync_ip);
+    RUN_TEST(test_write_sync_ip_cb_sees_new_cache);
+    RUN_TEST(test_write_sync_ip_fails_keeps_cache);
+    RUN_TEST(test_write_sync_ip_no_write_cb);
+    RUN_TEST(test_write_sync_applet_no_write_cb);
     RUN_TEST(test_notify_reports_effective_value);
     RUN_TEST(test_write_raw_uint);
     RUN_TEST(test_write_raw_too_long);
@@ -709,7 +767,11 @@ void run_test_other(void)
     RUN_TEST(test_string_save_load);
     RUN_TEST(test_string_macro_ptr_buffer_reset_no_ub);
     RUN_TEST(test_write_rejects_blob_and_string);
-    RUN_TEST(test_write_blob_validates);
+    RUN_TEST(test_write_raw_blob_validates);
+    RUN_TEST(test_write_ex_clamp);
+    RUN_TEST(test_write_ex_unknown_flag);
+    RUN_TEST(test_write_bytes_value_clamp);
+    RUN_TEST(test_reapply_revalidates);
     RUN_TEST(test_write_raw_string_bounded_by_len);
     RUN_TEST(test_cache_restore_checks_record_len);
 }

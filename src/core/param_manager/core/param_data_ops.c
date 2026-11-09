@@ -18,7 +18,7 @@
  *
  *  注意: 写入路径 (pre_write) 对超范围值**拒绝** (见 pre_write_range),
  *  本函数仅服务维护类操作: param_validate_all / param_set_range /
- *  re-apply (load_one / reset_one / param_update) 的收敛语义。
+ *  re-apply (load_one / reset_one / param_reapply) 的收敛语义。
  * ================================================================ */
 
 param_value_t param_clamp_value_to_range(const param_range_entry_t *re, param_value_t value)
@@ -82,27 +82,45 @@ static bool validate_enum(const param_enum_entry_t *ee, param_value_t value)
  *  ENUM           → 枚举合法性校验
  *  其余类型       → 无条件放行
  *
- *  易用性决策 D1: 用户写入非法值必须**可见** (OUT_OF_RANGE),
- *  静默裁剪留给显式维护操作 (param_validate_all / CLAMP policy /
+ *  设计语义: 用户写入非法值必须**可见** (OUT_OF_RANGE),
+ *  静默裁剪留给显式维护操作 (param_validate_all / PARAM_WR_CLAMP /
  *  re-apply 路径), 由调用方决定何时收敛, 而非每次写入悄悄改值。
  * ================================================================ */
 
 static bool pre_write_range(param_entry_t *e, param_value_t *value)
 {
     param_range_entry_t *re = (param_range_entry_t *)e;
-    if (!re->has_range)
-        return true;
 
-    switch (re->type) {
-    case PARAM_TYPE_UINT:
-        return value->u32 >= re->min.u32 && value->u32 <= re->max.u32;
-    case PARAM_TYPE_INT:
-        return value->i32 >= re->min.i32 && value->i32 <= re->max.i32;
-    case PARAM_TYPE_FLOAT:
-        return value->f32 >= re->min.f32 && value->f32 <= re->max.f32;
-    default:
-        return true;
+    /* 范围校验: has_range 时值必须在 [min,max] 内 */
+    if (re->has_range) {
+        switch (re->type) {
+        case PARAM_TYPE_UINT:
+            return value->u32 >= re->min.u32 && value->u32 <= re->max.u32;
+        case PARAM_TYPE_INT:
+            return value->i32 >= re->min.i32 && value->i32 <= re->max.i32;
+        case PARAM_TYPE_FLOAT:
+            return value->f32 >= re->min.f32 && value->f32 <= re->max.f32;
+        default:
+            return true;
+        }
     }
+
+    /* PARAM_FLAG_FIXED: min==max==default 为唯一合法值 (固定值强制校验,
+       修复"min==max 时范围校验被关闭"的零校验漏洞) */
+    if (entry_flags(e) & PARAM_FLAG_FIXED) {
+        switch (re->type) {
+        case PARAM_TYPE_UINT:
+            return value->u32 == re->min.u32;
+        case PARAM_TYPE_INT:
+            return value->i32 == re->min.i32;
+        case PARAM_TYPE_FLOAT:
+            return value->f32 == re->min.f32;
+        default:
+            return true;
+        }
+    }
+
+    return true;
 }
 
 static bool pre_write_enum(param_entry_t *e, param_value_t *value)
@@ -146,7 +164,7 @@ static void cache_update_value(param_entry_t *e, param_value_t value)
 static void cache_update_blob(param_entry_t *e, param_value_t value)
 {
     param_blob_entry_t *be = (param_blob_entry_t *)e;
-    /* src==dst 时跳过: param_load_one / param_reset_one / param_update
+    /* src==dst 时跳过: param_load_one / param_reset_one / param_reapply
        会把 cache 值原样传回写入路径, memcpy 自拷贝属未定义行为 */
     if (be->blob_size > 0 && value.ptr && be->cache.ptr != value.ptr)
         memcpy(be->cache.ptr, value.ptr, be->blob_size);
@@ -155,7 +173,7 @@ static void cache_update_blob(param_entry_t *e, param_value_t value)
 static void cache_update_string(param_entry_t *e, param_value_t value)
 {
     param_string_entry_t *se = (param_string_entry_t *)e;
-    /* src==dst 时跳过: param_load_one / param_reset_one / param_update
+    /* src==dst 时跳过: param_load_one / param_reset_one / param_reapply
        会把 cache 值原样传回写入路径, 自拷贝属未定义行为。
        有界拷贝: memchr 只扫 max_len+1 字节, 不依赖调用方缓冲的 '\0'
        位置, 也不会越过 max_len+1 窗口读取 (调用方缓冲可能不是

@@ -167,9 +167,9 @@ static int sensor_exec(void *driver, uint32_t param_id, param_value_t arg)
 PARAM_IP_UINT (ip_sensor_exposure,   PID_IP_SENSOR_EXPOSURE,   PARAM_FLAG_PERSIST, 10000,  0, 1000000);
 PARAM_IP_FLOAT(ip_sensor_gain,       PID_IP_SENSOR_GAIN,       PARAM_FLAG_PERSIST, 1.0f,   1.0f, 48.0f);
 PARAM_IP_UINT (ip_sensor_fps,        PID_IP_SENSOR_FPS,        PARAM_FLAG_PERSIST, 30,     10,    500);
-PARAM_IP_INT  (ip_sensor_resolution, PID_IP_SENSOR_RESOLUTION, PARAM_FLAG_PERSIST, 1,      1,     1);
+PARAM_IP_INT  (ip_sensor_resolution, PID_IP_SENSOR_RESOLUTION, PARAM_FLAG_PERSIST | PARAM_FLAG_FIXED, 1,      1,     1);
 PARAM_IP_EXEC (ip_sensor_shutdown,   PID_IP_SENSOR_SHUTDOWN);
-PARAM_IP_UINT (ip_sensor_roi_x,      PID_IP_SENSOR_ROI_X,      PARAM_FLAG_PERSIST, 1920,   1920,  1920);
+PARAM_IP_UINT (ip_sensor_roi_x,      PID_IP_SENSOR_ROI_X,      PARAM_FLAG_PERSIST | PARAM_FLAG_FIXED, 1920,   1920,  1920);
 PARAM_IP_UINT (ip_sensor_frame_cnt,  PID_IP_SENSOR_FRAME_CNT,  PARAM_FLAG_READONLY, 0,      0,     0);
 PARAM_IP_UINT (ip_sensor_cur_luma,  PID_IP_SENSOR_CUR_LUMA,   PARAM_FLAG_READONLY, 0,      0,     0);
 
@@ -185,14 +185,17 @@ PARAM_TABLE(sensor_params,
 );
 
 IP_DRIVER_DEFINE(sensor, IP_SENSOR, "OV4689_Sensor_IP",
-                 &g_sensor_dev, sensor_init, sensor_read,
-                 sensor_write, sensor_exec, NULL);
+                 .ctx   = &g_sensor_dev,
+                 .init  = sensor_init,
+                 .read  = sensor_read,
+                 .write = sensor_write,
+                 .exec  = sensor_exec);
 
 void sensor_module_init(void)
 {
-    ip_driver_register(&sensor_instance,
-                       sensor_params,
-                       PARAM_COUNT(sensor_params));
+    param_module_register(&sensor_module,
+                          sensor_params,
+                          PARAM_COUNT(sensor_params));
 
     lwevt_register(sensor_on_param_changed);
 }

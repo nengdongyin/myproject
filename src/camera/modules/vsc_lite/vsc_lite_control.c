@@ -178,9 +178,11 @@ PARAM_TABLE(vsc_lite_control_params,
 );
 
 PARAM_MODULE_DEFINE(vsc_lite, MODULE_VSC_LITE, "VSC-Lite-Pipeline",
-                    &g_vsc_lite_control_ctx,
-                    vsc_lite_init, vsc_lite_read, vsc_lite_write,
-                    NULL, vsc_lite_flush);
+                    .ctx   = &g_vsc_lite_control_ctx,
+                    .init  = vsc_lite_init,
+                    .read  = vsc_lite_read,
+                    .write = vsc_lite_write,
+                    .flush = vsc_lite_flush);
 
 /* ═══════════════════════════════════════════════════════════════════════
  *  公开 API

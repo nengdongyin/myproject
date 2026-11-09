@@ -77,7 +77,10 @@ PARAM_TABLE(ae_params,
 );
 
 PARAM_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
-                    &g_ae_instance, ae_init, NULL, ae_write, NULL, ae_flush);
+                    .ctx   = &g_ae_instance,
+                    .init  = ae_init,
+                    .write = ae_write,
+                    .flush = ae_flush);
 
 void auto_exp_module_init(void)
 {

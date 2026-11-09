@@ -9,7 +9,7 @@
  *   - ip_module_flush:      逐条 driver write + 批量后处理
  *   - ip_module_init:       全量标脏 (开机下发默认值) + init 回调
  *   - ip_vtable / ip_module_vtable 常量组装
- *   - ip_driver_register:   注册入口 (注入 ip_module_vtable)
+ *   - 注册: 与 App 共用 param_module_register (见 param_manager.c)
  *
  * IP 参数不直接操作硬件寄存器。所有硬件访问通过 inst->read / inst->write
  * 回调完成，硬件地址/偏移/位宽由 driver 内部封装。
@@ -216,9 +216,9 @@ const param_vtable_t ip_vtable = {
     /* IP 参数无 apply 回调，write 和 write_cache 均仅更新缓存+标记 dirty;
        实际硬件写入由 param_flush → ip_module_flush 批量触发，因此二者等价。 */
     .write_cache      = param_entry_write,
-    /* write_immediate 与 App 共用同一实现: write 是可选钩子 (可 NULL),
-       缺失时"立即"只到缓存层, 值由 flush 的批量回调或 exec 命令下发 */
-    .write_immediate  = param_entry_write_immediate,
+    /* write_sync (IP): EXEC 路由 / 缓存先行 + write 回调直通硬件 / 成功清脏;
+       write 是可选钩子 (可 NULL), 缺失时只到缓存层并清脏 */
+    .write_sync       = param_entry_write_sync,
     .write_raw        = param_entry_write_raw,
     .flush            = ip_flush_one,
     .save             = param_vtable_save,
@@ -238,16 +238,7 @@ const param_module_vtable_t ip_module_vtable = {
 };
 
 /* ================================================================
- *  IP Driver 注册 (公开 API)
+ *  注册: 与 App 共用 param_module_register (param_manager.c)。
+ *  IP 模块的 vtable 由 IP_DRIVER_DEFINE 写入 node, 注册入口
+ *  不重复指定。
  * ================================================================ */
-
-int ip_driver_register(ip_instance_t *inst,
-                       param_entry_t **entries,
-                       uint16_t count)
-{
-    if (!inst || !entries || count == 0) return PARAM_ERR_INVALID_ID;
-
-    inst->node.vtable = &ip_module_vtable;
-
-    return param_module_register_node(&inst->node, entries, count);
-}

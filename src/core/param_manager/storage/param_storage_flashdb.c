@@ -194,12 +194,15 @@ static int flashdb_delete(void *ctx, uint32_t param_id)
 }
 
 /**
- * @brief FlashDB 全量擦除: 反初始化后重新初始化 KVDB
+ * @brief FlashDB 全量擦除: 逐键删除
  *
- * 采用"销毁→重建"策略而非逐键删除，效率远高于迭代删除。
+ * 采用"删除 + 重启迭代器"循环: fdb_kv_del 可能触发 GC 搬移扇区,
+ * 使迭代器位置失效, 因此每删一键重新初始化迭代器 (erase_all 属低频
+ * 操作, O(N²) 遍历代价可接受)。迭代器只返回 status==WRITE 的键,
+ * 已删除键被跳过, 循环必然终止。
  *
  * @param ctx FlashDB 上下文
- * @return 0 成功, -1 失败
+ * @return 0 全部键已删除, -1 失败
  */
 static int flashdb_erase_all(void *ctx)
 {
@@ -207,10 +210,21 @@ static int flashdb_erase_all(void *ctx)
     if (!c || !c->kvdb_ready)
         return -1;
 
-    fdb_kvdb_deinit(&c->kvdb);
-    c->kvdb_ready = false;
+    for (;;) {
+        struct fdb_kv_iterator itr;
+        fdb_kv_iterator_init(&c->kvdb, &itr);
+        if (!fdb_kv_iterate(&c->kvdb, &itr))
+            break; /* 无剩余有效键: 擦除完成 */
 
-    return flashdb_init_kvdb(c);
+        /* name 为迭代器内定长缓冲, 删除期间保持有效 */
+        const char *key = itr.curr_kv.name;
+        if (key[0] == '\0')
+            return -1; /* 迭代器异常: 拒绝静默成功 */
+
+        if (fdb_kv_del(&c->kvdb, key) != FDB_NO_ERR)
+            return -1;
+    }
+    return 0;
 }
 
 /**

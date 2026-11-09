@@ -5,7 +5,7 @@ DEF_TEST_UINT(mb_u32, TID_APPLET_UINT,  PARAM_FLAG_PERSIST, 100, 0, 200);
 DEF_TEST_UINT(mb_u32b, TID_APPLET_INT,  PARAM_FLAG_PERSIST, 50,  0, 100);
 
 PARAM_TABLE(mb_params, &mb_u32.base, &mb_u32b.base);
-PARAM_MODULE_DEFINE(mb_mod, TEST_MODULE_APPLET, "MB", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(mb_mod, TEST_MODULE_APPLET, "MB", .write = mock_apply_ok);
 
 static void register_all(void)
 {
@@ -87,7 +87,8 @@ void test_bank_set_null_disables_persist(void)
 
     param_set_storage(NULL);
 
-    /* 存储被置 NULL: 不再是"找不到"(NOT_FOUND), 而是"本配置不支持持久化" */
+    /* 存储被置 NULL: 返回"本配置不支持持久化"(NOT_SUPPORTED)
+       而非"找不到"(NOT_FOUND) */
     int ret = param_save_all();
     TEST_ASSERT_EQUAL_INT(PARAM_ERR_NOT_SUPPORTED, ret);
 

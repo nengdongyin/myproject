@@ -63,7 +63,6 @@ static void param_schema_version_ensure(const param_storage_drv_t *drv);
  * @endcode
  *
  * @param storage 新的存储后端驱动 (可为 NULL 停用持久化)
- * @note 传入非 NULL 但缺少 load/save 回调的驱动时, 调用被静默忽略
  */
 /**
  * @brief 运行时替换持久化后端驱动 — 纯指针替换
@@ -74,8 +73,7 @@ static void param_schema_version_ensure(const param_storage_drv_t *drv);
  * @param storage 新的存储后端驱动 (可为 NULL 停用持久化)
  * @return PARAM_OK 成功; PARAM_ERR_NOT_INITIALIZED 框架未初始化;
  *         PARAM_ERR_NOT_SUPPORTED 驱动缺 load/save 回调 (被拒绝,
- *         不再静默忽略 —— 静默失败是典型的易用性事故源, 此前 void 版
- *         连框架自身的 sys_select 都要回读比对来确认切换成功)
+ *         调用方可直接依赖返回值确认切换生效)
  */
 int param_set_storage(const param_storage_drv_t *storage)
 {
@@ -189,6 +187,45 @@ bool param_hash_insert_entry(param_entry_t *entry)
     if (hash_find(entry->param_id))
         return true;
     return hash_insert(entry);
+}
+
+/**
+ * @brief 清空哈希表中指向指定条目的槽位 (注册回滚用)
+ *
+ * @attention 开放寻址下直接置 NULL 会打断探测链 —— 必须配合
+ *   hash_rebuild 整表重建, 否则插在该槽之后的同链条目会查不到。
+ */
+static void hash_remove(param_entry_t *entry)
+{
+    for (uint32_t s = 0; s < PARAM_HASH_SIZE; s++) {
+        if (g_pm.hash[s] == entry) {
+            g_pm.hash[s] = NULL;
+            return;
+        }
+    }
+}
+
+/**
+ * @brief 哈希表整表重建 — 收集非空槽后清表重插 (注册回滚用)
+ *
+ * 删除槽位后重建探测链, 恢复开放寻址不变量。仅在注册失败的
+ * 罕见路径上执行, O(N) 代价可接受。
+ * 收集缓冲为静态 (PARAM_HASH_SIZE 个指针): 不占调用线程栈
+ * (嵌入式小栈友好); 调用期间持有 SYS_LOCK_PARAM 且注册路径
+ * 单线程, 无重入。
+ */
+static void hash_rebuild(void)
+{
+    static param_entry_t *keep[PARAM_HASH_SIZE];
+    uint32_t n = 0;
+    for (uint32_t s = 0; s < PARAM_HASH_SIZE; s++) {
+        if (g_pm.hash[s]) {
+            keep[n++] = g_pm.hash[s];
+            g_pm.hash[s] = NULL;
+        }
+    }
+    for (uint32_t k = 0; k < n; k++)
+        hash_insert(keep[k]);
 }
 
 /** @brief 哈希表遍历回调 */
@@ -448,6 +485,11 @@ int param_module_register_node(param_module_node_t *node,
         return PARAM_ERR_NOT_INITIALIZED;
     if (!node || !entries || count == 0)
         return PARAM_ERR_INVALID_ID;
+    /* vtable 必须已由 DEFINE 宏写入: 注册不代选 App/IP 类型 ——
+       手工构造 node 而漏设 vtable 属配置错误, 在此拦截 (防御
+       "注册成功但后续 vtable 调用野指针")。 */
+    if (!node->vtable)
+        return PARAM_ERR_INVALID_ID;
 
     system_lock(SYS_LOCK_PARAM);
 
@@ -470,11 +512,20 @@ int param_module_register_node(param_module_node_t *node,
     node->table = entries;
     node->param_count = count;
 
-    /* 步骤 3: 参数插入哈希表 */
+    /* 步骤 3: 参数插入哈希表 (失败时回滚已插入条目并整表重建 ——
+       否则中途失败会污染注册表: 条目留在表中而模块不在链表,
+       重试注册永远撞 PARAM_ERR_ALREADY_REG) */
     for (uint16_t i = 0; i < count; i++) {
         if (!entries[i])
             continue;
         if (!hash_insert(entries[i])) {
+            for (uint16_t k = 0; k < i; k++) {
+                if (entries[k])
+                    hash_remove(entries[k]);
+            }
+            hash_rebuild();
+            node->table = NULL;
+            node->param_count = 0;
             system_unlock(SYS_LOCK_PARAM);
             return PARAM_ERR_NO_MEMORY;
         }
@@ -507,7 +558,7 @@ int param_module_register(param_module_t *module,
  *  App 与 IP 的唯一结构性差异收敛为:
  *   - 参数级: write 是否携带 apply 回调 (write_apply vs write)
  *   - 模块级: flush / init 两条通路 (保留在 app/ip 各自实现文件)
- *  其余槽位 (read / write / write_immediate / write_raw / load /
+ *  其余槽位 (read / write / write_sync / write_raw / load /
  *  reset / mark_dirty / clear_dirty / exec / reset / deinit) 均为
  *  共用实现, 在此定义一次, 由两侧 vtable 常量引用。
  * ================================================================ */
@@ -613,7 +664,7 @@ int param_entry_write(param_entry_t *e, param_value_t value)
 /**
  * @brief 参数写入 (带 apply) — 基类写入 + 模块业务回调
  *
- * App 专用槽位。回调返回非 OK 时**缓存无变化** (易用性决策 D2):
+ * App 专用槽位。回调返回非 OK 时**缓存无变化**:
  *   - 值类型: 缓存先行 (回调内 param_read / param_save_one 反映新值),
  *     拒绝时回滚到先行快照;
  *   - BLOB/STRING: 回调先行 (新 payload 经 value.ptr 传递, 缓存保持旧值),
@@ -671,25 +722,20 @@ int param_entry_write_apply(param_entry_t *e, param_value_t value)
 }
 
 /**
- * @brief 立即写入 — EXEC 路由 / READONLY 过滤 / pre_write + 缓存提交
+ * @brief 同步写入 (IP 槽位) — EXEC 路由 / READONLY 过滤 / 缓存提交 + 直通硬件
  *
- * "立即"的含义是"写到本模块可及的最深层", **不是**"硬件寄存器已更新":
- *   - App 模块: 最深层就是缓存, 硬件由模块的 flush 回调稍后拉取;
- *   - IP 模块:  write 回调存在时直通硬件; 不存在时同样只到缓存,
- *                值留在缓存里等 flush 的批量回调或 exec 命令下发。
+ * IP 参数: write 回调存在时直通硬件, 成功后清脏 (值已生效, 无需 flush
+ * 重试); 回调缺失时只到缓存层并清脏 (与 param_write_sync 的公开契约一致,
+ * write 是可选钩子, 不构成错误)。
  *
- * 因此 write 是**可选钩子**, 缺失不构成错误 (App / IP 一视同仁):
- * param_entry_write / param_entry_write_apply / _ip_flush_write_entry 都不
- * 要求它存在。若在此返回错误, 同一配置下 param_write 成功而
- * param_write_immediate 失败, 调用者无法从 API 层解释该差异; 而"既无 write
- * 又无 flush"属注册期诊断问题 (见 param_check_flush_integrity), 不该由单次
- * 写入路径承担。
+ * 缓存先行 (IP 不回滚): 硬件写失败时缓存保持新值、脏位保留,
+ * 由 param_flush 重试收敛 (flush 重试模型需要)。
  *
  * @param e     参数条目
- * @param value 待写入值 (pre_write 会就地裁剪)
+ * @param value 待写入值 (pre_write 已拒绝超范围, 不做裁剪)
  * @return PARAM_OK 成功, 或其他错误码
  */
-int param_entry_write_immediate(param_entry_t *e, param_value_t value)
+int param_entry_write_sync(param_entry_t *e, param_value_t value)
 {
     param_module_t *m = param_entry_module(e);
     if (!m) return PARAM_ERR_NOT_FOUND;
@@ -715,14 +761,13 @@ int param_entry_write_immediate(param_entry_t *e, param_value_t value)
 
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
-    /* 缓存先行 (有意不回滚): 回调执行期间缓存已为新值。
-       回调语义由模块类型决定 (App: apply 校验; IP: driver 直通硬件),
-       失败不清脏、错误码上抛。 */
+    /* 缓存先行 (IP 有意不回滚): 回调执行期间缓存已为新值;
+       硬件写失败保留脏位, 由 flush 重试收敛 */
     system_lock(SYS_LOCK_PARAM);
     g_param_data_ops[t].cache_update(e, value);
     system_unlock(SYS_LOCK_PARAM);
 
-    /* write 为可选钩子: 缺失时"立即"只到缓存层, 不报错 (见函数头注释) */
+    /* write 为可选钩子: 缺失时"同步"只到缓存层, 不报错 */
     if (m->write) {
         int ret = m->write(m->ctx, e->param_id, value);
         if (ret != PARAM_OK)
@@ -733,6 +778,45 @@ int param_entry_write_immediate(param_entry_t *e, param_value_t value)
     param_entry_clear_dirty(e);
     system_unlock(SYS_LOCK_PARAM);
     return PARAM_OK;
+}
+
+/**
+ * @brief 同步写入 (App 槽位) — EXEC 路由 + apply 校验 + 标脏
+ *
+ * App 参数: "同步" = 立即执行 apply 校验并**标脏**, 硬件由
+ * param_flush 按 dirty 下发 (与 param_write 一致, 值在下一轮 flush
+ * 到达硬件)。
+ *
+ * EXEC 路由与 IP 侧相同 (命令与缓存/脏位无关)。
+ *
+ * @param e     参数条目
+ * @param value 待写入值
+ * @return PARAM_OK 成功, 或其他错误码
+ */
+int param_entry_write_sync_apply(param_entry_t *e, param_value_t value)
+{
+    param_module_t *m = param_entry_module(e);
+    if (!m) return PARAM_ERR_NOT_FOUND;
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
+
+    if (entry_flags(e) & PARAM_FLAG_EXEC) {
+        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
+        if (m->exec) {
+            int ret = m->exec(m->ctx, e->param_id, value);
+            if (ret == PARAM_OK) {
+                system_lock(SYS_LOCK_PARAM);
+                param_entry_clear_dirty(e);
+                system_unlock(SYS_LOCK_PARAM);
+            }
+            return ret;
+        }
+        return PARAM_ERR_NOT_FOUND;
+    }
+
+    /* apply 校验 + 标脏 (拒绝回滚) —— 与 param_write 同语义 */
+    return param_entry_write_apply(e, value);
 }
 
 /** @brief write_raw 公共主体 — EXEC 路由 / BLOB 长度校验 / 值类型转换 + 委托 write_fn */
@@ -764,12 +848,16 @@ static int param_entry_write_raw_to(param_entry_t *e, const uint8_t *data, uint1
 
     if (t == PARAM_TYPE_BLOB) {
         param_blob_entry_t *be = (param_blob_entry_t *)e;
+        if (!be->cache.ptr || be->blob_size == 0) return PARAM_ERR_NOT_FOUND;
         if (len != be->blob_size) return PARAM_ERR_OUT_OF_RANGE;
+        /* 回调先行 (与 STRING 同构): 新 payload 经 .ptr 传递,
+           缓存保持旧值, apply 拒绝时无字节级污染; 接受后 write_apply
+           提交整块拷贝 (len 已校验等于 blob_size, 无越界读)。 */
         param_value_t value = { .ptr = (void *)data };
         return write_fn(e, value);
     }
     if (t == PARAM_TYPE_STRING) {
-        /* 回调先行 (D2): 新 payload 经 .ptr 传递, 缓存保持旧值, apply
+        /* 回调先行: 新 payload 经 .ptr 传递, 缓存保持旧值, apply
            拒绝时无字节级污染。接受后 write_apply 会以 cache_update_string
            提交 (memchr 限界 ≤ max_len+1, 无越界读); 为精确尊重 len 界
            (调用方缓冲在 len 内无 '\0' 时不得越过 len 读取), 成功后本函数
@@ -882,7 +970,7 @@ void param_module_deinit(param_module_node_t *m)
 /**
  * @brief 通知回调 — 携带缓存中的**生效值**
  *
- * pre_write 对超范围值拒绝 (不再裁剪), 但 apply 回调仍可能修正值,
+ * pre_write 对超范围值拒绝, 但 apply 回调仍可能修正值,
  * 因此调用者传入的原始值不一定等于最终写入缓存的值。notify 必须以
  * 缓存为准, 否则订阅者会收到一个从未被存储的值。
  *
@@ -909,7 +997,7 @@ static void param_notify_effective(uint32_t param_id, param_entry_t *e)
 /**
  * @brief 写入入口公共前缀 — 初始化/存在性校验 + 无长度类型拦截
  *
- * param_write / param_write_cache / param_write_immediate / param_write_raw
+ * param_write / param_write_cache / param_write_sync / param_write_raw
  * 共用的第一步: 校验框架已初始化、条目已注册, 并按需拒绝 BLOB/STRING。
  *
  * @param param_id        参数 ID
@@ -932,7 +1020,7 @@ static int param_write_resolve(uint32_t param_id, param_entry_t **out,
     if (reject_ptr_types) {
         /* BLOB/STRING 的 payload 经 .ptr 传递, 而 param_value_t 无法携带长度,
            本路径无法校验源的容量/有效性。请使用带长度的专用入口:
-           param_write_blob / param_write_string / param_write_raw */
+           param_write_string / param_write_raw */
         param_type_t t = entry_type(e);
         if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
             return PARAM_ERR_TYPE_MISMATCH;
@@ -993,7 +1081,7 @@ static void param_write_complete(uint32_t param_id, param_entry_t *e, bool mark_
  *  所有写入入口共用同一骨架, 差异只有三处 (入口语义决定):
  *    1. 前置拦截: 有无长度信息 → param_write_resolve(reject_ptr_types)
  *    2. 分派目标: entry->vtable 的哪个槽位 (write / write_cache /
- *       write_immediate / write_raw)
+ *       write_sync / write_raw)
  *    3. 收尾: 置脏还是清脏 → param_write_complete(mark_dirty)
  *  其余步骤 (存在性校验、模块查找、加锁、生效值通知) 均由上面两个函数提供,
  *  各入口只表达自己那三处差异。
@@ -1027,27 +1115,31 @@ int param_write_cache(uint32_t param_id, param_value_t value)
     return ret;
 }
 
-/** @brief 立即写入参数 (直通硬件/回调，不产生 dirty) */
-int param_write_immediate(uint32_t param_id, param_value_t value)
+/** @brief 同步写入参数 (App: apply+标脏; IP: 直通硬件+清脏) */
+int param_write_sync(uint32_t param_id, param_value_t value)
 {
     param_entry_t *e = NULL;
     int ret = param_write_resolve(param_id, &e, true);
     if (ret != PARAM_OK)
         return ret;
 
-    ret = e->vtable->write_immediate(e, value);
+    ret = e->vtable->write_sync(e, value);
     if (ret != PARAM_OK)
         return ret;
 
     if (param_entry_is_exec(e)) {
         /* EXEC 无缓存可读: 通知携带命令负载 (与 exec 回调收到的
-           arg 一致的 value 本体, D3) */
+           arg 一致的 value 本体) */
         if (g_pm.notify_cb)
             g_pm.notify_cb(param_id, value);
         return PARAM_OK;
     }
 
-    param_write_complete(param_id, e, false);
+    /* 模块脏位镜像条目脏位: App 侧标脏 (值等 flush 下发), IP 侧清脏
+       (write 回调已直通硬件) —— 两侧差异由各自的 write_sync 槽位
+       实现完成, 此处按条目结果统一镜像 */
+    param_module_dirty_sync(param_id, entry_dirty(e) != 0);
+    param_notify_effective(param_id, e);
     return PARAM_OK;
 }
 
@@ -1074,7 +1166,7 @@ int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
         /* EXEC 不写缓存 (EXEC 类型的 cache_update 为空操作), 不存在
            "生效值": 通知携带命令负载, 与 exec 回调收到的 arg 一致
            (param_entry_write_raw_to 的 EXEC 分支恒以 {.ptr = data}
-           传给回调, 此处保持同一形状 —— 易用性决策 D3)。
+           传给回调, 此处保持同一形状)。
            注: 此分支不调 param_module_dirty_sync —— EXEC 条目被模块级
            mark_dirty 的可写过滤挡掉, 该调用恒为空操作。 */
         param_value_t arg = { .ptr = (void *)data };
@@ -1173,8 +1265,8 @@ int param_read_hw(uint32_t param_id, param_value_t *value)
 /**
  * @brief 维护路径的"裁剪后重放" — 数值类型先裁剪再走 vtable->write
  *
- * 易用性决策 D1 的分界: 用户直写路径 (param_write 系列) 对超范围值
- * **拒绝**; 维护路径 (param_update / param_load_one / param_reset_one)
+ * 语义分界: 用户直写路径 (param_write 系列) 对超范围值
+ * **拒绝**; 维护路径 (param_reapply / param_load_one / param_reset_one)
  * 的输入是"已在缓存中的旧值", 可能因外部范围收紧 (param_set_range)
  * 而越界 —— 裁剪而非拒绝才能让缓存收敛到合法状态。
  *
@@ -1191,7 +1283,7 @@ static int param_replay_clamped(param_entry_t *e, param_value_t v)
     return e->vtable->write(e, v);
 }
 
-int param_update(uint32_t param_id)
+int param_reapply(uint32_t param_id)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_INITIALIZED;
@@ -1210,7 +1302,7 @@ int param_update(uint32_t param_id)
     if (ret != PARAM_OK)
         return ret;
 
-    /* 维护语义 (D1): 越界旧值裁剪收敛而非拒绝 */
+    /* 维护语义: 越界旧值裁剪收敛而非拒绝 */
     ret = param_replay_clamped(e, cached);
     if (ret != PARAM_OK)
         return ret;
@@ -1299,7 +1391,7 @@ int param_read_raw(uint32_t param_id, uint8_t *data, uint16_t *len)
 /**
  * @brief typed 包装的公共类型校验 — 目标条目必须与期望类型匹配
  *
- * 易用性: typed 包装给调用者的安全感必须是真的 —— 对 FLOAT 条目调
+ * typed 包装给调用者的类型安全保证是真实的 —— 对 FLOAT 条目调
  * param_write_u32 会把位模式当 float 存进去, 再 param_read_f32 读出
  * 垃圾。因此先校验 entry_type, 不符即 PARAM_ERR_TYPE_MISMATCH。
  *
@@ -1454,7 +1546,7 @@ int param_read_string(uint32_t id, char *buf, uint16_t buf_size)
  *
  * 与 param_write 的差异: 不做 "union 无长度类型" 的拒绕 —— 调用者已用
  * 专用签名给出长度并校验过源指针。value 传调用者源缓冲, 由 write_apply
- * 在 apply 接受后提交字节级拷贝 (D2: 拒绝时缓存未被污染); IP 侧
+ * 在 apply 接受后提交字节级拷贝 (拒绝时缓存未被污染); IP 侧
  * param_entry_write 则立即提交。
  *
  * @note 接受后 notify 收到 BLOB/STRING 的 .ptr 为缓存自身指针
@@ -1498,47 +1590,91 @@ int param_write_string(uint32_t id, const char *str)
     if (!se->cache.ptr || se->max_len == 0)
         return PARAM_ERR_NOT_FOUND;
 
-    /* 拷贝由 write_apply 在 apply 接受后提交 (D2), 本入口只校验源:
+    /* 拷贝由 write_apply 在 apply 接受后提交, 本入口只校验源:
        源缓冲必须是 '\0' 终止的 C 串 (cache_update_string 有界扫描
        max_len+1 字节, 超 max_len 自动截断并补 '\0') */
-    return param_write_typed_tail(id, e, (param_value_t){ .ptr = (void *)str });
+    int ret = param_write_typed_tail(id, e, (param_value_t){ .ptr = (void *)str });
+
+    /* 截断可感知: 源串在 max_len+1 窗口内无 '\0' 即超长被截断。
+       返回正码 PARAM_OK_TRUNCATED: ret < 0 的失败判定不受影响,
+       严格判定用 ret == PARAM_OK */
+    if (ret == PARAM_OK &&
+        memchr(str, '\0', (size_t)se->max_len + 1) == NULL)
+        ret = PARAM_OK_TRUNCATED;
+    return ret;
 }
 
 /**
- * @brief BLOB 类型写入 (带长度的专用入口)
+ * @brief BLOB 写入统一经 param_write_raw (见其 BLOB 分支)
  *
- * BLOB 必须**整块**写: len 与条目 blob_size 不等时直接拒绝, 不做截断/补零
- * (避免静默损坏)。写入成功后以缓存自身为源重放完整写入路径。
- *
- * @param id  参数 ID (类型必须为 PARAM_TYPE_BLOB)
- * @param buf 源数据 (非 NULL)
- * @param len 源长度 (必须等于 blob_size)
- * @return PARAM_OK 成功; PARAM_ERR_INVALID_ID 源为 NULL;
- *         PARAM_ERR_TYPE_MISMATCH 目标不是 BLOB;
- *         PARAM_ERR_OUT_OF_RANGE 长度与 blob_size 不符
+ * len 必须等于 blob_size, 否则 PARAM_ERR_OUT_OF_RANGE (不截断/不补零);
+ * apply 接受后整块拷入缓存 (先验后写, 拒绝时缓存未变)。
  */
-int param_write_blob(uint32_t id, const void *buf, uint16_t len)
+
+/**
+ * @brief 带策略旗标的写入入口 (高级)
+ *
+ * 与 param_write 相同但可携带写策略旗标 (param_write_flags_t)。
+ * 未定义旗标位返回 PARAM_ERR_NOT_SUPPORTED (拒绝而非静默忽略)。
+ * 当前唯一旗标 PARAM_WR_CLAMP: 超范围值裁剪到合法区间而非拒绝
+ * (显式裁剪旗标, 仅 UINT/INT/FLOAT 生效)。
+ */
+int param_write_ex(uint32_t param_id, param_value_t value, uint32_t flags)
+{
+    if (flags & ~(uint32_t)PARAM_WR_CLAMP)
+        return PARAM_ERR_NOT_SUPPORTED;
+
+    param_entry_t *e = NULL;
+    int ret = param_write_resolve(param_id, &e, true);
+    if (ret != PARAM_OK)
+        return ret;
+
+    if (flags & PARAM_WR_CLAMP) {
+        param_type_t t = entry_type(e);
+        if (t == PARAM_TYPE_UINT || t == PARAM_TYPE_INT || t == PARAM_TYPE_FLOAT) {
+            param_range_entry_t *re = (param_range_entry_t *)e;
+            value = param_clamp_value_to_range(re, value);
+        }
+    }
+
+    ret = e->vtable->write(e, value);
+    if (ret == PARAM_OK)
+        param_write_complete(param_id, e, true);
+    return ret;
+}
+
+/**
+ * @brief 带策略旗标的原始字节流写入 (高级)
+ *
+ * 对 BLOB/STRING/EXEC: 与 param_write_raw 完全等价 (flags 必须为 0)。
+ * 对值类型: 解码字节为 param_value_t 后走 param_write_ex
+ * (支持 PARAM_WR_CLAMP)。
+ */
+int param_write_bytes(uint32_t param_id, const uint8_t *data, uint16_t len,
+                      uint32_t flags)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_INITIALIZED;
-    if (!buf)
+    if (!data || len == 0)
         return PARAM_ERR_INVALID_ID;
 
-    param_entry_t *e = param_entry_find(id);
+    param_entry_t *e = param_entry_find(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
-    if (entry_type(e) != PARAM_TYPE_BLOB)
+
+    param_type_t t = entry_type(e);
+    if (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING || t == PARAM_TYPE_EXEC) {
+        if (flags != 0)
+            return PARAM_ERR_NOT_SUPPORTED;
+        return param_write_raw(param_id, data, len);
+    }
+
+    if (len > sizeof(param_value_t))
         return PARAM_ERR_TYPE_MISMATCH;
-
-    param_blob_entry_t *be = (param_blob_entry_t *)e;
-    if (!be->cache.ptr || be->blob_size == 0)
-        return PARAM_ERR_NOT_FOUND;
-    if (len != be->blob_size)
-        return PARAM_ERR_OUT_OF_RANGE;
-
-    /* 拷贝由 write_apply 在 apply 接受后提交 (D2): 长度已校验等于
-       blob_size, 接受时整块拷入缓存 */
-    return param_write_typed_tail(id, e, (param_value_t){ .ptr = (void *)buf });
+    param_value_t v;
+    memset(&v, 0, sizeof(v));
+    memcpy(&v, data, len);
+    return param_write_ex(param_id, v, flags);
 }
 
 /**
@@ -1571,7 +1707,7 @@ uint16_t param_get_size(uint32_t param_id)
  * 未注册的命令返回 PARAM_ERR_NOT_FOUND。
  * user_arg 传入后封装为 param_value_t 联合体再传给回调。
  *
- * @note 执行成功后触发 notify (易用性决策 D3): new_value 携带命令负载
+ * @note 执行成功后触发 notify: new_value 携带命令负载
  *       {.ptr = user_arg}, 与 exec 回调收到的 arg 完全一致。
  */
 int param_exec(uint32_t cmd_id, void *user_arg)
@@ -1746,7 +1882,7 @@ static bool module_order_contains(const uint16_t *order, uint16_t count,
  * 未覆盖的模块计入 flush_order_miss_count。
  * @return PARAM_OK 全部覆盖，PARAM_ERR_NOT_FOUND 存在未覆盖模块
  */
-int param_check_flush_integrity(void)
+int param_check_module_order(void)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_INITIALIZED;
@@ -2332,8 +2468,8 @@ int param_load_all(void)
  *  与 param_load_all 的批量生效契约互补, 见其文档)
  *
  * @note 恢复值可能因范围收紧 (param_set_range) 而越界: 重放前先
- *       裁剪收敛 (维护语义 D1, 用户直写路径才拒绝)。
- * @note D3: 单条加载与写入路径同样触发 notify (携带缓存生效值)。
+ *       裁剪收敛 (维护语义, 用户直写路径才拒绝)。
+ * @note 单条加载与写入路径同样触发 notify (携带缓存生效值)。
  */
 int param_load_one(uint32_t param_id)
 {
@@ -2349,8 +2485,8 @@ int param_load_one(uint32_t param_id)
     ret = e->vtable->load(e);
     system_unlock(SYS_LOCK_PARAM);
 
-    /* apply 重新校验恢复值 (多分区兼容), 重放前对越界值裁剪收敛 (D1);
-       write_complete 补上模块标脏与 notify (D3) */
+    /* apply 重新校验恢复值 (多分区兼容), 重放前对越界值裁剪收敛;
+       write_complete 补上模块标脏与 notify */
     if (ret == PARAM_OK) {
         ret = param_replay_clamped(e, *entry_cache(e));
         if (ret == PARAM_OK)
@@ -2439,8 +2575,8 @@ int param_reset_all(void)
  *   2. 标记 entry 级 dirty (reset 已清除 dirty, write 重新置位)
  *
  * @note 默认值可能因范围收紧 (param_set_range) 而越界: 重放前先
- *       裁剪收敛 (维护语义 D1)。
- * @note D3: 单条重置与写入路径同样触发 notify (携带缓存生效值)。
+ *       裁剪收敛 (维护语义)。
+ * @note 单条重置与写入路径同样触发 notify (携带缓存生效值)。
  */
 int param_reset_one(uint32_t param_id)
 {
@@ -2467,7 +2603,7 @@ int param_reset_one(uint32_t param_id)
     }
     system_unlock(SYS_LOCK_PARAM);
 
-    /* apply 重新校验默认值 + 恢复 entry 级 dirty; D3: 单条重置与写入路径
+    /* apply 重新校验默认值 + 恢复 entry 级 dirty; 单条重置与写入路径
        同样触发 notify (携带缓存生效值) */
     if (ret == PARAM_OK) {
         ret = param_replay_clamped(e, *entry_cache(e));
@@ -2491,6 +2627,7 @@ const char *param_strerror(int err)
 {
     switch (err) {
     case PARAM_OK:                    return "ok";
+    case PARAM_OK_TRUNCATED:          return "ok (value truncated)";
     case PARAM_ERR_INVALID_ID:        return "invalid id";
     case PARAM_ERR_OUT_OF_RANGE:      return "out of range";
     case PARAM_ERR_READONLY:          return "readonly";
@@ -2586,7 +2723,7 @@ static bool foreach_visit(param_module_node_t *m, void *ctx)
  * @param user_data 用户上下文
  * @return PARAM_OK 完成/被回调终止; PARAM_ERR_NOT_INITIALIZED 未初始化;
  *         PARAM_ERR_INVALID_ID cb 为 NULL;
- *         PARAM_ERR_NOT_FOUND 指定模块未注册 (不再静默空转)
+ *         PARAM_ERR_NOT_FOUND 指定模块未注册
  */
 int param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data)
 {

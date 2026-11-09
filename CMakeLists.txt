@@ -64,6 +64,7 @@ target_sources(app PRIVATE
       src/core/param_manager/core/param_data_ops.c
       src/core/param_manager/core/param_dump.c
       src/core/param_manager/core/param_service.c
+      src/core/param_manager/core/param_boot.c
       src/platform/port/port_impl.c
       src/core/param_manager/storage/param_storage_flashdb.c
       src/core/param_manager/storage/param_storage_mkv.c

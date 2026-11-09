@@ -14,13 +14,13 @@ PARAM_IP_BOOL  (ipb,  TID_IP_BOOL,  PARAM_FLAG_PERSIST, false);
 PARAM_TABLE(applet_params, &bu32.base, &bi32.base, &bf32.base, &benm.base);
 PARAM_TABLE(ip_params, &ipu.base, &ipf.base, &ipb.base);
 
-PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "BoundApplet", NULL, NULL, NULL, mock_apply_ok, NULL, NULL);
-IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "BoundIP", NULL, NULL, NULL, mock_ip_write_ok, NULL, NULL);
+PARAM_MODULE_DEFINE(test_applet, TEST_MODULE_APPLET, "BoundApplet", .write = mock_apply_ok);
+IP_DRIVER_DEFINE(test_ip, TEST_MODULE_IP, "BoundIP", .write = mock_ip_write_ok);
 
 static void register_all(void)
 {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
-    ip_driver_register(&test_ip_instance, ip_params, PARAM_COUNT(ip_params));
+    param_module_register(&test_ip_module, ip_params, PARAM_COUNT(ip_params));
     test_reset_entry(&bu32.base); test_reset_entry(&bi32.base);
     test_reset_entry(&bf32.base); test_reset_entry(&benm.base);
     test_reset_entry(&ipu.base); test_reset_entry(&ipf.base);
@@ -28,7 +28,7 @@ static void register_all(void)
 }
 
 /* ================================================================
- *  范围校验 (D1: 超范围写入**拒绝**, 缓存不变; 不再静默裁剪)
+ *  范围校验 (超范围写入**拒绝**, 缓存不变)
  * ================================================================ */
 void test_range_uint_at_min(void) {
     register_all();
@@ -155,7 +155,7 @@ void test_register_zero_count(void) {
 void test_register_duplicate_param_across_modules(void) {
     param_module_register(&test_applet_module, applet_params, PARAM_COUNT(applet_params));
 
-    PARAM_MODULE_DEFINE(test2, TEST_MODULE_APPLET2, "Applet2", NULL, NULL, NULL, NULL, NULL, NULL);
+    PARAM_MODULE_DEFINE(test2, TEST_MODULE_APPLET2, "Applet2");
     PARAM_TABLE(dup_params, &bu32.base);
     TEST_ASSERT_PARAM_ERR(
         param_module_register(&test2_module, dup_params, PARAM_COUNT(dup_params)),
@@ -178,8 +178,8 @@ void test_ip_over_64_params_ok(void) {
         ip_arr[i].default_val.u32 = (uint32_t)i;
         ip_table[i] = &ip_arr[i].base;
     }
-    IP_DRIVER_DEFINE(big_ip, TEST_MODULE_IP2, "BigIP", NULL, NULL, NULL, NULL, NULL, NULL);
-    TEST_ASSERT_PARAM_OK(ip_driver_register(&big_ip_instance, ip_table, 100));
+    IP_DRIVER_DEFINE(big_ip, TEST_MODULE_IP2, "BigIP");
+    TEST_ASSERT_PARAM_OK(param_module_register(&big_ip_module, ip_table, 100));
 
     /* 验证 local_id ≥ 64 的参数可正常标脏/清脏 (条目级脏位与 local_id 无关) */
     param_value_t v = { .u32 = 12345 };
@@ -206,8 +206,8 @@ void test_ip_over_hash_capacity(void) {
         ip_arr[i].default_val.u32 = (uint32_t)i;
         ip_table[i] = &ip_arr[i].base;
     }
-    IP_DRIVER_DEFINE(big_ip, TEST_MODULE_IP2, "BigIP", NULL, NULL, NULL, NULL, NULL, NULL);
-    TEST_ASSERT_PARAM_ERR(ip_driver_register(&big_ip_instance, ip_table, N),
+    IP_DRIVER_DEFINE(big_ip, TEST_MODULE_IP2, "BigIP");
+    TEST_ASSERT_PARAM_ERR(param_module_register(&big_ip_module, ip_table, N),
                           PARAM_ERR_NO_MEMORY);
 }
 

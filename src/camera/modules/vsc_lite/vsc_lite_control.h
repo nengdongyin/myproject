@@ -23,10 +23,8 @@
 extern "C" {
 #endif
 
-/* ── 模块 ID（在 module_ids.h 中分配） ── */
-#ifndef MODULE_VSC_LITE
-#define MODULE_VSC_LITE  0x03u
-#endif
+/* ── 模块 ID（在 module_ids.h 的单一清单中分配） ── */
+#include "module_ids.h"
 
 /* ========================================================================
  *  参数 local_id 枚举 — 每个对应一个 (cap_id, ctrl_id) 对

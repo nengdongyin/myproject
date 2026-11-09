@@ -2,6 +2,7 @@
 #define IP_PARAM_MANAGER_H
 
 #include "param_manager.h"
+#include "param_manager_internal.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -67,21 +68,13 @@ extern "C"
      *   - ctx     私有上下文 (IP 侧语义为 driver 私有数据指针)
      * ================================================================ */
 
-    /**
-     * @brief 注册 IP Driver 及其参数表
+    /* ================================================================
+     *  注册 (与 App 共用同一入口)
      *
-     * 参数条目和 driver 实例均静态分配，零 malloc。
-     * 注册过程: 哈希插入 + 统一链表插入 (按 MODULE_INIT_ORDER 排序)。
-     *
-     * @param inst    IP 实例指针 (静态分配)
-     * @param entries 参数条目指针数组
-     * @param count   参数数量 (上限 = 全局哈希表 PARAM_HASH_SIZE 与 local_id 16-bit 空间)
-     * @return PARAM_OK 成功，PARAM_ERR_ALREADY_REG 重复注册，
-     *         PARAM_ERR_INVALID_ID 参数非法，PARAM_ERR_NO_MEMORY 哈希表满
-     */
-    int ip_driver_register(ip_instance_t *inst,
-                           param_entry_t **entries,
-                           uint16_t count);
+     *  IP 无独立注册函数: App 与 IP 共用 param_module_register
+     *  (定义于 param_manager_internal.h / param_manager.c)。vtable 已由
+     *  IP_DRIVER_DEFINE 写入 node, 注册时无需也不能再指定。
+     * ================================================================ */
 
     /** @brief IP 参数级 vtable 实现 (定义于 ip_param_manager.c) */
     extern const param_vtable_t ip_vtable;
@@ -165,7 +158,7 @@ extern "C"
  * @brief 定义 IP EXEC 命令
  *
  * 注册一个 PARAM_FLAG_EXEC 标记的伪参数条目。不可通过 param_write 写入，
- * 仅由 param_exec 触发。框架保证 param_write_raw / param_write_immediate
+ * 仅由 param_exec 触发。框架保证 param_write_raw / param_write_sync
  * 遇到 EXEC 参数时自动路由到模块的 exec 回调，arg 为 param_value_t 联合体。
  * dump 输出为 "EXEC" (不显示值)，flags 列显示 "E"。
  *
@@ -185,43 +178,46 @@ extern "C"
  * 使用示例:
  * @code
  * IP_DRIVER_DEFINE(sensor, IP_SENSOR, "OV4689_Sensor_IP",
- *                  &g_sensor_dev, sensor_init_cb, sensor_read,
- *                  sensor_write, sensor_exec, NULL);
+ *                  .ctx  = &g_sensor_dev,
+ *                  .init = sensor_init_cb,
+ *                  .read = sensor_read,
+ *                  .write = sensor_write,
+ *                  .exec = sensor_exec);
  * @endcode
  *
- * @param _ip_name IP 实例名 (生成 _ip_name##_instance)
+ * @param _ip_name IP 实例名 (生成 _ip_name##_module, 与 App 后缀一致)
  * @param _ip_id   模块 ID
  * @param _label   调试名称
- * @param _drv     driver 私有数据指针
- * @param _init    初始化回调 (可 NULL)
- * @param _rd      读回调
- * @param _wr      写回调 (可 NULL)
- * @param _exec    exec 命令回调 (可 NULL)
- * @param _fl      flush 回调 (可 NULL, 回退逐参数 write)
+ * @param ...      具名字段初始化器 (.ctx / .init / .read / .write /
+ *                 .exec / .flush; 省略字段为 NULL)
  */
-#define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, _drv, _init, _rd, _wr, _exec, _fl) \
-    PARAM_MODULE_DEFINE_CORE(&ip_module_vtable, _ip_name##_instance,                   \
-                             _ip_id, _label, _drv, _init, _rd, _wr, _exec, _fl)
+#define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, ...)               \
+    PARAM_MODULE_DEFINE_CORE(&ip_module_vtable, _ip_name##_module,    \
+                             _ip_id, _label, __VA_ARGS__)
 
 /**
- * @brief 定义 IP Driver 注册函数
+ * @brief 定义 IP Driver 注册函数 (注册入口与 App 共用 param_module_register)
+ *
+ * 开启 PARAM_MODULE_AUTO_REGISTER_ENABLE 时同时生成 linker-section
+ * 自动注册条目 (与 PARAM_MODULE_INIT 同机制); 未开启时由启动代码手动调用。
  *
  * @param _ip_name IP 实例名 (与 IP_DRIVER_DEFINE 中相同)
  * @param _entries 参数表数组
  */
 #define IP_DRIVER_INIT(_ip_name, _entries)                            \
-    PARAM_MODULE_INIT_CORE(ip_driver_register,                        \
+    PARAM_MODULE_INIT_CORE(param_module_register,                     \
                            _ip_name##_init,                           \
-                           _ip_name##_instance,                       \
-                           _entries)
+                           _ip_name##_module,                         \
+                           _entries)                                  \
+    PARAM_MODULE_REGISTER(_ip_name, _ip_name##_init)
 
     /* ================================================================
      *  编译器段自动注册
      *
-     *  IP 侧暂无自动注册内容 (与 app_param_manager.h 对应位置对称):
-     *  App 侧的 param_module_reg_t / PARAM_MODULE_REGISTER /
-     *  param_modules_register_all 位于 app_param_manager.h 末尾;
-     *  IP driver 目前通过 IP_DRIVER_INIT 手动调用注册。
+     *  IP 侧与 App 侧共用 param_module_reg_t / PARAM_MODULE_REGISTER /
+     *  param_modules_register_all (位于 app_param_manager.h);
+     *  开启 PARAM_MODULE_AUTO_REGISTER_ENABLE 后 IP_DRIVER_INIT
+     *  同样进入 linker-section 自动注册。
      * ================================================================ */
 
 #ifdef __cplusplus

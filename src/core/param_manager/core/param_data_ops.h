@@ -60,7 +60,7 @@ extern "C"
      * @brief pre_write 校验函数签名 — 写入前校验
      *
      * 返回 false 表示拒绝写入 (超范围 / 枚举值非法)；返回 true 表示通过。
-     * 不修改 value: 裁剪不再发生于写入路径 (易用性决策 D1),
+     * 不修改 value: 裁剪不发生于写入路径,
      * 裁剪语义仅保留在 param_clamp_value_to_range / param_clamp_entry。
      */
     typedef bool (*param_pre_write_fn)(param_entry_t *e, param_value_t *value);
