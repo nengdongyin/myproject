@@ -368,7 +368,9 @@ void param_dump(uint16_t module_id, param_dump_fn cb, void *user_data)
 {
     if (!cb) return;
     dump_ctx_t ctx = { module_id, cb, user_data };
-    param_module_foreach(dump_module_iter, &ctx);
+    /* param_module_foreach 现已返回状态码 (未初始化/回调为空) */
+    int ret = param_module_foreach(dump_module_iter, &ctx);
+    (void)ret;
 }
 
 #endif /* PARAM_DUMP_ENABLE */

@@ -39,10 +39,11 @@ void test_set_range_narrows(void) {
     param_value_t min = { .u32 = 50 }, max = { .u32 = 150 };
     TEST_ASSERT_PARAM_OK(param_set_range(TID_APPLET_UINT, &min, &max));
 
+    /* D1: 超范围写入拒绝, 缓存不变 (默认 100 在新范围内) */
     param_value_t v = { .u32 = 10 };
-    param_write(TID_APPLET_UINT, v);
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(50, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
 }
 
 void test_set_range_non_rangeable(void) {
@@ -59,16 +60,19 @@ void test_set_range_non_rangeable(void) {
 void test_validate_all_clamps(void) {
     register_all();
 
-    param_value_t v = { .u32 = 500 };
-    param_write(TID_APPLET_UINT, v);
+    /* 先写一个旧范围内合法的值 */
+    param_value_t v = { .u32 = 150 };
+    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
 
-    param_value_t min = { .u32 = 0 }, max = { .u32 = 150 };
-    param_set_range(TID_APPLET_UINT, &min, &max);
+    /* 运行时收紧范围 → 缓存越界 */
+    param_value_t min = { .u32 = 0 }, max = { .u32 = 100 };
+    TEST_ASSERT_PARAM_OK(param_set_range(TID_APPLET_UINT, &min, &max));
 
-    param_validate_all();
+    /* 维护工具: 显式裁剪收敛 (D1 的分界 —— 裁剪只发生在显式维护操作) */
+    TEST_ASSERT_PARAM_OK(param_validate_all());
 
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(150, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
 }
 
 /* ================================================================
@@ -104,6 +108,13 @@ void test_foreach_specific_module(void) {
     g_foreach_count = 0;
     param_foreach(TEST_MODULE_APPLET, test_foreach_cb, NULL);
     TEST_ASSERT_EQUAL_INT(3, g_foreach_count);
+}
+
+void test_foreach_unknown_module(void) {
+    register_all();
+    /* 指定未注册模块不再静默空转 (易用性: 错误可见) */
+    TEST_ASSERT_PARAM_ERR(param_foreach(0xDEAD, test_foreach_cb, NULL),
+                          PARAM_ERR_NOT_FOUND);
 }
 
 void test_foreach_early_stop(void) {
@@ -223,7 +234,8 @@ void test_write_immediate_applet_no_write_cb(void) {
 }
 
 /* ================================================================
- *  notify 回调必须携带"缓存生效值"而非调用者的原始入参
+ *  notify 回调必须携带"缓存生效值"而非调用者的原始入参;
+ *  D1: 超范围写入被拒绝 → 不触发 notify
  * ================================================================ */
 static int g_notify_count;
 static uint32_t g_notify_last_id;
@@ -236,24 +248,33 @@ static void test_notify_cb(uint32_t param_id, param_value_t new_value)
     g_notify_last_value = new_value;
 }
 
-void test_notify_reports_clamped_value(void) {
+void test_notify_reports_effective_value(void) {
     param_deinit();
     param_init(&g_mock_storage, test_notify_cb);
     register_all();
 
     g_notify_count = 0;
-    /* ou32 范围为 [0,200]: 写 250 时 pre_write 裁剪为 200,
-       notify 必须报告真正写入缓存的值 */
+    /* D1: 超范围写入拒绝, 不产生 notify, 缓存不变 */
     param_value_t v = { .u32 = 250 };
-    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_OUT_OF_RANGE);
+    TEST_ASSERT_EQUAL_INT(0, g_notify_count);
 
+    /* 范围内写入: notify 携带缓存生效值 */
+    v.u32 = 150;
+    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
     TEST_ASSERT_EQUAL_INT(1, g_notify_count);
     TEST_ASSERT_EQUAL_UINT32(TID_APPLET_UINT, g_notify_last_id);
-    TEST_ASSERT_EQUAL_UINT32(200, g_notify_last_value.u32);
+    TEST_ASSERT_EQUAL_UINT32(150, g_notify_last_value.u32);
+
+    /* 维护路径收敛 (set_range 收紧触发内部重写): notify 携带裁剪后的生效值 */
+    param_value_t min = { .u32 = 0 }, max = { .u32 = 100 };
+    TEST_ASSERT_PARAM_OK(param_set_range(TID_APPLET_UINT, &min, &max));
+    TEST_ASSERT_EQUAL_INT(2, g_notify_count);
+    TEST_ASSERT_EQUAL_UINT32(100, g_notify_last_value.u32);
 
     param_value_t cached;
     param_read_cache(TID_APPLET_UINT, &cached);
-    TEST_ASSERT_EQUAL_UINT32(200, cached.u32);
+    TEST_ASSERT_EQUAL_UINT32(100, cached.u32);
 }
 
 /* ================================================================
@@ -296,6 +317,72 @@ void test_write_raw_zero_len(void) {
 void test_exec_no_callback(void) {
     register_all();
     TEST_ASSERT_PARAM_ERR(param_exec(MAKE_PARAM_ID(TEST_MODULE_APPLET, 0), NULL), PARAM_ERR_NOT_FOUND);
+}
+
+/* ================================================================
+ *  D3: exec / load_one / reset_one 的 notify 一致性
+ * ================================================================ */
+static int g_exec_got;
+static param_value_t g_exec_last_arg;
+
+static int test_exec_cb(void *ctx, uint32_t param_id, param_value_t arg)
+{
+    (void)ctx;
+    (void)param_id;
+    g_exec_got++;
+    g_exec_last_arg = arg;
+    return PARAM_OK;
+}
+
+void test_exec_notifies_with_payload(void) {
+    param_deinit();
+    param_init(&g_mock_storage, test_notify_cb);
+    register_all();
+
+    PARAM_IP_EXEC(test_cmd, MAKE_PARAM_ID(TEST_MODULE_IP2, 0xF0));
+    PARAM_TABLE(cmd_params, &test_cmd.base);
+    IP_DRIVER_DEFINE(cmd_ip, TEST_MODULE_IP2, "CmdIP",
+                     NULL, NULL, NULL, NULL, test_exec_cb, NULL);
+    ip_driver_register(&cmd_ip_instance, cmd_params, PARAM_COUNT(cmd_params));
+
+    g_notify_count = 0;
+    g_exec_got = 0;
+    uint32_t payload = 0x1234;
+    TEST_ASSERT_PARAM_OK(param_exec(test_cmd.base.param_id, &payload));
+
+    TEST_ASSERT_EQUAL_INT(1, g_exec_got);
+    TEST_ASSERT_EQUAL_INT(1, g_notify_count);
+    TEST_ASSERT_EQUAL_UINT32(test_cmd.base.param_id, g_notify_last_id);
+    /* notify 负载与 exec 回调收到的 arg 一致 (.ptr = user_arg) */
+    TEST_ASSERT_EQUAL_PTR(&payload, g_notify_last_value.ptr);
+    TEST_ASSERT_EQUAL_PTR(g_exec_last_arg.ptr, g_notify_last_value.ptr);
+}
+
+void test_load_one_notifies(void) {
+    param_deinit();
+    param_init(&g_mock_storage, test_notify_cb);
+    register_all();
+
+    uint32_t stored = 77;
+    mock_storage_preset(TID_APPLET_UINT, (const uint8_t *)&stored, sizeof(stored));
+
+    g_notify_count = 0;
+    TEST_ASSERT_PARAM_OK(param_load_one(TID_APPLET_UINT));
+    TEST_ASSERT_EQUAL_INT(1, g_notify_count);
+    TEST_ASSERT_EQUAL_UINT32(TID_APPLET_UINT, g_notify_last_id);
+    TEST_ASSERT_EQUAL_UINT32(77, g_notify_last_value.u32);
+}
+
+void test_reset_one_notifies(void) {
+    param_deinit();
+    param_init(&g_mock_storage, test_notify_cb);
+    register_all();
+
+    g_notify_count = 0;
+    TEST_ASSERT_PARAM_OK(param_reset_one(TID_APPLET_UINT));
+    TEST_ASSERT_EQUAL_INT(1, g_notify_count);
+    TEST_ASSERT_EQUAL_UINT32(TID_APPLET_UINT, g_notify_last_id);
+    TEST_ASSERT_EQUAL_UINT32(100, g_notify_last_value.u32);
 }
 
 /* ================================================================
@@ -598,6 +685,7 @@ void run_test_other(void)
     RUN_TEST(test_validate_all_clamps);
     RUN_TEST(test_foreach_all_modules);
     RUN_TEST(test_foreach_specific_module);
+    RUN_TEST(test_foreach_unknown_module);
     RUN_TEST(test_foreach_early_stop);
     RUN_TEST(test_module_foreach_count);
     RUN_TEST(test_write_immediate_applet);
@@ -606,12 +694,15 @@ void run_test_other(void)
     RUN_TEST(test_write_immediate_ip_fails_keeps_cache);
     RUN_TEST(test_write_immediate_ip_no_write_cb);
     RUN_TEST(test_write_immediate_applet_no_write_cb);
-    RUN_TEST(test_notify_reports_clamped_value);
+    RUN_TEST(test_notify_reports_effective_value);
     RUN_TEST(test_write_raw_uint);
     RUN_TEST(test_write_raw_too_long);
     RUN_TEST(test_write_raw_null_data);
     RUN_TEST(test_write_raw_zero_len);
     RUN_TEST(test_exec_no_callback);
+    RUN_TEST(test_exec_notifies_with_payload);
+    RUN_TEST(test_load_one_notifies);
+    RUN_TEST(test_reset_one_notifies);
     RUN_TEST(test_blob_write_read);
     RUN_TEST(test_string_write_read);
     RUN_TEST(test_string_truncation);

@@ -127,6 +127,11 @@ extern "C"
          *  无关, 任何调用在未初始化时都得到它; 唯一处理方式是先完成全局
          *  初始化, 重复试当前调用无意义。 */
         PARAM_ERR_NOT_INITIALIZED = -12,
+        /** 对命令型参数 (EXEC) 使用了普通写路径: 请改用 param_exec /
+         *  param_write_raw / param_write_immediate 触发。与
+         *  PARAM_ERR_READONLY (禁止写入) 区分: 本码提示"入口用错了",
+         *  不是"参数不可写"。 */
+        PARAM_ERR_EXEC_ONLY = -13,
     } param_status_t;
 
     typedef struct param_module param_module_t;
@@ -139,16 +144,18 @@ extern "C"
      *
      * 当参数值通过 param_write / param_write_cache / param_write_immediate /
      * param_write_raw / param_write_blob / param_write_string / param_update
-     * 成功写入后调用。回调在锁外执行;
+     * 成功写入后调用。命令执行 (param_exec / EXEC 经 write_raw、
+     * write_immediate 触发) 与单条加载/重置 (param_load_one /
+     * param_reset_one) 同样触发。回调在锁外执行;
      * 回调内再次调用写入类 API 需由实现者自行处理防重入
      * (框架不提供递归保护)。
      *
      * @attention new_value 取自写入后的参数缓存 (**生效值**), 不是调用者
-     *   传入的原始值: pre_write 的超范围裁剪与 apply 回调的修正都已体现
-     *   在其中。BLOB/STRING 的 .ptr 指向框架缓存缓冲区 (生命周期覆盖整个
-     *   运行期), 而非调用者的临时缓冲区。
-     *   EXEC 参数经 param_write_raw 触发时缓存不参与, new_value 携带命令
-     *   负载 (与 exec 回调收到的 arg 一致)。
+     *   传入的原始值: apply 回调的修正都已体现在其中 (超范围值在写入
+     *   路径即被拒绝, 不再静默裁剪)。BLOB/STRING 的 .ptr 指向框架缓存
+     *   缓冲区 (生命周期覆盖整个运行期), 而非调用者的临时缓冲区。
+     *   EXEC 命令触发的 notify 缓存不参与, new_value 携带命令负载
+     *   (与 exec 回调收到的 arg 形状一致)。
      *
      * @attention 多线程并发写入同一参数时，notify 可能收到中间值
      *   (另一个线程在 notify 发出后立即覆盖了参数值)。
@@ -186,7 +193,8 @@ extern "C"
      *
      * @attention 回调执行期间缓存已先行更新为新值 (含 BLOB/STRING):
      *   回调内 param_read / param_save_one 均反映新值。
-     *   回调返回非 OK 时缓存保持新值不回滚。
+     *   回调返回非 OK 时缓存**回滚到写入前的值** (易用性决策 D2:
+     *   "返回错误 = 无任何变化")。
      *
      * @param param_id 参数 ID
      * @param value    待写入的新值
@@ -774,8 +782,11 @@ extern "C"
      * 旧驱动在替换后仍然有效，可保存指针并在之后切回。
      *
      * @param storage 新的存储后端驱动 (可为 NULL 停用持久化)
+     * @return PARAM_OK 成功; PARAM_ERR_NOT_INITIALIZED 框架未初始化;
+     *         PARAM_ERR_NOT_SUPPORTED 驱动缺 load/save 回调 (被拒绝,
+     *         不再静默忽略)
      */
-    void param_set_storage(const param_storage_drv_t *storage);
+    int param_set_storage(const param_storage_drv_t *storage);
 
     /**
      * @brief 按分区索引获取存储后端驱动实例
@@ -811,6 +822,9 @@ extern "C"
      *   指针解引用) → 返回 PARAM_ERR_TYPE_MISMATCH。
      *   请改用带长度的专用入口: param_write_blob / param_write_string /
      *   param_write_raw。
+     * @note 超范围值**拒绝** (PARAM_ERR_OUT_OF_RANGE, 易用性决策 D1),
+     *   不再静默裁剪; 需要裁剪语义时显式调用 param_validate_all 或
+     *   CLAMP policy。对 EXEC 参数调用返回 PARAM_ERR_EXEC_ONLY。
      *
      * @param param_id 参数 ID
      * @param value    新值
@@ -893,6 +907,8 @@ extern "C"
      *   - 其他线程并发写入该参数后，指针内容会随之改变 (非快照)
      *   - 指针生命周期与参数条目绑定，禁止长期持有或释放
      *   - 需要安全拷贝时请改用 param_read_string() / param_read_raw()
+     * @note 读回调失败时静默回退缓存, 无法区分"实时值"与"旧缓存";
+     *   需要只读权威源时用 param_read_hw()。
      *
      * @param param_id 参数 ID
      * @param value    [out] 接收值
@@ -933,6 +949,9 @@ extern "C"
      * @name 类型化读写快捷函数
      *
      * 封装 param_write / param_read，避免手动构造 param_value_t。
+     * 运行时校验目标条目的类型 (易用性: 对 FLOAT 条目调 param_write_u32
+     * 会把位模式当 float 存进去, 现已返回 PARAM_ERR_TYPE_MISMATCH)。
+     * param_write_i32 / param_read_i32 对 ENUM 条目同样放行 (共用 .i32)。
      * @{
      */
 
@@ -955,6 +974,26 @@ extern "C"
     int param_read_bool(uint32_t id, bool *val);
 
     /** @} */
+
+    /**
+     * @brief 只读权威源: 直接走模块 read 回调, 不回退缓存
+     *
+     * param_read 在回调缺失/失败时静默返回缓存; 本函数只信权威源,
+     * 取不到即报错 (诊断"硬件真实状态"场景)。回调成功时回写缓存。
+     *
+     * @param param_id 参数 ID
+     * @param value    [out] 接收值
+     * @return PARAM_OK 成功; PARAM_ERR_NOT_FOUND 模块无 read 回调;
+     *         其他错误码原样上抛
+     */
+    int param_read_hw(uint32_t param_id, param_value_t *value);
+
+    /**
+     * @brief 错误码转可读字符串 (排障/日志)
+     * @param err param_status_t 错误码
+     * @return 静态常量串 (不可释放), 未知码返回 "unknown error"
+     */
+    const char *param_strerror(int err);
 
     /**
      * @name STRING / BLOB 快捷函数
@@ -996,6 +1035,8 @@ extern "C"
      *
      * - param_write / param_write_raw / param_write_immediate 遇到
      *   PARAM_FLAG_EXEC 参数时自动路由到 exec，无需调用者判断类型。
+     * - 执行成功后触发 notify (D3), new_value 携带命令负载
+     *   ({.ptr = user_arg}, 与 exec 回调收到的 arg 一致)。
      *
      * @param cmd_id  命令 ID (MAKE_PARAM_ID 风格，高 16 位 module_id)
      * @param user_arg 命令参数 (可为 NULL，框架内部转为 param_value_t)
@@ -1091,7 +1132,8 @@ extern "C"
      *   请由调用者自行串行化。
      */
     int param_load_all(void);
-    /** @brief 从持久化存储加载单个参数 (恢复后经 write 回调重新校验, 见 param_load_all 的生效契约) */
+    /** @brief 从持久化存储加载单个参数 (恢复后经 write 回调重新校验, 见 param_load_all 的生效契约)
+     *  @note 恢复值越界时先裁剪收敛 (D1); 成功后触发 notify (D3) */
     int param_load_one(uint32_t param_id);
 
     /**
@@ -1122,17 +1164,21 @@ extern "C"
      *   被跳过, 仅清 dirty 保持现状)。
      */
     int param_reset_all(void);
-    /** @brief 重置指定参数为默认值 (BLOB/STRING 单缓冲, 不恢复初始内容, 语义同 param_reset_all) */
+    /** @brief 重置指定参数为默认值 (BLOB/STRING 单缓冲, 不恢复初始内容, 语义同 param_reset_all)
+     *  @note 默认值越界时先裁剪收敛 (D1); 成功后触发 notify (D3) */
     int param_reset_one(uint32_t param_id);
 
     /* ================================================================
      *  统计 / 遍历 / 工具
      * ================================================================ */
 
-    /** @brief 获取全局统计信息快照 */
-    void param_get_stats(param_stats_t *stats);
-    /** @brief 清零统计计数器 */
-    void param_clear_stats(void);
+    /** @brief 获取全局统计信息快照
+     *  @return PARAM_OK 成功; PARAM_ERR_NOT_INITIALIZED 未初始化;
+     *          PARAM_ERR_INVALID_ID stats 为 NULL */
+    int param_get_stats(param_stats_t *stats);
+    /** @brief 清零统计计数器
+     *  @return PARAM_OK 成功; PARAM_ERR_NOT_INITIALIZED 未初始化 */
+    int param_clear_stats(void);
 
     /**
      * @brief 获取参数数据大小 (字节数)
@@ -1162,8 +1208,11 @@ extern "C"
      * @param module_id 指定模块 ID (0 表示遍历所有模块)
      * @param cb        回调函数
      * @param user_data 用户上下文
+     * @return PARAM_OK 完成/被回调终止; PARAM_ERR_NOT_INITIALIZED 未初始化;
+     *         PARAM_ERR_INVALID_ID cb 为 NULL;
+     *         PARAM_ERR_NOT_FOUND 指定模块未注册 (不再静默空转)
      */
-    void param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data);
+    int param_foreach(uint16_t module_id, param_foreach_fn cb, void *user_data);
 
     /**
      * @brief 运行时设置参数的范围
@@ -1183,8 +1232,9 @@ extern "C"
      * @brief 对所有已注册参数执行范围裁剪
      *
      * 遍历所有模块的参数表，对超范围的值裁剪到合法区间。
+     * @return PARAM_OK 完成; PARAM_ERR_NOT_INITIALIZED 未初始化
      */
-    void param_validate_all(void);
+    int param_validate_all(void);
 
     /** @} */ /* public_api */
 

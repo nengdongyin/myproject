@@ -28,7 +28,7 @@ static void register_all(void)
 }
 
 /* ================================================================
- *  范围裁剪
+ *  范围校验 (D1: 超范围写入**拒绝**, 缓存不变; 不再静默裁剪)
  * ================================================================ */
 void test_range_uint_at_min(void) {
     register_all();
@@ -49,49 +49,49 @@ void test_range_uint_at_max(void) {
 void test_range_uint_below_min(void) {
     register_all();
     param_value_t v = { .u32 = 5 };
-    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(10, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32); /* 拒绝后缓存不变 */
 }
 
 void test_range_uint_above_max(void) {
     register_all();
     param_value_t v = { .u32 = 250 };
-    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_UINT, v));
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(190, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
 }
 
 void test_range_int_below_min(void) {
     register_all();
     param_value_t v = { .i32 = -999 };
-    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_INT, v));
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_INT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_INT, &v);
-    TEST_ASSERT_EQUAL_INT32(-100, v.i32);
+    TEST_ASSERT_EQUAL_INT32(0, v.i32);
 }
 
 void test_range_int_above_max(void) {
     register_all();
     param_value_t v = { .i32 = 999 };
-    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_INT, v));
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_INT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_INT, &v);
-    TEST_ASSERT_EQUAL_INT32(100, v.i32);
+    TEST_ASSERT_EQUAL_INT32(0, v.i32);
 }
 
 void test_range_float_below_min(void) {
     register_all();
     param_value_t v = { .f32 = -1.0f };
-    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_FLOAT, v));
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_FLOAT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_FLOAT, &v);
-    TEST_ASSERT_FLOAT_WITHIN(0.001f, 0.0f, v.f32);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.5f, v.f32);
 }
 
 void test_range_float_above_max(void) {
     register_all();
     param_value_t v = { .f32 = 9.0f };
-    TEST_ASSERT_PARAM_OK(param_write(TID_APPLET_FLOAT, v));
+    TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_FLOAT, v), PARAM_ERR_OUT_OF_RANGE);
     param_read(TID_APPLET_FLOAT, &v);
-    TEST_ASSERT_FLOAT_WITHIN(0.001f, 3.0f, v.f32);
+    TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.5f, v.f32);
 }
 
 /* ================================================================
@@ -166,13 +166,14 @@ void test_register_duplicate_param_across_modules(void) {
  *  IP 参数数上限 (无 64 位图限制, 受全局哈希表约束)
  * ================================================================ */
 void test_ip_over_64_params_ok(void) {
-    static param_entry_head_t ip_arr[100];
+    static param_range_entry_t ip_arr[100];
     static param_entry_t *ip_table[100];
     for (int i = 0; i < 100; i++) {
         memset(&ip_arr[i], 0, sizeof(ip_arr[i]));
         ip_arr[i].base.param_id = MAKE_PARAM_ID(TEST_MODULE_IP2, i);
         ip_arr[i].base.vtable   = &ip_vtable;
         ip_arr[i].type          = PARAM_TYPE_UINT;
+        ip_arr[i].has_range     = 0; /* 无范围: 写入不校验 */
         ip_arr[i].cache.u32     = (uint32_t)i;
         ip_arr[i].default_val.u32 = (uint32_t)i;
         ip_table[i] = &ip_arr[i].base;
@@ -193,13 +194,14 @@ void test_ip_over_64_params_ok(void) {
 
 void test_ip_over_hash_capacity(void) {
     enum { N = PARAM_HASH_SIZE + 1 };
-    static param_entry_head_t ip_arr[N];
+    static param_range_entry_t ip_arr[N];
     static param_entry_t *ip_table[N];
     for (int i = 0; i < N; i++) {
         memset(&ip_arr[i], 0, sizeof(ip_arr[i]));
         ip_arr[i].base.param_id = MAKE_PARAM_ID(TEST_MODULE_IP2, i);
         ip_arr[i].base.vtable   = &ip_vtable;
         ip_arr[i].type          = PARAM_TYPE_UINT;
+        ip_arr[i].has_range     = 0;
         ip_arr[i].cache.u32     = (uint32_t)i;
         ip_arr[i].default_val.u32 = (uint32_t)i;
         ip_table[i] = &ip_arr[i].base;

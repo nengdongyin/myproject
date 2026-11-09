@@ -57,10 +57,11 @@ extern "C"
     int param_vtable_save(param_entry_t *e);
 
     /**
-     * @brief pre_write 校验函数签名 — 写入前校验/裁剪
+     * @brief pre_write 校验函数签名 — 写入前校验
      *
-     * 返回 false 表示拒绝写入 (枚举值非法)；返回 true 表示通过。
-     * value 可能被原地修改 (范围裁剪)。
+     * 返回 false 表示拒绝写入 (超范围 / 枚举值非法)；返回 true 表示通过。
+     * 不修改 value: 裁剪不再发生于写入路径 (易用性决策 D1),
+     * 裁剪语义仅保留在 param_clamp_value_to_range / param_clamp_entry。
      */
     typedef bool (*param_pre_write_fn)(param_entry_t *e, param_value_t *value);
 
@@ -68,7 +69,7 @@ extern "C"
      * @brief pre_write 编译期分派表 (存入 .rodata)
      *
      * 按 PARAM_TYPE_xxx 索引。App 和 IP 统一使用此表做写入前校验。
-     * - UINT/INT/FLOAT → 范围裁剪
+     * - UINT/INT/FLOAT → 范围校验 (越界拒绝)
      * - ENUM           → 枚举值合法性校验
      * - 其余类型       → nop
      */
@@ -79,6 +80,10 @@ extern "C"
      *
      * 若 has_range==0 则直接返回原值。
      * 支持 UINT / INT / FLOAT 三种数值类型。
+     *
+     * @note 维护工具 (非写入路径): 写入路径对超范围值拒绝,
+     *       需要裁剪语义的调用方 (param_validate_all / re-apply /
+     *       CLAMP policy) 显式使用本函数。
      *
      * @param re    数值范围型参数条目
      * @param value 待裁剪的值
@@ -91,6 +96,7 @@ extern "C"
      *
      * 仅对 UINT / INT / FLOAT 类型生效。
      * 若参数不在合法范围则修正到 min~max 区间。
+     * 内部不加锁: 调用方自行保证与并发写路径的互斥。
      *
      * @param e 参数条目指针
      */

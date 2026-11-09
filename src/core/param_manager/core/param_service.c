@@ -110,7 +110,7 @@ PARAM_ENUM(userset_selector, PID_SYS_USERSET_SELECTOR, 0, PARAM_PARTITION_FACTOR
            s_userset_values, USERSET_VALUE_COUNT);
 
 /** 命令型参数: 无负载, 只能被 param_exec() / param_write_raw() 触发
- *  (param_write 对 EXEC 返回 PARAM_ERR_READONLY)。 */
+ *  (param_write 对 EXEC 返回 PARAM_ERR_EXEC_ONLY)。 */
 PARAM_EXEC(userset_load, PID_SYS_USERSET_LOAD);
 PARAM_EXEC(userset_save, PID_SYS_USERSET_SAVE);
 
@@ -162,12 +162,12 @@ static int sys_select(uint8_t idx)
         return PARAM_ERR_NOT_SUPPORTED;
     }
 
-    param_set_storage(drv);
-    /* param_set_storage 是 void 接口, 对"缺 load/save 的驱动"静默忽略 ——
-       回读确认真的切过去了, 否则后续 SAVE 会写到错的分区上。 */
-    if (param_get_storage() != drv) {
-        SYS_LOG("[SYS] select: set %u rejected by storage layer\n", idx);
-        return PARAM_ERR_NOT_SUPPORTED;
+    /* param_set_storage 现已返回状态码 (缺 load/save 的驱动被拒绝) */
+    int sret = param_set_storage(drv);
+    if (sret != PARAM_OK) {
+        SYS_LOG("[SYS] select: set %u rejected by storage layer (%s)\n",
+                idx, param_strerror(sret));
+        return sret;
     }
 
     SYS_LOG("[SYS] select: target set = %u\n", idx);
@@ -278,15 +278,14 @@ static int sys_factory_op(int (*op)(void))
     if (!factory || !back)
         return PARAM_ERR_NOT_FOUND;
 
-    param_set_storage(factory);
-    if (param_get_storage() != factory)
+    /* param_set_storage 现已返回状态码, 不再需要回读比对 */
+    if (param_set_storage(factory) != PARAM_OK)
         return PARAM_ERR_NOT_SUPPORTED;
 
     ret = op();
 
-    /* 必须恢复: 失败会让后续所有落盘都写进出厂分区, 因此回读校验 */
-    param_set_storage(back);
-    if (param_get_storage() != back) {
+    /* 必须恢复: 失败会让后续所有落盘都写进出厂分区 */
+    if (param_set_storage(back) != PARAM_OK) {
         SYS_LOG("[SYS] factory op: FATAL, driver left on factory set\n");
         return PARAM_ERR_NOT_SUPPORTED;
     }

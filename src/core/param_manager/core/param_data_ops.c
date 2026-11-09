@@ -14,7 +14,11 @@
 #include <string.h>
 
 /* ================================================================
- *  范围裁剪 — App 和 IP 共用
+ *  范围裁剪工具 — App 和 IP 共用
+ *
+ *  注意: 写入路径 (pre_write) 对超范围值**拒绝** (见 pre_write_range),
+ *  本函数仅服务维护类操作: param_validate_all / param_set_range /
+ *  re-apply (load_one / reset_one / param_update) 的收敛语义。
  * ================================================================ */
 
 param_value_t param_clamp_value_to_range(const param_range_entry_t *re, param_value_t value)
@@ -74,16 +78,31 @@ static bool validate_enum(const param_enum_entry_t *ee, param_value_t value)
 /* ================================================================
  *  pre_write 校验函数 — App 和 IP 共用分派表
  *
- *  UINT/INT/FLOAT → 范围裁剪
+ *  UINT/INT/FLOAT → 范围**校验** (越界拒绝, 与 ENUM 对齐)
  *  ENUM           → 枚举合法性校验
  *  其余类型       → 无条件放行
+ *
+ *  易用性决策 D1: 用户写入非法值必须**可见** (OUT_OF_RANGE),
+ *  静默裁剪留给显式维护操作 (param_validate_all / CLAMP policy /
+ *  re-apply 路径), 由调用方决定何时收敛, 而非每次写入悄悄改值。
  * ================================================================ */
 
 static bool pre_write_range(param_entry_t *e, param_value_t *value)
 {
     param_range_entry_t *re = (param_range_entry_t *)e;
-    *value = param_clamp_value_to_range(re, *value);
-    return true;
+    if (!re->has_range)
+        return true;
+
+    switch (re->type) {
+    case PARAM_TYPE_UINT:
+        return value->u32 >= re->min.u32 && value->u32 <= re->max.u32;
+    case PARAM_TYPE_INT:
+        return value->i32 >= re->min.i32 && value->i32 <= re->max.i32;
+    case PARAM_TYPE_FLOAT:
+        return value->f32 >= re->min.f32 && value->f32 <= re->max.f32;
+    default:
+        return true;
+    }
 }
 
 static bool pre_write_enum(param_entry_t *e, param_value_t *value)
@@ -137,10 +156,16 @@ static void cache_update_string(param_entry_t *e, param_value_t value)
 {
     param_string_entry_t *se = (param_string_entry_t *)e;
     /* src==dst 时跳过: param_load_one / param_reset_one / param_update
-       会把 cache 值原样传回写入路径, strncpy 自拷贝属未定义行为 */
+       会把 cache 值原样传回写入路径, 自拷贝属未定义行为。
+       有界拷贝: memchr 只扫 max_len+1 字节, 不依赖调用方缓冲的 '\0'
+       位置, 也不会越过 max_len+1 窗口读取 (调用方缓冲可能不是
+       '\0' 终止的 C 串, 如 param_write_raw 的字节负载)。 */
     if (se->max_len > 0 && value.ptr && se->cache.ptr != value.ptr) {
-        strncpy((char *)se->cache.ptr, (const char *)value.ptr, se->max_len);
-        ((char *)se->cache.ptr)[se->max_len] = '\0';
+        const char *src = (const char *)value.ptr;
+        const char *nul = (const char *)memchr(src, '\0', (size_t)se->max_len + 1);
+        size_t n = nul ? (size_t)(nul - src) : (size_t)se->max_len;
+        memcpy((char *)se->cache.ptr, src, n);
+        ((char *)se->cache.ptr)[n] = '\0';
     }
 }
 

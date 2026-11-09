@@ -97,7 +97,8 @@ void test_read_u32_wrapper(void) {
 
 void test_read_u32_null_val(void) {
     register_params();
-    TEST_ASSERT_PARAM_OK(param_read_u32(TID_APPLET_UINT, NULL));
+    /* typed 包装校验入参: NULL 出参报 INVALID_ID */
+    TEST_ASSERT_PARAM_ERR(param_read_u32(TID_APPLET_UINT, NULL), PARAM_ERR_INVALID_ID);
 }
 
 void test_read_i32_wrapper(void) {
@@ -176,9 +177,9 @@ void test_write_apply_rejects(void) {
     register_params();
     param_value_t v = { .u32 = 42 };
     TEST_ASSERT_PARAM_ERR(param_write(TID_APPLET_UINT, v), PARAM_ERR_INVALID_ID);
-    /* 缓存先行且不回滚: 拒绝后缓存保持新值, 但不标记 dirty */
+    /* D2: apply 拒绝回滚缓存 —— 返回错误 = 无任何变化 */
     param_read(TID_APPLET_UINT, &v);
-    TEST_ASSERT_EQUAL_UINT32(42, v.u32);
+    TEST_ASSERT_EQUAL_UINT32(100, v.u32);
     TEST_ASSERT_DIRTY(&tu32.base, 0);
     test_applet_module.write = mock_apply_ok;
 }
@@ -247,6 +248,32 @@ void test_write_bool_wrapper(void) {
 }
 
 /* ================================================================
+ *  typed 包装的类型校验 (易用性: 位模式静默损坏已被拦截)
+ * ================================================================ */
+void test_write_typed_type_mismatch(void) {
+    register_params();
+    /* 对 FLOAT 条目写 u32: 位模式会当 float 存进去 → 拒绝 */
+    TEST_ASSERT_PARAM_ERR(param_write_u32(TID_APPLET_FLOAT, 1234), PARAM_ERR_TYPE_MISMATCH);
+    /* 对 UINT 条目写 bool */
+    TEST_ASSERT_PARAM_ERR(param_write_bool(TID_APPLET_UINT, true), PARAM_ERR_TYPE_MISMATCH);
+}
+
+void test_read_typed_type_mismatch(void) {
+    register_params();
+    float out = 0.0f;
+    TEST_ASSERT_PARAM_ERR(param_read_f32(TID_APPLET_UINT, &out), PARAM_ERR_TYPE_MISMATCH);
+}
+
+void test_write_i32_accepts_enum(void) {
+    register_params();
+    /* ENUM 与 INT 共用 .i32 表示: i32 包装对 ENUM 条目放行 */
+    TEST_ASSERT_PARAM_OK(param_write_i32(TID_APPLET_ENUM, 1));
+    param_value_t v;
+    param_read(TID_APPLET_ENUM, &v);
+    TEST_ASSERT_EQUAL_INT32(1, v.i32);
+}
+
+/* ================================================================
  *  枚举写测试
  * ================================================================ */
 void test_write_enum_valid(void) {
@@ -303,6 +330,9 @@ void run_test_read_write(void)
     RUN_TEST(test_write_i32_wrapper);
     RUN_TEST(test_write_f32_wrapper);
     RUN_TEST(test_write_bool_wrapper);
+    RUN_TEST(test_write_typed_type_mismatch);
+    RUN_TEST(test_read_typed_type_mismatch);
+    RUN_TEST(test_write_i32_accepts_enum);
     RUN_TEST(test_write_enum_valid);
     RUN_TEST(test_write_enum_invalid);
     RUN_TEST(test_write_no_persist_still_applies_dirty);

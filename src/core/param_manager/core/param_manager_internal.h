@@ -138,8 +138,10 @@ extern "C"
      *
      * @note 回调在锁外执行 (锁内只快照模块指针), 回调内可安全调用
      *       param_* 加锁 API。
+     * @return PARAM_OK 完成; PARAM_ERR_NOT_INITIALIZED 未初始化;
+     *         PARAM_ERR_INVALID_ID cb 为 NULL
      */
-    void param_module_foreach(param_module_iter_fn cb, void *ctx);
+    int param_module_foreach(param_module_iter_fn cb, void *ctx);
 
     /**
      * @brief 通用模块注册接口 — 将模块节点及参数表注册到框架
