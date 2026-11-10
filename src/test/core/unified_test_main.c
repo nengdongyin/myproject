@@ -16,6 +16,7 @@ extern const test_suite_t _ts_vsc_resolver;
 extern const test_suite_t _ts_vfs_bdev;
 extern const test_suite_t _ts_rawflash;
 extern const test_suite_t _ts_vfs_core;
+extern const test_suite_t _ts_mkv;
 
 int main(void)
 {
@@ -36,9 +37,16 @@ int main(void)
     test_suite_add(&_ts_vfs_bdev);
     test_suite_add(&_ts_rawflash);
     test_suite_add(&_ts_vfs_core);
+    test_suite_add(&_ts_mkv);
 
     int failures = test_suite_run_all();
+#ifdef PORT_OS_LIBC
+    /* PC 测试 (build.rsp 定义 -DPORT_OS_LIBC): 正常返回退出码, 供 CI/脚本判定 */
+    return failures ? 1 : 0;
+#else
+    /* 嵌入式目标: main 永不返回 */
     (void)failures;
     while (1) {}
     return 0;
+#endif
 }

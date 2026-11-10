@@ -79,6 +79,16 @@
 #define MKV_SECTOR_MULT 1
 #endif
 
+/** @brief GC 迁移表容量上限 (distinct id 数)
+ *
+ *  必须 ≥ (sector_size - MKV_SEC_HDR_SIZE) / MKV_REC_OVERHEAD，否则
+ *  mkv_init() 会拒绝初始化 (避免 GC 时静默丢记录)。
+ *  例: 4KB sector → 最多 408 条最小记录，默认 512 覆盖并有余量；
+ *      更大 sector (如 MULT=4 → 16KB) 需相应调大。 */
+#ifndef MKV_GC_MAP_MAX
+#define MKV_GC_MAP_MAX 512
+#endif
+
 /**
  * @brief 极简 KV 实例句柄
  *

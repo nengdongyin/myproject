@@ -200,9 +200,12 @@ static int write_rec(mkv_t *kv, uint32_t id, const uint8_t *data, uint16_t vlen,
 static bool mkv_probe_erased(mkv_t *kv, uint32_t base, uint32_t off)
 {
     uint8_t buf[16];
-    if (fal_partition_read(kv->part, base + off, buf, 16) < 0)
+    uint32_t n = kv->sector_size - off; /* 钳制到 sector 边界, 避免越界探测 */
+    if (n > sizeof(buf)) n = sizeof(buf);
+    if (n == 0) return true;            /* 已到 sector 末尾 */
+    if (fal_partition_read(kv->part, base + off, buf, n) < 0)
         return false;
-    for (int i = 0; i < 16; i++)
+    for (uint32_t i = 0; i < n; i++)
         if (buf[i] != 0xFF) return false;
     return true;
 }
@@ -233,7 +236,28 @@ static uint32_t mkv_try_skip(mkv_t *kv, uint32_t base, uint32_t off)
 
 /* ═══════════════════════════════════════════════ GC ══════════════ */
 
-#define GC_MAP_MAX 256
+/**
+ * @brief 分块搬运一条记录 (head + value + crc)，无 value 尺寸上限
+ *
+ * byte-for-byte 复制，CRC 保持不变。固定小分块，栈占用恒定。
+ * @return 0 成功; -1 读/写失败
+ */
+static int gc_copy_rec(mkv_t *kv, uint32_t src, uint32_t dst, uint32_t total)
+{
+    uint8_t chunk[64];
+    uint32_t done = 0;
+    while (done < total)
+    {
+        uint32_t n = total - done;
+        if (n > sizeof(chunk)) n = sizeof(chunk);
+        if (fal_partition_read(kv->part, src + done, chunk, n) < 0)
+            return -1;
+        if (fal_partition_write(kv->part, dst + done, chunk, n) < 0)
+            return -1;
+        done += n;
+    }
+    return 0;
+}
 
 static int mkv_gc(mkv_t *kv)
 {
@@ -243,7 +267,8 @@ static int mkv_gc(mkv_t *kv)
     uint32_t new_base = (uint32_t)new_id * kv->sector_size;
     uint32_t new_seq  = kv->active_seq + 1;
 
-    struct { uint32_t id; uint32_t off; } map[GC_MAP_MAX];
+    /* static: 512×8=4KB 进 BSS 不占线程栈; 容量已由 mkv_init 校验 */
+    static struct { uint32_t id; uint32_t off; } map[MKV_GC_MAP_MAX];
     int map_count = 0;
 
     if (fal_partition_erase(kv->part, new_base, kv->sector_size) < 0)
@@ -266,15 +291,16 @@ static int mkv_gc(mkv_t *kv)
             if (map[i].id == rid) { found = i; break; }
         if (found >= 0)
             map[found].off = scan;
-        else if (map_count < GC_MAP_MAX)
+        else if (map_count < MKV_GC_MAP_MAX)
             { map[map_count].id=rid; map[map_count].off=scan; map_count++; }
+        else
+            return -1; /* map 溢出: mkv_init 已校验, 此处理论不可达 */
 
         scan += rec_total(vlen);
     }
 
-    /* 复制有效记录到新 sector */
+    /* 复制有效记录到新 sector (分块流式搬运, 无 value 尺寸上限) */
     uint32_t off = MKV_SEC_HDR_SIZE;
-    uint8_t buf[512];
     for (int i = 0; i < map_count; i++)
     {
         uint32_t rid; uint16_t vlen;
@@ -283,12 +309,10 @@ static int mkv_gc(mkv_t *kv)
         if (vlen == MKV_TOMBSTONE) continue;
 
         uint32_t total = rec_total(vlen);
-        if (off + total > kv->sector_size || total > sizeof(buf))
+        if (off + total > kv->sector_size)
             continue;
 
-        if (fal_partition_read(kv->part, old_base + map[i].off, buf, total) < 0)
-            continue;
-        if (fal_partition_write(kv->part, new_base + off, buf, total) < 0)
+        if (gc_copy_rec(kv, old_base + map[i].off, new_base + off, total) < 0)
             continue;
         off += total;
     }
@@ -326,6 +350,10 @@ int mkv_init(mkv_t *kv, const char *fal_part_name)
     kv->sector_count = (uint8_t)(kv->part->len / kv->sector_size);
     if (kv->sector_count < 2) return -1;  /* GC 至少需要 2 个 sector */
 
+    /* 一个 sector 最多容纳 (sector_size - 8)/10 条最小记录, 必须 ≤ map 容量 */
+    if ((kv->sector_size - MKV_SEC_HDR_SIZE) / MKV_REC_OVERHEAD > MKV_GC_MAP_MAX)
+        return -1;
+
     /* 扫描全部 sector header，找到 seq 最大的活跃 sector */
     int      best_id = 0;
     uint32_t best_seq = 0;
@@ -337,7 +365,7 @@ int mkv_init(mkv_t *kv, const char *fal_part_name)
         if (read_sec_hdr(kv, i, &seq))
         {
             any_ok = true;
-            if (!any_ok || seq >= best_seq)
+            if (seq >= best_seq)
                 { best_id = i; best_seq = seq; }
         }
     }

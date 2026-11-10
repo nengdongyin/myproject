@@ -41,6 +41,10 @@
 -Isrc/protocols/ymodem/src
 -Isrc/protocols/imperx
 -Isrc/protocols/camyu
+-Isrc/lib/mkv
+-Isrc/lib/flashdb/port/fal/inc
+-Isrc/lib/flashdb/config
+-Isrc/test/core/mkv
 src/test/core/unified_test_main.c
 src/test/core/test_suite.c
 src/test/core/unity/unity.c
@@ -114,5 +118,8 @@ src/camera/drivers/bridge/sensor_vsc.c
 src/camera/drivers/bridge/sensor_imx296_vsc.c
 src/camera/drivers/bridge/isc_bridge.c
 src/camera/drivers/sensors/isc_sensor_imx477.c
+src/lib/mkv/mkv.c
+src/test/core/mkv/mock_fal.c
+src/test/core/mkv/test_mkv.c
 -o
 test_build/pc_test_runner.exe
