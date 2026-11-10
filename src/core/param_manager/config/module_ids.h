@@ -45,6 +45,14 @@ extern "C"
     X(MODULE_SYS,       0x02u)
 
 /**
+ * @brief 清单行数计数器 — 每个 X(...) 展开为 "+1"
+ *
+ * 与 PARAM_MODULE_ID_ENUM 配套使用: `0 +1 +1 ...` 得到真实模块总数。
+ * 计数只依赖清单**行数**, 与各模块 ID 数值无关 (ID 是稀疏的)。
+ */
+#define PARAM_MODULE_COUNT_X(name, id) +1
+
+/**
  * @brief 模块 ID 枚举 (由清单生成)
  *
  * App 业务模块: 0x01~0x7F; IP 寄存器模块: 0x80~0xFF;
@@ -56,8 +64,18 @@ typedef enum
 #define PARAM_MODULE_ID_ENUM(name, id) name = id,
     PARAM_MODULE_LIST(PARAM_MODULE_ID_ENUM)
 #undef PARAM_MODULE_ID_ENUM
-    PARAM_MODULE_ID_COUNT
+    /** @brief 清单登记的真实模块总数 (PARAM_MODULE_LIST 行数, 增删行自动同步)
+     *
+     *  @note 这是"稠密行数", **不是** module_id 上界: module_id 是稀疏的
+     *        (0x00 / 0x01~0x03 / 0x80~0x83), 不得拿本值做以 module_id
+     *        为下标的数组容量。
+     *  @note 不要用"前一个枚举值 + 1"推导总数 (旧实现如此): 清单末行为
+     *        MODULE_SYS=0x02 时会算成 3, 与 MODULE_VSC_LITE 撞值。
+     */
+    PARAM_MODULE_COUNT = 0 PARAM_MODULE_LIST(PARAM_MODULE_COUNT_X)
 } param_module_id_t;
+
+#undef PARAM_MODULE_COUNT_X
 
 #define PID_SCHEMA_VER MAKE_PARAM_ID(MODULE_META, 0x00) /**< 存储格式版本号 */
 

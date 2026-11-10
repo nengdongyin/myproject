@@ -26,8 +26,8 @@
 ```
 存储后端 → param_init → param_service_init(元数据+迁移+旋钮)
 → 模块注册 (自动或手动清单) → param_load_all (存储→缓存, 再逐模块 init→硬件)
-→ param_check_module_order (自检一次) → 动态校准 (应用 hook)
-→ param_validate_all (裁剪越界) → param_flush (缓存→硬件)
+→ param_check_module_order (自检一次) → param_validate_all (裁剪越界)
+→ param_flush (缓存→硬件)
 ```
 
 ---

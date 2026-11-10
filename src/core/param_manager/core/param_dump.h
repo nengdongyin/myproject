@@ -28,15 +28,25 @@ extern "C" {
 typedef void (*param_dump_fn)(const char *line, void *user_data);
 
 /**
+ * @brief 注册 dump 输出回调 (全局单例, 建议启动时调用一次)
+ *
+ * param_dump() 每格式化一行文本即回调一次。注册为 NULL 可关闭输出。
+ * 后注册的回调覆盖先前回调; 并发注册与遍历需调用方自行串行化。
+ *
+ * @param cb 输出回调; NULL 表示注销/关闭 dump 输出
+ */
+void param_dump_set_output(param_dump_fn cb);
+
+/**
  * @brief 打印指定模块(或全部模块)的参数状态
  *
  * 按 MODULE_INIT_ORDER 顺序遍历模块，逐个输出参数名、当前值、范围、dirty、flag 等信息。
+ * 每行文本经 param_dump_set_output() 注册的回调输出; 未注册回调时为空操作。
  *
  * @param module_id 模块 ID，0 表示所有模块
- * @param cb        输出回调
- * @param user_data 回调上下文
+ * @param user_data 回调上下文 (透传给已注册回调)
  */
-void param_dump(uint16_t module_id, param_dump_fn cb, void *user_data);
+void param_dump(uint16_t module_id, void *user_data);
 
 /**
  * @brief 格式化单个参数条目为一行文本
@@ -54,7 +64,8 @@ void param_dump_entry(struct param_entry *e, char *line, uint16_t size);
 
 typedef void (*param_dump_fn)(const char *line, void *user_data);
 
-#define param_dump(id, cb, ud)       ((void)0)
+#define param_dump_set_output(cb)    ((void)(cb))
+#define param_dump(id, ud)           ((void)0)
 #define param_dump_entry(e, l, s)    ((void)(l), (void)(s), (void)0)
 
 #endif /* PARAM_DUMP_ENABLE */

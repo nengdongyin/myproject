@@ -74,7 +74,7 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
             int ret = param_write_raw(e->param_id, (const uint8_t *)&val, sizeof(val));
             (void)ret;
             param_flush();
-            param_dump(PARAM_MODULE_ID(e->param_id), dump_cb, NULL);
+            param_dump(PARAM_MODULE_ID(e->param_id), NULL);
         } else {
             param_value_t v;
             int ret = param_read(e->param_id, &v);
@@ -273,6 +273,8 @@ static void ymodem_send_on_frame_ready(protocol_parser_t *parser,
 
 bool protocol_chain_init(test_ctx_t *ctx)
 {
+    param_dump_set_output(dump_cb);
+
     ctx->chain = protocol_chain_create(4);
     if (!ctx->chain)
     {

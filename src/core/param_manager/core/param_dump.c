@@ -265,7 +265,8 @@ static void fmt_string(param_entry_t *e, const char *name,
         snprintf(val, sizeof(val), "STRING=\"\"");
     } else {
         uint16_t show = se->max_len < 16u ? se->max_len : 16u;
-        uint16_t dlen = (uint16_t)strnlen(data, show);
+        const char *nul = memchr(data, '\0', show);
+        uint16_t dlen = nul ? (uint16_t)(nul - data) : show;
         snprintf(val, sizeof(val), "STRING=\"%.*s%s\"",
                  dlen, data, (dlen < (uint16_t)strlen(data)) ? "..." : "");
     }
@@ -326,10 +327,22 @@ void param_dump_entry(param_entry_t *e, char *line, uint16_t size)
     fmt_by_type(e, param_entry_name(e), line, size);
 }
 
+/** dump 输出回调 — 全局单例, 由 param_dump_set_output 注册 */
+static param_dump_fn g_dump_output = NULL;
+
+/**
+ * @brief 注册 dump 输出回调
+ *
+ * @param cb 输出回调; NULL 表示关闭 dump 输出
+ */
+void param_dump_set_output(param_dump_fn cb)
+{
+    g_dump_output = cb;
+}
+
 /** dump 遍历上下文 */
 typedef struct {
     uint16_t       module_id;
-    param_dump_fn  cb;
     void          *user_data;
 } dump_ctx_t;
 
@@ -337,7 +350,7 @@ typedef struct {
  * @brief 模块遍历回调 — 逐模块、逐参数输出格式化行
  *
  * 先输出模块标题行 "[ModuleName] id=0xXXXX params=N dirty=X"，然后逐参数调用
- * param_dump_entry() 格式化。每行通过 dc->cb 回调输出。
+ * param_dump_entry() 格式化。每行通过 g_dump_output 回调输出。
  */
 static void dump_module_iter(param_module_node_t *m, void *ctx)
 {
@@ -348,13 +361,13 @@ static void dump_module_iter(param_module_node_t *m, void *ctx)
     snprintf(line, sizeof(line), "[%s] id=0x%04X params=%u dirty=%u\n",
              m->name ? m->name : "?", m->module_id,
              m->param_count, m->dirty);
-    dc->cb(line, dc->user_data);
+    g_dump_output(line, dc->user_data);
 
     for (uint16_t i = 0; i < m->param_count; i++) {
         param_entry_t *e = m->table[i];
         if (!e) continue;
         param_dump_entry(e, line, sizeof(line));
-        if (line[0]) dc->cb(line, dc->user_data);
+        if (line[0]) g_dump_output(line, dc->user_data);
     }
 }
 
@@ -364,10 +377,10 @@ static void dump_module_iter(param_module_node_t *m, void *ctx)
  * module_id==0 时遍历所有模块，否则只输出指定模块。
  * 通过 param_module_foreach 遍历模块链表 (即 MODULE_INIT_ORDER 顺序)。
  */
-void param_dump(uint16_t module_id, param_dump_fn cb, void *user_data)
+void param_dump(uint16_t module_id, void *user_data)
 {
-    if (!cb) return;
-    dump_ctx_t ctx = { module_id, cb, user_data };
+    if (!g_dump_output) return;
+    dump_ctx_t ctx = { module_id, user_data };
     int ret = param_module_foreach(dump_module_iter, &ctx);
     (void)ret;
 }

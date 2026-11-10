@@ -1,0 +1,85 @@
+# ══════════════════════════════════════════════════════════════════════════
+#  params/exp.params.yaml — 参数模块的单一事实源 (模板示范)
+#
+#  生成: python tools/param_gen.py params gen/params
+#  校验: python tools/param_gen.py params gen/params --check
+#
+#  生成物 (入库, 请勿手改):
+#    gen/params/exp_params.h  — PID 常量枚举 + 参数表声明 + 计数宏
+#    gen/params/exp_params.c  — 缓冲区 + 条目定义 + 参数表
+#
+#  仍需手写的只有"业务部分" (见 examples/exp_module.c):
+#    - 模块私有 ctx / 回调 (init / read / write / exec / flush) —— 回调框架可由
+#      `--scaffold examples` 一次生成, 你只在 case 里填业务逻辑
+#    - PARAM_MODULE_DEFINE + PARAM_MODULE_INIT 也随骨架一起生成
+# ══════════════════════════════════════════════════════════════════════════
+
+schema_version: 1
+
+module:
+  name: exp                 # 生成 exp_params[] / EXP_PARAM_COUNT；模块实例名建议同名
+  enum: MODULE_EXAMPLE_XM   # module_ids.h 的枚举名；未登记时生成头里给模板占位 #define
+  id: 0x7E                  # 必须与 enum 的值一致（生成 _Static_assert 兜住漂移）
+  label: ExampleXMacro      # 调试名（param_dump 输出）
+  vtbl: app                 # app → PARAM_*   /   ip → PARAM_IP_*
+
+# 说明:
+#   数值型可给 min/max；两者都给且 min < max 时才启用范围校验（否则 has_range = 0）。
+#   任一字段可用 <字段>_expr 透传 C 表达式，如 default_expr: VSC_FMT_RAW10 —— 逃生门，
+#   用得越多说明该模块越不适合 codegen。
+params:
+  - name: gain
+    id: 0x00
+    type: UINT
+    flags: [READONLY]
+    default: 10
+    min: 1
+    max: 100
+
+  - name: offset
+    id: 0x01
+    type: INT
+    flags: [PERSIST]
+    default: 0
+    min: -50
+    max: 50
+
+  - name: scale
+    id: 0x02
+    type: FLOAT
+    flags: [PERSIST]
+    default: 1.0
+    min: 0.1
+    max: 10.0
+
+  - name: enabled
+    id: 0x03
+    type: BOOL
+    flags: [PERSIST]
+    default: true
+
+  - name: mode
+    id: 0x04
+    type: ENUM
+    flags: [PERSIST]
+    default: 0
+    values: [0, 1, 2]
+
+  # STRING: max_len 自动 = buf.size - 1；buf 由生成器定义在 .c 里 (单缓冲, 静态可写)
+  - name: dev_name
+    id: 0x05
+    type: STRING
+    flags: [PERSIST]
+    buf: { name: g_exp_name, size: 16, init: "example" }
+
+  # BLOB: blob_size = buf.size；buf 零初始化
+  - name: calib
+    id: 0x06
+    type: BLOB
+    flags: [PERSIST]
+    buf: { name: g_exp_calib, size: 8 }
+
+  # EXEC: 命令型参数，不写 default/min/max/values/buf
+  - name: recalib
+    id: 0x07
+    type: EXEC

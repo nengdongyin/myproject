@@ -15,6 +15,10 @@
  * (param_write_cache 防重入) + exec 命令 + flush + 运行时动态 range。
  * 直接编译: 此文件自备本地 ID 常量, 不改 module_ids.h 也能编过
  * (仅作语法模板; 真实接入请按上面 3 步换成清单中的 ID)。
+ *
+ * 另见 exp_module.c + params/exp.params.yaml: 同一模块的 YAML 代码生成写法
+ * —— 条目/参数表/PID 宏由 tools/param_gen.py 生成, 回调框架 (含 switch)
+ * 也可由 `--scaffold` 一次生成, 手写部分只剩 case 里的业务逻辑。
  */
 
 #include "app_param_manager.h"

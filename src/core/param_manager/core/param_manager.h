@@ -39,7 +39,7 @@ extern "C"
      *     支持多分区与版本迁移。
      *
      * @par 常用 API 速查 (完整决策表见 docs/param-manager-guide.md)
-     *   - 启动:  param_boot_standard(&hooks)      一次调用完成 9 步
+     *   - 启动:  param_boot_standard(&hooks)      一次调用完成 8 步
      *   - 写入:  param_write(标准,越界拒绝) / param_write_cache(跳 apply,
      *            回调内自修改用) / param_write_sync(立即校验/下发) /
      *            param_write_raw(唯一带长度入口, BLOB/字节流) /
@@ -1303,6 +1303,25 @@ extern "C"
     int param_set_range(uint32_t param_id,
                         const param_value_t *min_val,
                         const param_value_t *max_val);
+
+    /**
+     * @brief 读取参数的上下限范围
+     *
+     * 适用于 UINT/INT/FLOAT 数值参数 (App 与 IP 均可)。min_val / max_val
+     * 为出参, 任一传 NULL 表示忽略该侧 (例如只取最大值)。两参同时为 NULL
+     * 时仅做参数存在性与类型校验。
+     * @param param_id 参数 ID
+     * @param min_val  [out] 接收最小值 (NULL 表示忽略)
+     * @param max_val  [out] 接收最大值 (NULL 表示忽略)
+     * @return PARAM_OK 成功; PARAM_ERR_NOT_INITIALIZED 未初始化;
+     *         PARAM_ERR_INVALID_ID 参数不存在;
+     *         PARAM_ERR_TYPE_MISMATCH 非 UINT/INT/FLOAT 类型
+     * @note has_range==0 (未启用范围校验) 时 min/max 仍会被读出为定义时
+     *       的原始值, 是否真正参与校验需结合 has_range 判断。
+     */
+    int param_get_range(uint32_t param_id,
+                        param_value_t *min_val,
+                        param_value_t *max_val);
 
     /**
      * @brief 对所有已注册参数执行范围裁剪

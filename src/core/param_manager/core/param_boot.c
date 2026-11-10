@@ -3,7 +3,7 @@
  * @brief 标准启动序列实现 — 见 param_boot.h
  *
  * 本文件是框架侧提供的启动模板: 串联固定的步骤顺序, 应用专属部分
- * (后端选择 / notify 桥 / 迁移表 / 动态校准 / 手动注册清单) 由
+ * (后端选择 / notify 桥 / 迁移表 / 手动注册清单) 由
  * param_boot_hooks_t 注入, 框架不反向依赖任何应用符号。
  */
 
@@ -56,14 +56,10 @@ int param_boot_standard(const param_boot_hooks_t *hooks)
        (不放进 load_all: 分区热切换会反复调用 load_all) */
     TRACK_ERR(param_check_module_order());
 
-    /* 步骤 7: 动态范围校准 (应用专属, 可省略) */
-    if (hooks->calibrate)
-        hooks->calibrate();
-
-    /* 步骤 8: 裁剪所有越界值 (维护语义) */
+    /* 步骤 7: 裁剪所有越界值 (维护语义) */
     TRACK_ERR(param_validate_all());
 
-    /* 步骤 9: 将恢复的参数刷入硬件 */
+    /* 步骤 8: 将恢复的参数刷入硬件 */
     TRACK_ERR(param_flush());
 
 #undef TRACK_ERR

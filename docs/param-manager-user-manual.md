@@ -148,7 +148,7 @@ typed 包装（`param_write_u32/i32/f32/bool` 等）运行时校验类型；`par
 | 刷新 | `param_flush()`（按 ORDER 遍历 dirty 模块，失败保留 dirty 下轮重试） |
 | 持久化 | `param_save_all` / `param_save_one` / `param_load_all` / `param_load_one` / `param_delete_one` / `param_delete_all` |
 | 重置 | `param_reset_all` / `param_reset_one`（BLOB/STRING 单缓冲不恢复内容） |
-| 遍历/工具 | `param_foreach` / `param_get_stats` / `param_validate_all` / `param_set_range` / `param_get_size` / `param_check_module_order` |
+| 遍历/工具 | `param_foreach` / `param_get_stats` / `param_validate_all` / `param_set_range` / `param_get_range` / `param_get_size` / `param_check_module_order` |
 
 ### 4.4 模块定义与注册宏
 
@@ -202,7 +202,6 @@ PARAM_MODULE_INIT(exp, exp_params);
 /* 4. 启动: 一次调用 */
 param_boot_hooks_t hooks = { .storage_factory = make_storage,
                              .notify = on_changed,
-                             .calibrate = calibrate_ranges,
                              .register_modules = register_modules };
 param_boot_standard(&hooks);
 
@@ -293,7 +292,7 @@ param_boot_standard(&hooks);
 /* B. 手动: 等价序列 (参考 param_boot.c, 用于特殊启动时序) */
 param_init(storage, notify); param_service_init(NULL, 0);
 register_modules(); param_load_all(); param_check_module_order();
-calibrate(); param_validate_all(); param_flush();
+param_validate_all(); param_flush();
 ```
 
 ### 8.5 验收清单

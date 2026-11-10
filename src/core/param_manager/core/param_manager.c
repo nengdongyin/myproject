@@ -17,9 +17,19 @@
 
 /**
  * @brief 模块初始化顺序表 (编译期常量，来自 MODULE_INIT_ORDER)
+ *
+ * MODULE_ORDER_COUNT 与本表同源于 PARAM_MODULE_LIST, 与 module_ids.h 的
+ * PARAM_MODULE_COUNT 恒等: 二者都按"清单行数"计算, 不依赖任何 ID 数值。
+ * 强制转 uint16_t: sizeof 结果为 size_t, 与 uint16_t 循环变量混比会在
+ * -Wextra / -Wconversion 下告警。
  */
 static const uint16_t g_module_order[] = {MODULE_INIT_ORDER};
-#define MODULE_ORDER_COUNT (sizeof(g_module_order) / sizeof(g_module_order[0]))
+#define MODULE_ORDER_COUNT \
+    ((uint16_t)(sizeof(g_module_order) / sizeof(g_module_order[0])))
+
+_Static_assert(PARAM_MODULE_COUNT ==
+                   ((uint16_t)(sizeof(g_module_order) / sizeof(g_module_order[0]))),
+               "MODULE_ORDER_COUNT 与 PARAM_MODULE_COUNT 同源, 不得分叉");
 
 /**
  * @brief 全局单例 — 参数管理器所有运行时状态
@@ -2787,6 +2797,43 @@ int param_set_range(uint32_t param_id,
     if (clamped)
         return param_write(param_id, new_val);
 
+    return PARAM_OK;
+}
+
+/**
+ * @brief 读取参数的上下限范围
+ *
+ * @param param_id 参数 ID
+ * @param min_val  [out] 接收最小值 (NULL 表示忽略)
+ * @param max_val  [out] 接收最大值 (NULL 表示忽略)
+ * @return PARAM_OK 成功，或错误码
+ */
+int param_get_range(uint32_t param_id,
+                    param_value_t *min_val,
+                    param_value_t *max_val)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_INITIALIZED;
+    system_lock(SYS_LOCK_PARAM);
+    param_entry_t *e = param_entry_find(param_id);
+    if (!e) {
+        system_unlock(SYS_LOCK_PARAM);
+        return PARAM_ERR_INVALID_ID;
+    }
+
+    param_type_t t = entry_type(e);
+    if (t != PARAM_TYPE_UINT && t != PARAM_TYPE_INT && t != PARAM_TYPE_FLOAT) {
+        system_unlock(SYS_LOCK_PARAM);
+        return PARAM_ERR_TYPE_MISMATCH;
+    }
+
+    param_range_entry_t *re = (param_range_entry_t *)e;
+    if (min_val)
+        *min_val = re->min;
+    if (max_val)
+        *max_val = re->max;
+
+    system_unlock(SYS_LOCK_PARAM);
     return PARAM_OK;
 }
 

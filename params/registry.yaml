@@ -1,0 +1,27 @@
+# ══════════════════════════════════════════════════════════════════════════
+#  params/registry.yaml — 参数模块登记表
+#
+#  唯一作用: 声明"本工程有哪些参数模块、是否参与生成"。
+#  参数内容仍在各自的 *.params.yaml 里 —— 与 drivers/registry.yaml 同构。
+#
+#  为什么需要它 (而不是直接 glob *.params.yaml):
+#    写完一个 yaml 却忘了接入, 是"参数整块消失且启动无告警"的经典成因。
+#    有登记表后, 未登记的 *.params.yaml 会让生成器直接报 E0004 拒绝生成。
+#
+#  字段:
+#    name        必填, 模块名; 必须与对应 yaml 里的 module.name 一致 (漂移即报错)
+#    file        可选, 默认 <name>.params.yaml
+#    status      可选, active(默认) / deprecated / disabled; 非 active 不生成
+#    description 可选
+# ══════════════════════════════════════════════════════════════════════════
+
+modules:
+  - name: exp
+    status: active
+    description: "示例模块 (模板: 8 种参数类型全覆盖, 输出到 examples/)"
+
+  # 新增模块示例 — 在新模块的 yaml 写好后放开下面两行:
+  #
+  # - name: foo
+  #   status: active
+  #   description: "..."

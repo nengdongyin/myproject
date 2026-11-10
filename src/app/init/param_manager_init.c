@@ -7,7 +7,6 @@
  * 负责:
  *   - 将 lwevt 事件总线与 param_notify_fn 回调桥接
  *   - 串联存储后端、模块注册、参数加载、flush 等启动步骤
- *   - 提供运行时动态范围校准（如根据 FPS 计算曝光时间上限）
  *
  * 防重入保护: on_param_changed 通过 s_notify_depth 计数器实现
  * 简单防重入（深度 >4 时丢弃），避免参数变化通知在初始化阶段
@@ -158,7 +157,6 @@ static const param_storage_drv_t *param_storage_create_selected(void)
  *   1. 存储后端工厂 param_storage_create_selected()
  *   2. notify 桥 on_param_changed (lwevt 事件总线)
  *   3. 手动模块注册清单 register_modules()
- *   4. 动态范围校准 calibrate_ranges() (FPS → 曝光时间上限)
  *
  * @note printf 输出适合开发调试，生产环境应替换为日志框架。
  */
@@ -176,22 +174,6 @@ static void register_modules(void)
     auto_exp_module_init();
 }
 
-/**
- * @brief 动态范围校准 — 根据传感器 FPS 限制曝光时间
- *
- * 应用特定的校准逻辑, 由 param_boot_standard 在 load_all 之后、
- * param_validate_all 之前调用; 其他项目可替换或删除。
- */
-static void calibrate_ranges(void)
-{
-    param_value_t fps, exposure_max;
-    if (param_read(PID_IP_SENSOR_FPS, &fps) != PARAM_OK)
-        return;
-    exposure_max.u32 = (uint32_t)(990000u / (fps.u32 + 1));
-    param_set_range(PID_IP_SENSOR_EXPOSURE, NULL, &exposure_max);
-    printf("[PM] fps=%u -> exposure_max=%u us\n", fps.u32, exposure_max.u32);
-}
-
 void param_manager_init(void)
 {
     lwevt_init();
@@ -201,7 +183,6 @@ void param_manager_init(void)
         .notify           = on_param_changed,
         .migrate_table    = NULL,
         .migrate_count    = 0,
-        .calibrate        = calibrate_ranges,
         .register_modules = register_modules,
     };
 
@@ -209,5 +190,5 @@ void param_manager_init(void)
     printf("[PM] boot ret=%d (%s)\n", ret, param_strerror(ret));
 
     printf("[PM] --- dump after init ---\n");
-    param_dump(0, dump_cb, NULL);
+    param_dump(0, NULL);
 }
