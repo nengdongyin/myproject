@@ -5,7 +5,7 @@
  * App 与 IP 的通用 vtable 实现位于 param_manager.c (基类)。
  * 本文件只包含 IP 真正差异的部分:
  *   - ip_param_load:        基类 load + 标脏尾巴 (恢复值需下发硬件)
- *   - _ip_flush_write_entry / ip_flush_one: 单条目硬件写通路
+ *   - _ip_flush_write_entry: 单条目硬件写通路
  *   - ip_module_flush:      逐条 driver write + 批量后处理
  *   - ip_module_init:       全量标脏 (开机下发默认值) + init 回调
  *   - ip_vtable / ip_module_vtable 常量组装
@@ -107,23 +107,6 @@ static int _ip_flush_write_entry(param_entry_t *e, ip_instance_t *inst)
     return ret;
 }
 
-static int ip_flush_one(param_entry_t *e)
-{
-    ip_instance_t *inst = (ip_instance_t *)param_module_find_typed(
-        (uint16_t)PARAM_MODULE_ID(e->param_id), &ip_module_vtable);
-    if (!inst || !inst->write) return PARAM_ERR_NOT_FOUND;
-
-    if (!entry_dirty(e)) return PARAM_OK;
-
-    /* READONLY/EXEC 永不写硬件 (与 ip_module_flush 同规则) */
-    if (!param_entry_is_writable(e)) {
-        param_entry_clear_dirty(e);
-        return PARAM_OK;
-    }
-
-    return _ip_flush_write_entry(e, inst);
-}
-
 /* ================================================================
  *  模块级差异实现 (IP 独有)
  * ================================================================ */
@@ -220,7 +203,6 @@ const param_vtable_t ip_vtable = {
        write 是可选钩子 (可 NULL), 缺失时只到缓存层并清脏 */
     .write_sync       = param_entry_write_sync,
     .write_raw        = param_entry_write_raw,
-    .flush            = ip_flush_one,
     .save             = param_vtable_save,
     .load             = ip_param_load,
     .reset            = param_entry_reset,

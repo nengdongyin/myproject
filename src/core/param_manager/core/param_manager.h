@@ -338,8 +338,6 @@ extern "C"
         int (*write_sync)(param_entry_t *e, param_value_t value);
         /** 原始字节流写入 */
         int (*write_raw)(param_entry_t *e, const uint8_t *data, uint16_t len);
-        /** 单个参数的 flush 操作 */
-        int (*flush)(param_entry_t *e);
         /** 将参数持久化到 Flash */
         int (*save)(param_entry_t *e);
         /** 从 Flash 恢复参数 (返回 param_status_t: PARAM_OK = 已恢复或无该键,

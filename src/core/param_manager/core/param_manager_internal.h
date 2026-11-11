@@ -197,8 +197,6 @@ extern "C"
     int param_entry_load(param_entry_t *e);
     /** @brief 重置: data_ops.reset */
     int param_entry_reset(param_entry_t *e);
-    /** @brief 条目级 flush 空实现 (App flush 槽位) */
-    int param_entry_flush_nop(param_entry_t *e);
 
     /* ---- 模块级基类实现 ---- */
     /** @brief 模块标脏 (过滤 READONLY/EXEC 条目) */

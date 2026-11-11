@@ -923,13 +923,6 @@ int param_entry_reset(param_entry_t *e)
     return g_param_data_ops[t].reset(e);
 }
 
-/** @brief 条目级 flush 空实现 (App flush 槽位: App 无硬件, 条目级 flush 为 no-op) */
-int param_entry_flush_nop(param_entry_t *e)
-{
-    (void)e;
-    return PARAM_OK;
-}
-
 /* ---- 模块级基类实现 ---- */
 
 void param_module_mark_dirty(param_module_node_t *m, uint16_t local_id)

@@ -76,7 +76,6 @@ const param_vtable_t app_vtable = {
        校验, 硬件由 param_flush 按 dirty 下发 */
     .write_sync       = param_entry_write_sync_apply,
     .write_raw        = param_entry_write_raw_apply,
-    .flush            = param_entry_flush_nop,
     .save             = param_vtable_save,
     .load             = param_entry_load,
     .reset            = param_entry_reset,

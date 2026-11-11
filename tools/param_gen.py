@@ -283,7 +283,7 @@ def emit_entry(mod, p):
     t = p["type"]
     name = p["name"]
     pid = f"PID_{mod['name'].upper()}_{name.upper()}"
-    mac = ("PARAM_" if mod["vtbl"] == "app" else "PARAM_IP_") + t
+    mac = ("PARAM_APP_" if mod["vtbl"] == "app" else "PARAM_IP_") + t
 
     if t == "EXEC":
         # PARAM_EXEC 自带 PARAM_FLAG_EXEC, 不接受 flags/值
