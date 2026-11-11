@@ -158,10 +158,10 @@ PARAM_UINT(name, id, flags, default, min, max);
 PARAM_STRING(name, id, flags, writable_buf, max_len);
 
 /* 模块: 回调具名字段, 任意顺序/可省略 */
-PARAM_MODULE_DEFINE(name, MODULE_ID, "label",
-                    .ctx = &inst, .init = fn, .write = fn, .flush = fn);
+PARAM_APP_MODULE_DEFINE(name, MODULE_ID, "label",
+                        .ctx = &inst, .init = fn, .write = fn, .flush = fn);
 PARAM_MODULE_INIT(name, params_table);          /* 生成 name_module_init() */
-IP_DRIVER_DEFINE(...) / IP_DRIVER_INIT(...)     /* IP 同构, 生成 _module 后缀 */
+PARAM_IP_MODULE_DEFINE(...)                     /* IP 同构, 生成 _module 后缀 */
 ```
 
 ### 4.5 存储后端接口（移植新后端）
@@ -193,8 +193,8 @@ X(MODULE_EXAMPLE, 0x04u)
 /* 2. 模块文件: 条目 + 表 + 模块 + 注册 (回调具名字段) */
 PARAM_UINT(exp_gain, PID_EXP_GAIN, PARAM_FLAG_PERSIST, 10, 1, 100);
 PARAM_TABLE(exp_params, &exp_gain.base);
-PARAM_MODULE_DEFINE(exp, MODULE_EXAMPLE, "Example",
-                    .ctx = &g_inst, .write = exp_write, .flush = exp_flush);
+PARAM_APP_MODULE_DEFINE(exp, MODULE_EXAMPLE, "Example",
+                        .ctx = &g_inst, .write = exp_write, .flush = exp_flush);
 PARAM_MODULE_INIT(exp, exp_params);
 
 /* 3. init 胶水 register_modules() 补一行 exp_module_init(); */

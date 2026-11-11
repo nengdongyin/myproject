@@ -39,7 +39,7 @@ extern "C"
 
 /* 本子系统声明 App 派生侧的 vtable 常量: 基类头文件 (param_manager.h)
    只命名基类符号, 派生侧符号由各自的派生头文件声明 (依赖方向
-   派生 → 基类, 无反向)。下方的 PARAM_APP_* / PARAM_MODULE_DEFINE 宏
+   派生 → 基类, 无反向)。下方的 PARAM_APP_* / PARAM_APP_MODULE_DEFINE 宏
    在建表时引用这两个常量, 因此声明必须出现在宏定义之前。 */
 
     /** @brief App 参数级 vtable 实现 (定义于 app_param_manager.c) */
@@ -155,7 +155,7 @@ extern "C"
  *
  * 使用示例:
  * @code
- * PARAM_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
+ * PARAM_APP_MODULE_DEFINE(auto_exp, MODULE_AUTO_EXP, "AutoExposure",
  *                     .ctx   = &g_ae_instance,
  *                     .init  = ae_init,
  *                     .write = ae_write,
@@ -176,9 +176,13 @@ extern "C"
  *                    .exec / .flush; 省略字段为 NULL —— 具名可任意顺序,
  *                    杜绝位置参数写反)
  */
-#define PARAM_MODULE_DEFINE(_mod_name, _mod_id, _label, ...)          \
+#define PARAM_APP_MODULE_DEFINE(_mod_name, _mod_id, _label, ...)      \
     PARAM_MODULE_DEFINE_CORE(&app_module_vtable, _mod_name##_module,  \
                              _mod_id, _label, __VA_ARGS__)
+
+/* 传统拼写别名: 规范名为 PARAM_APP_MODULE_DEFINE (与 IP 侧
+   PARAM_IP_MODULE_DEFINE 对称); PARAM_MODULE_DEFINE 供既有代码继续使用 */
+#define PARAM_MODULE_DEFINE PARAM_APP_MODULE_DEFINE
 
 /**
  * @brief 定义模块注册函数 (一键式)

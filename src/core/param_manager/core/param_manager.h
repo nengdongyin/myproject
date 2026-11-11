@@ -51,7 +51,8 @@ extern "C"
      *   - 刷新:  param_flush         命令: param_exec
      *   - 维护:  param_reapply(缓存重放) / param_validate_all(全量裁剪) /
      *            param_set_range(动态范围)
-     *   - 注册:  PARAM_MODULE_DEFINE + PARAM_TABLE + PARAM_MODULE_INIT;
+     *   - 注册:  PARAM_APP_MODULE_DEFINE / PARAM_IP_MODULE_DEFINE + PARAM_TABLE
+     *            + PARAM_MODULE_INIT;
      *            ID/顺序登记见 module_ids.h 单一清单 (PARAM_MODULE_LIST)
      *   - 排障:  param_strerror() / param_dump() / param_get_stats()
      */
@@ -1395,12 +1396,12 @@ int param_migrate_storage(const param_storage_drv_t *storage,
 /**
  * @name 模块实例定义核心宏 (框架内部)
  *
- * PARAM_MODULE_DEFINE / IP_DRIVER_DEFINE 与 PARAM_MODULE_INIT /
- * IP_DRIVER_INIT 的共享初始化器。唯一行为差异 (vtable / 注册函数 /
- * 变量名) 由调用方通过参数注入, 与 PARAM_ENTRY_* 核心宏同模式。
+ * PARAM_APP_MODULE_DEFINE / PARAM_IP_MODULE_DEFINE 与 PARAM_MODULE_INIT
+ * 的共享初始化器。唯一行为差异 (vtable / 注册函数 / 变量名) 由调用方
+ * 通过参数注入, 与 PARAM_ENTRY_* 核心宏同模式。
  *
- * @note 应用层代码严禁直接使用本组宏。请使用 PARAM_MODULE_DEFINE /
- *       IP_DRIVER_DEFINE / PARAM_MODULE_INIT / IP_DRIVER_INIT。
+ * @note 应用层代码严禁直接使用本组宏。请使用 PARAM_APP_MODULE_DEFINE /
+ *       PARAM_IP_MODULE_DEFINE / PARAM_MODULE_INIT。
  * @{
  */
 

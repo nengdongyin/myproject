@@ -410,8 +410,8 @@ def emit_scaffold(mod, ps, src, base):
     ctx_var = mod.get("ctx") or f"g_{name}"
     ctx_type = mod.get("ctx_type") or f"{name}_ctx_t"
     ip = mod["vtbl"] == "ip"
-    define_mac = "IP_DRIVER_DEFINE" if ip else "PARAM_MODULE_DEFINE"
-    init_mac = "IP_DRIVER_INIT" if ip else "PARAM_MODULE_INIT"
+    define_mac = "PARAM_IP_MODULE_DEFINE" if ip else "PARAM_APP_MODULE_DEFINE"
+    init_mac = "PARAM_MODULE_INIT"
     mod_id = mod.get("enum") or f"0x{mod['id']:02X}u"
 
     writable = [p for p in ps if p["type"] != "EXEC"]

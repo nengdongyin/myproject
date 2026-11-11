@@ -79,9 +79,9 @@ typed 包装 (`param_write_u32` / `param_read_f32` 等) **校验类型**, 错配
 1. `module_ids.h` 的 `PARAM_MODULE_LIST` 登记**一行** (ID + 初始化顺序同时生成;
    行序 = init/flush 顺序, IP 硬件在前)。
 2-5. 新模块文件: PID 宏们 + 条目宏们 + `PARAM_TABLE` +
-   `PARAM_MODULE_DEFINE(...)` / `PARAM_MODULE_INIT(...)`
-   (IP 用 `IP_DRIVER_DEFINE` / `IP_DRIVER_INIT`; 两者同构, 生成 `_module` 后缀,
-   注册统一走 `param_module_register`)。
+   `PARAM_APP_MODULE_DEFINE(...)` / `PARAM_MODULE_INIT(...)`
+   (IP 用 `PARAM_IP_MODULE_DEFINE`; 两者同构, 生成 `_module` 后缀,
+   注册统一走 `PARAM_MODULE_INIT` → `param_module_register`)。
 6. `src/app/init/param_manager_init.c` 的 `register_modules()` 补一行
    `xxx_module_init();` (或开启 `PARAM_MODULE_AUTO_REGISTER_ENABLE` 免此行,
    需要链接脚本支持 `.rodata.param_modules` 段)。

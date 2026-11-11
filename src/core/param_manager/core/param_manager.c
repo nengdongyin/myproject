@@ -615,6 +615,37 @@ static param_module_t *param_entry_module(const param_entry_t *e)
 
 /* ---- 参数级基类实现 ---- */
 
+/**
+ * @brief 从模块 read 回调读取实时值并回写缓存 (read-from-hw 唯一实现)
+ *
+ * param_entry_read (阶段 1) 与 param_read_hw 共用:
+ *   防御性清零 → m->read → 成功后回写缓存。
+ * 回写前校验 entry_type: 越界返回 PARAM_ERR_TYPE_MISMATCH (条目损坏,
+ * 不静默 —— 与 param_read_hw / param_read_cache 的越界语义一致)。
+ *
+ * @param m     非空模块 (须已通过 param_entry_module 取得且具备 read 回调)
+ * @param e     参数条目
+ * @param value [out] 接收实时值
+ * @return PARAM_OK 已读取并回写缓存; 其他为错误 (未回写)
+ */
+static int param_read_from_hw(param_module_t *m, param_entry_t *e,
+                              param_value_t *value)
+{
+    memset(value, 0, sizeof(*value));
+    int ret = m->read(m->ctx, e->param_id, value);
+    if (ret != PARAM_OK)
+        return ret;
+
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT)
+        return PARAM_ERR_TYPE_MISMATCH;
+
+    system_lock(SYS_LOCK_PARAM);
+    g_param_data_ops[t].cache_update(e, *value);
+    system_unlock(SYS_LOCK_PARAM);
+    return PARAM_OK;
+}
+
 int param_entry_read(param_entry_t *e, param_value_t *value)
 {
     param_module_t *m = param_entry_module(e);
@@ -622,19 +653,10 @@ int param_entry_read(param_entry_t *e, param_value_t *value)
     /* 阶段 1: 优先通过 read 回调获取实时值。成功则回写缓存并返回。
        (App: 业务实时计算/硬件查询; IP: driver 硬件寄存器读取) */
     if (m && m->read) {
-        /* 防御性清零: 回调未处理该 id 却返回 PARAM_OK 时,
-           输出参数不会携带栈上随机值污染 cache */
-        memset(value, 0, sizeof(*value));
-        int ret = m->read(m->ctx, e->param_id, value);
-        if (ret == PARAM_OK) {
-            param_type_t t = entry_type(e);
-            if (t < PARAM_TYPE_COUNT) {
-                system_lock(SYS_LOCK_PARAM);
-                g_param_data_ops[t].cache_update(e, *value);
-                system_unlock(SYS_LOCK_PARAM);
-            }
+        int ret = param_read_from_hw(m, e, value);
+        if (ret == PARAM_OK)
             return PARAM_OK;
-        }
+        /* read 失败 / 条目类型损坏 → 降级到阶段 2 缓存 */
     }
 
     /* 阶段 2: 无回调 / 回调失败 / 硬件未就绪 → 静默回退缓存
@@ -644,44 +666,57 @@ int param_entry_read(param_entry_t *e, param_value_t *value)
     return g_param_data_ops[t].read(e, value);
 }
 
+/* param_entry_write_core 的写模式标志 */
+enum {
+    PARAM_WRITE_F_APPLY      = 1u << 0, /* 调 m->write (apply 校验 / 硬件直通) */
+    PARAM_WRITE_F_IMMEDIATE  = 1u << 1, /* 成功清脏 + 写失败不回滚 (sync 语义) */
+    PARAM_WRITE_F_EXEC_ROUTE = 1u << 2, /* EXEC 路由到 exec; 否则报 EXEC_ONLY */
+};
+
 /**
- * @brief 参数写入基类实现 — pre_write → 缓存更新 + 标脏 (无 apply)
+ * @brief EXEC 命令路由 — 合法 EXEC 条目调 m->exec, 成功清脏
  *
- * IP 的 write / write_cache 与 App 的 write_cache 均指向本实现。
+ * write_sync / write_sync_apply / write_raw 三处 EXEC 路由点共用。
+ * 调用方须已取得非空 module (m)。
  */
-int param_entry_write(param_entry_t *e, param_value_t value)
+static int param_entry_exec_dispatch(param_module_t *m, param_entry_t *e,
+                                     param_value_t value)
 {
-    param_module_t *m = param_entry_module(e);
-    if (!m) return PARAM_ERR_NOT_FOUND;
-
-    param_type_t t = entry_type(e);
-    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
-
-    if (entry_flags(e) & PARAM_FLAG_EXEC)
-        return param_entry_is_exec(e) ? PARAM_ERR_EXEC_ONLY : PARAM_ERR_TYPE_MISMATCH;
-
-    if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
-
-    if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
-
-    system_lock(SYS_LOCK_PARAM);
-    g_param_data_ops[t].cache_update(e, value);
-    param_entry_mark_dirty(e);
-    system_unlock(SYS_LOCK_PARAM);
-    return PARAM_OK;
+    if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
+    if (m->exec) {
+        int ret = m->exec(m->ctx, e->param_id, value);
+        if (ret == PARAM_OK) {
+            system_lock(SYS_LOCK_PARAM);
+            param_entry_clear_dirty(e);
+            system_unlock(SYS_LOCK_PARAM);
+        }
+        return ret;
+    }
+    return PARAM_ERR_NOT_FOUND;
 }
 
 /**
- * @brief 参数写入 (带 apply) — 基类写入 + 模块业务回调
+ * @brief 参数写入统一核心 — 前缀校验 + 提交策略分派
  *
- * App 专用槽位。回调返回非 OK 时**缓存无变化**:
- *   - 值类型: 缓存先行 (回调内 param_read / param_save_one 反映新值),
- *     拒绝时回滚到先行快照;
- *   - BLOB/STRING: 回调先行 (新 payload 经 value.ptr 传递, 缓存保持旧值),
- *     接受后才提交字节级拷贝 —— 单缓冲配置没有备份缓冲, 字节级回滚
- *     不可行, 以"先验后写"达成同一契约: 返回错误 = 缓存未变。
+ * 四个公开写入入口 (param_entry_write / write_apply / write_sync /
+ * write_sync_apply) 收敛为对本函数的薄包装, 差异由 flags 表达:
+ *   - PARAM_WRITE_F_APPLY:      调 m->write (apply 校验 / 硬件直通)
+ *   - PARAM_WRITE_F_IMMEDIATE:  成功清脏 + 写失败不回滚 (sync 语义)
+ *   - PARAM_WRITE_F_EXEC_ROUTE: EXEC 路由到 exec; 否则报 EXEC_ONLY
+ *
+ * 提交策略三种 (与改写前逐点等价):
+ *   1. 无 apply (write):                 缓存 + 标脏
+ *   2. apply + immediate (write_sync):   缓存先行 + 直通 + 清脏 (失败留脏)
+ *   3. apply 非 immediate (write_apply / write_sync_apply):
+ *      值类型缓存先行 + 回调 + 失败回滚; BLOB/STRING 回调先行 + 标脏
+ *
+ * @param e     参数条目
+ * @param value 待写入值 (pre_write 已拒绝超范围, 不做裁剪)
+ * @param flags 写模式标志 (PARAM_WRITE_F_*)
+ * @return PARAM_OK 成功, 或其他错误码
  */
-int param_entry_write_apply(param_entry_t *e, param_value_t value)
+static int param_entry_write_core(param_entry_t *e, param_value_t value,
+                                  unsigned flags)
 {
     param_module_t *m = param_entry_module(e);
     if (!m) return PARAM_ERR_NOT_FOUND;
@@ -689,13 +724,48 @@ int param_entry_write_apply(param_entry_t *e, param_value_t value)
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
-    if (entry_flags(e) & PARAM_FLAG_EXEC)
+    if (entry_flags(e) & PARAM_FLAG_EXEC) {
+        if (flags & PARAM_WRITE_F_EXEC_ROUTE)
+            return param_entry_exec_dispatch(m, e, value);
         return param_entry_is_exec(e) ? PARAM_ERR_EXEC_ONLY : PARAM_ERR_TYPE_MISMATCH;
+    }
 
     if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
-
     if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
 
+    bool apply     = (flags & PARAM_WRITE_F_APPLY) != 0;
+    bool immediate = (flags & PARAM_WRITE_F_IMMEDIATE) != 0;
+
+    if (!apply) {
+        /* 分支 1: 纯缓存写 (param_entry_write) */
+        system_lock(SYS_LOCK_PARAM);
+        g_param_data_ops[t].cache_update(e, value);
+        param_entry_mark_dirty(e);
+        system_unlock(SYS_LOCK_PARAM);
+        return PARAM_OK;
+    }
+
+    if (immediate) {
+        /* 分支 2: 同步直通 (param_entry_write_sync) — 缓存先行,
+           写失败不回滚 (保留脏位), 成功清脏 */
+        system_lock(SYS_LOCK_PARAM);
+        g_param_data_ops[t].cache_update(e, value);
+        system_unlock(SYS_LOCK_PARAM);
+
+        if (m->write) {
+            int ret = m->write(m->ctx, e->param_id, value);
+            if (ret != PARAM_OK)
+                return ret;
+        }
+
+        system_lock(SYS_LOCK_PARAM);
+        param_entry_clear_dirty(e);
+        system_unlock(SYS_LOCK_PARAM);
+        return PARAM_OK;
+    }
+
+    /* 分支 3: apply (param_entry_write_apply / write_sync_apply) —
+       值类型缓存先行 + 回调 + 失败回滚; BLOB/STRING 回调先行 + 标脏 */
     bool is_ptr = (t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING);
     param_value_t old_cache;
 
@@ -727,106 +797,53 @@ int param_entry_write_apply(param_entry_t *e, param_value_t value)
     system_lock(SYS_LOCK_PARAM);
     param_entry_mark_dirty(e);
     system_unlock(SYS_LOCK_PARAM);
-
     return PARAM_OK;
 }
 
 /**
- * @brief 同步写入 (IP 槽位) — EXEC 路由 / READONLY 过滤 / 缓存提交 + 直通硬件
+ * @brief 参数写入基类实现 — pre_write → 缓存更新 + 标脏 (无 apply)
  *
- * IP 参数: write 回调存在时直通硬件, 成功后清脏 (值已生效, 无需 flush
- * 重试); 回调缺失时只到缓存层并清脏 (与 param_write_sync 的公开契约一致,
- * write 是可选钩子, 不构成错误)。
+ * IP 的 write / write_cache 与 App 的 write_cache 均指向本实现。
+ */
+int param_entry_write(param_entry_t *e, param_value_t value)
+{
+    return param_entry_write_core(e, value, 0);
+}
+
+/**
+ * @brief 参数写入 (带 apply) — 缓存 + 模块业务回调, 拒绝回滚缓存
  *
- * 缓存先行 (IP 不回滚): 硬件写失败时缓存保持新值、脏位保留,
- * 由 param_flush 重试收敛 (flush 重试模型需要)。
+ * App 专用槽位。回调返回非 OK 时缓存无变化: 值类型缓存先行 + 回滚,
+ * BLOB/STRING 回调先行 (先验后写)。
+ */
+int param_entry_write_apply(param_entry_t *e, param_value_t value)
+{
+    return param_entry_write_core(e, value, PARAM_WRITE_F_APPLY);
+}
+
+/**
+ * @brief 同步写入 (IP 槽位) — EXEC 路由 / 缓存先行 + write 直通硬件 / 成功清脏
  *
- * @param e     参数条目
- * @param value 待写入值 (pre_write 已拒绝超范围, 不做裁剪)
- * @return PARAM_OK 成功, 或其他错误码
+ * write 回调存在时直通硬件 (值已生效, 清脏); 缺失时只到缓存层并清脏。
+ * 缓存先行且不回滚: 硬件写失败保留脏位, 由 param_flush 重试收敛。
  */
 int param_entry_write_sync(param_entry_t *e, param_value_t value)
 {
-    param_module_t *m = param_entry_module(e);
-    if (!m) return PARAM_ERR_NOT_FOUND;
-
-    param_type_t t = entry_type(e);
-    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
-
-    if (entry_flags(e) & PARAM_FLAG_EXEC) {
-        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
-        if (m->exec) {
-            int ret = m->exec(m->ctx, e->param_id, value);
-            if (ret == PARAM_OK) {
-                system_lock(SYS_LOCK_PARAM);
-                param_entry_clear_dirty(e);
-                system_unlock(SYS_LOCK_PARAM);
-            }
-            return ret;
-        }
-        return PARAM_ERR_NOT_FOUND;
-    }
-
-    if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
-
-    if (!g_param_pre_write[t](e, &value)) return PARAM_ERR_OUT_OF_RANGE;
-
-    /* 缓存先行 (IP 有意不回滚): 回调执行期间缓存已为新值;
-       硬件写失败保留脏位, 由 flush 重试收敛 */
-    system_lock(SYS_LOCK_PARAM);
-    g_param_data_ops[t].cache_update(e, value);
-    system_unlock(SYS_LOCK_PARAM);
-
-    /* write 为可选钩子: 缺失时"同步"只到缓存层, 不报错 */
-    if (m->write) {
-        int ret = m->write(m->ctx, e->param_id, value);
-        if (ret != PARAM_OK)
-            return ret;
-    }
-
-    system_lock(SYS_LOCK_PARAM);
-    param_entry_clear_dirty(e);
-    system_unlock(SYS_LOCK_PARAM);
-    return PARAM_OK;
+    return param_entry_write_core(e, value,
+                                  PARAM_WRITE_F_APPLY | PARAM_WRITE_F_IMMEDIATE |
+                                  PARAM_WRITE_F_EXEC_ROUTE);
 }
 
 /**
  * @brief 同步写入 (App 槽位) — EXEC 路由 + apply 校验 + 标脏
  *
- * App 参数: "同步" = 立即执行 apply 校验并**标脏**, 硬件由
- * param_flush 按 dirty 下发 (与 param_write 一致, 值在下一轮 flush
- * 到达硬件)。
- *
+ * "同步" = 立即执行 apply 校验并标脏, 硬件仍由 param_flush 下发。
  * EXEC 路由与 IP 侧相同 (命令与缓存/脏位无关)。
- *
- * @param e     参数条目
- * @param value 待写入值
- * @return PARAM_OK 成功, 或其他错误码
  */
 int param_entry_write_sync_apply(param_entry_t *e, param_value_t value)
 {
-    param_module_t *m = param_entry_module(e);
-    if (!m) return PARAM_ERR_NOT_FOUND;
-
-    param_type_t t = entry_type(e);
-    if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
-
-    if (entry_flags(e) & PARAM_FLAG_EXEC) {
-        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
-        if (m->exec) {
-            int ret = m->exec(m->ctx, e->param_id, value);
-            if (ret == PARAM_OK) {
-                system_lock(SYS_LOCK_PARAM);
-                param_entry_clear_dirty(e);
-                system_unlock(SYS_LOCK_PARAM);
-            }
-            return ret;
-        }
-        return PARAM_ERR_NOT_FOUND;
-    }
-
-    /* apply 校验 + 标脏 (拒绝回滚) —— 与 param_write 同语义 */
-    return param_entry_write_apply(e, value);
+    return param_entry_write_core(e, value,
+                                  PARAM_WRITE_F_APPLY | PARAM_WRITE_F_EXEC_ROUTE);
 }
 
 /** @brief write_raw 公共主体 — EXEC 路由 / BLOB 长度校验 / 值类型转换 + 委托 write_fn */
@@ -839,20 +856,8 @@ static int param_entry_write_raw_to(param_entry_t *e, const uint8_t *data, uint1
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) return PARAM_ERR_TYPE_MISMATCH;
 
-    if (entry_flags(e) & PARAM_FLAG_EXEC) {
-        if (!param_entry_is_exec(e)) return PARAM_ERR_TYPE_MISMATCH;
-        if (m->exec) {
-            param_value_t arg = { .ptr = (void *)data };
-            int ret = m->exec(m->ctx, e->param_id, arg);
-            if (ret == PARAM_OK) {
-                system_lock(SYS_LOCK_PARAM);
-                param_entry_clear_dirty(e);
-                system_unlock(SYS_LOCK_PARAM);
-            }
-            return ret;
-        }
-        return PARAM_ERR_NOT_FOUND;
-    }
+    if (entry_flags(e) & PARAM_FLAG_EXEC)
+        return param_entry_exec_dispatch(m, e, (param_value_t){ .ptr = (void *)data });
 
     if (entry_flags(e) & PARAM_FLAG_READONLY) return PARAM_ERR_READONLY;
 
@@ -1184,8 +1189,20 @@ int param_write_raw(uint32_t param_id, const uint8_t *data, uint16_t len)
     return PARAM_OK;
 }
 
-/** @brief 读取参数当前缓存值 */
-int param_read(uint32_t param_id, param_value_t *value)
+/**
+ * @brief 读入口公共前缀 — 框架就绪 + 输出指针 + 条目存在性校验
+ *
+ * param_read / param_read_cache / param_read_hw 共用的第一步
+ * (与写侧 param_write_resolve 对称)。
+ *
+ * @param param_id 参数 ID
+ * @param value    输出指针 (NULL 视为参数错误)
+ * @param[out] out 解析到的条目 (仅在返回 PARAM_OK 时有效)
+ * @return PARAM_OK 成功; PARAM_ERR_NOT_INITIALIZED 未初始化;
+ *         PARAM_ERR_INVALID_ID value 为 NULL 或参数不存在
+ */
+static int param_read_resolve(uint32_t param_id, param_value_t *value,
+                              param_entry_t **out)
 {
     if (!g_pm.initialized)
         return PARAM_ERR_NOT_INITIALIZED;
@@ -1195,31 +1212,36 @@ int param_read(uint32_t param_id, param_value_t *value)
     param_entry_t *e = param_entry_find(param_id);
     if (!e)
         return PARAM_ERR_INVALID_ID;
-    int ret = e->vtable->read(e, value);
-    return ret;
+
+    *out = e;
+    return PARAM_OK;
+}
+
+/** @brief 读取参数当前缓存值 */
+int param_read(uint32_t param_id, param_value_t *value)
+{
+    param_entry_t *e;
+    int ret = param_read_resolve(param_id, value, &e);
+    if (ret != PARAM_OK)
+        return ret;
+    return e->vtable->read(e, value);
 }
 
 int param_read_cache(uint32_t param_id, param_value_t *value)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_INITIALIZED;
-    if (!value)
-        return PARAM_ERR_INVALID_ID;
+    param_entry_t *e;
+    int ret = param_read_resolve(param_id, value, &e);
+    if (ret != PARAM_OK)
+        return ret;
 
     system_lock(SYS_LOCK_PARAM);
-    param_entry_t *e = param_entry_find(param_id);
-    if (!e) {
-        system_unlock(SYS_LOCK_PARAM);
-        return PARAM_ERR_INVALID_ID;
-    }
-
     param_type_t t = entry_type(e);
     if (t >= PARAM_TYPE_COUNT) {
         system_unlock(SYS_LOCK_PARAM);
         return PARAM_ERR_TYPE_MISMATCH;
     }
 
-    int ret = g_param_data_ops[t].read(e, value);
+    ret = g_param_data_ops[t].read(e, value);
     system_unlock(SYS_LOCK_PARAM);
     return ret;
 }
@@ -1238,31 +1260,16 @@ int param_read_cache(uint32_t param_id, param_value_t *value)
  */
 int param_read_hw(uint32_t param_id, param_value_t *value)
 {
-    if (!g_pm.initialized)
-        return PARAM_ERR_NOT_INITIALIZED;
-    if (!value)
-        return PARAM_ERR_INVALID_ID;
-
-    param_entry_t *e = param_entry_find(param_id);
-    if (!e)
-        return PARAM_ERR_INVALID_ID;
+    param_entry_t *e;
+    int ret = param_read_resolve(param_id, value, &e);
+    if (ret != PARAM_OK)
+        return ret;
 
     param_module_t *m = param_entry_module(e);
     if (!m || !m->read)
         return PARAM_ERR_NOT_FOUND;
 
-    memset(value, 0, sizeof(*value));
-    int ret = m->read(m->ctx, e->param_id, value);
-    if (ret != PARAM_OK)
-        return ret;
-
-    param_type_t t = entry_type(e);
-    if (t >= PARAM_TYPE_COUNT)
-        return PARAM_ERR_TYPE_MISMATCH;
-    system_lock(SYS_LOCK_PARAM);
-    g_param_data_ops[t].cache_update(e, *value);
-    system_unlock(SYS_LOCK_PARAM);
-    return PARAM_OK;
+    return param_read_from_hw(m, e, value);
 }
 
 /**
@@ -1286,6 +1293,26 @@ static int param_replay_clamped(param_entry_t *e, param_value_t v)
     return e->vtable->write(e, v);
 }
 
+/**
+ * @brief 维护路径公共尾巴 — 裁剪重放 + 收尾 (标脏 + notify)
+ *
+ * param_reapply / param_load_one / param_reset_one 共用:
+ *   裁剪重放 (param_replay_clamped) → 成功后标脏并通知 (param_write_complete)。
+ *
+ * @param param_id 参数 ID
+ * @param e        参数条目
+ * @param value    待重放的值 (reapply 传 read_cache 快照; load/reset 传实时缓存)
+ * @return PARAM_OK 成功, 或其他错误码
+ */
+static int param_replay_complete(uint32_t param_id, param_entry_t *e,
+                                 param_value_t value)
+{
+    int ret = param_replay_clamped(e, value);
+    if (ret == PARAM_OK)
+        param_write_complete(param_id, e, true);
+    return ret;
+}
+
 int param_reapply(uint32_t param_id)
 {
     if (!g_pm.initialized)
@@ -1306,13 +1333,7 @@ int param_reapply(uint32_t param_id)
         return ret;
 
     /* 维护语义: 越界旧值裁剪收敛而非拒绝 */
-    ret = param_replay_clamped(e, cached);
-    if (ret != PARAM_OK)
-        return ret;
-
-    param_write_complete(param_id, e, true);
-
-    return PARAM_OK;
+    return param_replay_complete(param_id, e, cached);
 }
 
 /**
@@ -2489,12 +2510,9 @@ int param_load_one(uint32_t param_id)
     system_unlock(SYS_LOCK_PARAM);
 
     /* apply 重新校验恢复值 (多分区兼容), 重放前对越界值裁剪收敛;
-       write_complete 补上模块标脏与 notify */
-    if (ret == PARAM_OK) {
-        ret = param_replay_clamped(e, *entry_cache(e));
-        if (ret == PARAM_OK)
-            param_write_complete(param_id, e, true);
-    }
+       param_replay_complete 补上模块标脏与 notify */
+    if (ret == PARAM_OK)
+        ret = param_replay_complete(param_id, e, *entry_cache(e));
 
     return ret;
 }
@@ -2608,11 +2626,8 @@ int param_reset_one(uint32_t param_id)
 
     /* apply 重新校验默认值 + 恢复 entry 级 dirty; 单条重置与写入路径
        同样触发 notify (携带缓存生效值) */
-    if (ret == PARAM_OK) {
-        ret = param_replay_clamped(e, *entry_cache(e));
-        if (ret == PARAM_OK)
-            param_write_complete(param_id, e, true);
-    }
+    if (ret == PARAM_OK)
+        ret = param_replay_complete(param_id, e, *entry_cache(e));
 
     return ret;
 }

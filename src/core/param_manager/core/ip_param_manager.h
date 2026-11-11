@@ -73,7 +73,7 @@ extern "C"
      *
      *  IP 无独立注册函数: App 与 IP 共用 param_module_register
      *  (定义于 param_manager_internal.h / param_manager.c)。vtable 已由
-     *  IP_DRIVER_DEFINE 写入 node, 注册时无需也不能再指定。
+     *  PARAM_IP_MODULE_DEFINE 写入 node, 注册时无需也不能再指定。
      * ================================================================ */
 
     /** @brief IP 参数级 vtable 实现 (定义于 ip_param_manager.c) */
@@ -171,13 +171,13 @@ extern "C"
 /** @} */
 
 /**
- * @brief 定义 IP Driver 实例 (静态分配)
+ * @brief 定义 IP 模块实例 (静态分配)
  *
  * 参数顺序按生命周期排列: driver → init → read → write → exec → flush
  *
  * 使用示例:
  * @code
- * IP_DRIVER_DEFINE(sensor, IP_SENSOR, "OV4689_Sensor_IP",
+ * PARAM_IP_MODULE_DEFINE(sensor, IP_SENSOR, "OV4689_Sensor_IP",
  *                  .ctx  = &g_sensor_dev,
  *                  .init = sensor_init_cb,
  *                  .read = sensor_read,
@@ -191,25 +191,25 @@ extern "C"
  * @param ...      具名字段初始化器 (.ctx / .init / .read / .write /
  *                 .exec / .flush; 省略字段为 NULL)
  */
-#define IP_DRIVER_DEFINE(_ip_name, _ip_id, _label, ...)               \
+#define PARAM_IP_MODULE_DEFINE(_ip_name, _ip_id, _label, ...)         \
     PARAM_MODULE_DEFINE_CORE(&ip_module_vtable, _ip_name##_module,    \
                              _ip_id, _label, __VA_ARGS__)
 
+/* 传统拼写别名: 规范名为 PARAM_IP_MODULE_DEFINE (与 App 侧
+   PARAM_APP_MODULE_DEFINE 对称); IP_DRIVER_DEFINE 供既有代码继续使用 */
+#define IP_DRIVER_DEFINE PARAM_IP_MODULE_DEFINE
+
 /**
- * @brief 定义 IP Driver 注册函数 (注册入口与 App 共用 param_module_register)
+ * @brief IP 模块注册 — 与 App 共用 PARAM_MODULE_INIT (传统拼写别名)
  *
- * 开启 PARAM_MODULE_AUTO_REGISTER_ENABLE 时同时生成 linker-section
- * 自动注册条目 (与 PARAM_MODULE_INIT 同机制); 未开启时由启动代码手动调用。
+ * IP 与 App 的注册入口相同 (param_module_register), 无需区分: 统一使用
+ * PARAM_MODULE_INIT (生成 _name##_module_init)。IP_DRIVER_INIT 是它的
+ * 等价别名, 供既有代码继续使用。
  *
- * @param _ip_name IP 实例名 (与 IP_DRIVER_DEFINE 中相同)
- * @param _entries 参数表数组
+ * @note 旧实现曾生成 _name##_init 后缀 (与 _module 实例名不一致),
+ *       现统一为 _name##_module_init。
  */
-#define IP_DRIVER_INIT(_ip_name, _entries)                            \
-    PARAM_MODULE_INIT_CORE(param_module_register,                     \
-                           _ip_name##_init,                           \
-                           _ip_name##_module,                         \
-                           _entries)                                  \
-    PARAM_MODULE_REGISTER(_ip_name, _ip_name##_init)
+#define IP_DRIVER_INIT PARAM_MODULE_INIT
 
     /* ================================================================
      *  编译器段自动注册

@@ -221,6 +221,6 @@ const param_module_vtable_t ip_module_vtable = {
 
 /* ================================================================
  *  注册: 与 App 共用 param_module_register (param_manager.c)。
- *  IP 模块的 vtable 由 IP_DRIVER_DEFINE 写入 node, 注册入口
+ *  IP 模块的 vtable 由 PARAM_IP_MODULE_DEFINE 写入 node, 注册入口
  *  不重复指定。
  * ================================================================ */
