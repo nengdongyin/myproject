@@ -28,21 +28,29 @@ extern "C"
 /**
  * @brief 模块单一清单 (X-macro) — ID 与顺序表的唯一来源
  *
- * @param X(name, id) 每行: 模块标识符名与 ID 数值
+ * @param X(name, id, init_fn, required) 每行: 模块标识符名、ID 数值、
+ *        注册函数名、注册标志。
+ *   - init_fn:  完整注册函数名 (无参 void f(void)), 由 register_modules
+ *               清单驱动直接调用; 与模块 .c 里 PARAM_MODULE_INIT 生成的
+ *               xxx_module_init 一致, 或手动定义的注册函数名。
+ *   - required: 1 = 由 register_modules 清单驱动自动注册;
+ *               0 = 不进入 register_modules (框架内置模块 MODULE_META/
+ *               MODULE_SYS 由 param_service_init 按特殊时序注册, 或预留
+ *               未实现模块)。
  *
  * @attention 行序**即** MODULE_INIT_ORDER 的初始化/flush 顺序:
  *   IP 硬件在前、业务模块在后。ID 数值不必
  *   按行序递增 (枚举成员显式赋值), 调整行序前确认加载/刷硬件顺序契约。
  */
 #define PARAM_MODULE_LIST(X) \
-    X(MODULE_META,      0x00u) \
-    X(IP_SENSOR,        0x80u) \
-    X(IP_ACQUISITION,   0x81u) \
-    X(IP_LVDS_RX,       0x82u) \
-    X(IP_PWM,           0x83u) \
-    X(MODULE_VSC_LITE,  0x03u) \
-    X(MODULE_AUTO_EXP,  0x01u) \
-    X(MODULE_SYS,       0x02u)
+    X(MODULE_META,      0x00u, param_meta_module_init,        0) \
+    X(IP_SENSOR,        0x80u, sensor_module_init,            1) \
+    X(IP_ACQUISITION,   0x81u, ip_acquisition_module_init,    0) \
+    X(IP_LVDS_RX,       0x82u, ip_lvds_rx_module_init,        0) \
+    X(IP_PWM,           0x83u, ip_pwm_module_init,            0) \
+    X(MODULE_VSC_LITE,  0x03u, vsc_lite_control_module_init,  0) \
+    X(MODULE_AUTO_EXP,  0x01u, auto_exp_module_init,          1) \
+    X(MODULE_SYS,       0x02u, param_service_module_init,     0)
 
 /**
  * @brief 清单行数计数器 — 每个 X(...) 展开为 "+1"
@@ -50,7 +58,7 @@ extern "C"
  * 与 PARAM_MODULE_ID_ENUM 配套使用: `0 +1 +1 ...` 得到真实模块总数。
  * 计数只依赖清单**行数**, 与各模块 ID 数值无关 (ID 是稀疏的)。
  */
-#define PARAM_MODULE_COUNT_X(name, id) +1
+#define PARAM_MODULE_COUNT_X(name, id, cname, required) +1
 
 /**
  * @brief 模块 ID 枚举 (由清单生成)
@@ -61,7 +69,7 @@ extern "C"
  */
 typedef enum
 {
-#define PARAM_MODULE_ID_ENUM(name, id) name = id,
+#define PARAM_MODULE_ID_ENUM(name, id, cname, required) name = id,
     PARAM_MODULE_LIST(PARAM_MODULE_ID_ENUM)
 #undef PARAM_MODULE_ID_ENUM
     /** @brief 清单登记的真实模块总数 (PARAM_MODULE_LIST 行数, 增删行自动同步)
@@ -91,7 +99,7 @@ typedef enum
  *   2. param_check_module_order() 把"已注册但不在本表"的模块计入
  *      flush_order_miss_count 并返回 PARAM_ERR_NOT_FOUND，遗漏会让自检失败。
  */
-#define PARAM_MODULE_ORDER_X(name, id) name,
+#define PARAM_MODULE_ORDER_X(name, id, cname, required) name,
 /** 顺序表展开 = 清单成员名的逗号列表 (由 PARAM_MODULE_LIST 生成) */
 #define MODULE_INIT_ORDER PARAM_MODULE_LIST(PARAM_MODULE_ORDER_X)
 

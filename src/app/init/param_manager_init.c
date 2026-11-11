@@ -22,8 +22,7 @@
 #include "param_storage_flashdb.h"
 #include "param_storage_iniparser.h"
 #include "param_storage_mkv.h"
-#include "sensor_module.h"
-#include "auto_exp_control.h"
+#include "module_ids.h"
 #include "ip_param_manager.h"
 #include "param_dump.h"
 #include "param_service.h"
@@ -165,13 +164,28 @@ static const param_storage_drv_t *param_storage_create_selected(void)
  * @brief 手动模块注册清单 (PARAM_MODULE_AUTO_REGISTER_ENABLE=0 时由
  *        param_boot_standard 调用; 开启自动注册时由链接段注册, 本函数不参与)
  *
- * 模块 ID 与顺序在 module_ids.h 的单一清单中登记;
- * 新增模块时在此补一行注册调用。
+ * 注册调用由 module_ids.h 的 PARAM_MODULE_LIST 单一清单驱动:
+ *   - 文件作用域的 PM_EXTERN_X 为每个 required=1 模块生成
+ *     extern void init_fn(void); (替代逐个 #include 模块头文件);
+ *   - register_modules 内的 PM_CALL_X 展开为逐个 init_fn(); 调用。
+ * 新增模块 = 在清单登记一行 (name, id, init_fn, required=1), 无需再手写调用;
+ * init_fn 写错 → 链接报 undefined reference (编译期即暴露, 而非运行时静默)。
  */
+
+/* required=1 → 生成 extern 声明; required=0 → 空 (不引用预留模块符号) */
+#define PM_EXTERN_IF_1(init_fn) extern void init_fn(void);
+#define PM_EXTERN_IF_0(init_fn)
+#define PM_EXTERN_X(name, id, init_fn, required) PM_EXTERN_IF_##required(init_fn)
+PARAM_MODULE_LIST(PM_EXTERN_X);
+
+/* required=1 → 生成调用; required=0 → 空 */
+#define PM_CALL_IF_1(init_fn) init_fn();
+#define PM_CALL_IF_0(init_fn)
+#define PM_CALL_X(name, id, init_fn, required) PM_CALL_IF_##required(init_fn)
+
 static void register_modules(void)
 {
-    sensor_module_init();
-    auto_exp_module_init();
+    PARAM_MODULE_LIST(PM_CALL_X);
 }
 
 void param_manager_init(void)
