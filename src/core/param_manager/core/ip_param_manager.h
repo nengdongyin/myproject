@@ -72,7 +72,7 @@ extern "C"
      *  注册 (与 App 共用同一入口)
      *
      *  IP 无独立注册函数: App 与 IP 共用 param_module_register
-     *  (定义于 param_manager_internal.h / param_manager.c)。vtable 已由
+     *  (声明于 param_manager.h, 定义于 param_manager.c)。vtable 已由
      *  PARAM_IP_MODULE_DEFINE 写入 node, 注册时无需也不能再指定。
      * ================================================================ */
 
@@ -215,7 +215,7 @@ extern "C"
      *  编译器段自动注册
      *
      *  IP 侧与 App 侧共用 param_module_reg_t / PARAM_MODULE_REGISTER /
-     *  param_modules_register_all (位于 app_param_manager.h);
+     *  param_modules_register_all (位于 param_manager.h);
      *  开启 PARAM_MODULE_AUTO_REGISTER_ENABLE 后 IP_DRIVER_INIT
      *  同样进入 linker-section 自动注册。
      * ================================================================ */

@@ -158,10 +158,6 @@ extern "C"
                                    param_entry_t **entries,
                                    uint16_t count);
 
-    /** @brief 注册 App 模块及其参数表 (便捷包装, 内部调用 param_module_register_node) */
-    int param_module_register(param_module_t *module,
-                              param_entry_t **entries,
-                              uint16_t count);
 
     /* ================================================================
      *  vtable 基类实现 — App/IP 共用 (定义于 param_manager.c)

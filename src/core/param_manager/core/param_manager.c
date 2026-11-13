@@ -464,7 +464,7 @@ bool param_module_is_initialized(uint16_t module_id)
 
 /* ================================================================
  *  模块注册 — param_module_register_node() 为通用入口 (App/IP 共用),
- *  param_module_register() 为 App 侧便捷包装。流程见函数注释。
+ *  param_module_register() 为参数表便捷包装 (App/IP 共用)。流程见函数注释。
  * ================================================================ */
 
 /**

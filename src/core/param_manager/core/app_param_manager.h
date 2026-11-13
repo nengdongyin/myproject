@@ -34,7 +34,7 @@ extern "C"
      *   - 回调类型:   param_read_fn / param_write_fn / param_flush_fn /
      *                 param_init_fn / param_exec_fn 定义于 param_manager.h
      *   - 模块结构体: struct param_module 定义于 param_manager.h
-     *   - 注册接口:   param_module_register 声明于 param_manager_internal.h
+     *   - 注册接口:   param_module_register 声明于 param_manager.h
      * ================================================================ */
 
 /* 本子系统声明 App 派生侧的 vtable 常量: 基类头文件 (param_manager.h)
@@ -184,21 +184,6 @@ extern "C"
    PARAM_IP_MODULE_DEFINE 对称); PARAM_MODULE_DEFINE 供既有代码继续使用 */
 #define PARAM_MODULE_DEFINE PARAM_APP_MODULE_DEFINE
 
-/**
- * @brief 定义模块注册函数 (一键式)
- *
- * 同时生成 _mod_name##_module_init() 函数和自动注册条目。
- * 调用此函数即完成 param_module_register。
- *
- * @param _mod_name 模块名
- * @param _params   参数表数组 (PARAM_TABLE 定义)
- */
-#define PARAM_MODULE_INIT(_mod_name, _params)                          \
-    PARAM_MODULE_INIT_CORE(param_module_register,                      \
-                           _mod_name##_module_init,                    \
-                           _mod_name##_module,                         \
-                           _params)                                    \
-    PARAM_MODULE_REGISTER(_mod_name, _mod_name##_module_init)
 
 /**
  * @brief 需要自定义注册尾巴的模块

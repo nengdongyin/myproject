@@ -819,6 +819,32 @@ extern "C"
     /** @brief 查询指定模块是否已完成初始化 (vtable->init 成功后置位, deinit 清除) */
     bool param_module_is_initialized(uint16_t module_id);
 
+    /**
+     * @brief 注册模块及其参数表 — App / IP 共用注册入口
+     *
+     * 模块实例 (含 module_id 与 vtable) 由 PARAM_APP_MODULE_DEFINE /
+     * PARAM_IP_MODULE_DEFINE 生成, 本函数只做注册; PARAM_MODULE_INIT 一步
+     * 完成"定义 + 注册"。需追加自定义初始化时手写注册函数并直接调用本函数。
+     *
+     * @note 与参数级 vtable 无关: 注册不代选 App/IP 类型, node->vtable
+     *       未由 DEFINE 宏写入时拒绝注册 (防"注册成功但后续调用野指针")。
+     *
+     * @param module  模块实例 (DEFINE 宏生成的 xxx_module)
+     * @param entries 参数条目指针数组 (PARAM_TABLE 定义)
+     * @param count   参数数量 (PARAM_COUNT)
+     * @return PARAM_OK 成功;
+     *         PARAM_ERR_NOT_INITIALIZED 框架未 param_init;
+     *         PARAM_ERR_INVALID_ID 入参非法 / node->vtable 未设置;
+     *         PARAM_ERR_ALREADY_REG 该 module_id 已注册;
+     *         PARAM_ERR_NO_MEMORY 哈希表容量不足
+     *
+     * @note 必须在 param_init 之后、param_load_all / param_reset_all
+     *       之前调用; 晚注册的模块需再次 load/reset 才会触发 vtable->init。
+     */
+    int param_module_register(param_module_t *module,
+                              param_entry_t **entries,
+                              uint16_t count);
+
     /* ================================================================
      *  存储后端管理
      * ================================================================ */
@@ -1446,6 +1472,31 @@ int param_migrate_storage(const param_storage_drv_t *storage,
     }
 
 /** @} */
+
+/**
+ * @brief 定义模块注册函数 (一键式) — App / IP 共用
+ *
+ * 同时生成 _mod_name##_module_init() 函数和自动注册条目。
+ * 调用此函数即完成 param_module_register。
+ *
+ * @par 为何定义在基类头
+ *  App 与 IP 的注册入口都是同一个 param_module_register, 本宏不含任何
+ *  子系统差异 (vtable 已由 PARAM_APP_MODULE_DEFINE / PARAM_IP_MODULE_DEFINE
+ *  写入模块实例), 因此按"派生 → 基类"的依赖规则归入本文件, 与
+ *  PARAM_MODULE_INIT_CORE / PARAM_MODULE_REGISTER 同居一处。
+ *
+ * @note 依赖 param_module_register, 声明见本文件 public_api 分组的
+ *       "生命周期" 小节 (App 与 IP 共用的注册入口)。
+ *
+ * @param _mod_name 模块名
+ * @param _params   参数表数组 (PARAM_TABLE 定义)
+ */
+#define PARAM_MODULE_INIT(_mod_name, _params)                          \
+    PARAM_MODULE_INIT_CORE(param_module_register,                      \
+                           _mod_name##_module_init,                    \
+                           _mod_name##_module,                         \
+                           _params)                                    \
+    PARAM_MODULE_REGISTER(_mod_name, _mod_name##_module_init)
 
 /**
  * @brief 定义参数表 (静态数组)
