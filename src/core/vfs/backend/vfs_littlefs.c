@@ -286,6 +286,13 @@ int vfs_littlefs_format_bdev(const vfs_bdev_t *bdev)
     if (!bdev)
         return -EINVAL;
 
+    /* 防御：该 bdev 已挂到某个 lfs_mnt_t 上则拒绝。直接（绕过 vfs_format）格式化
+     * 一个已挂载卷，会把介质擦成新 FS 而原 lfs_t 上下文失效（与 FatFs 后端同理）。
+     * vfs_format 路径下 mount_point_find 已保证未挂载，此检查不会误触。 */
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+        if (g_lfs_mnts[i].used && g_lfs_mnts[i].bdev == bdev)
+            return -EBUSY;
+
     /* 借一个空闲挂载槽的 cfg/buffers（标记占用，避免与 mount 并发借用同槽） */
     lfs_mnt_t *m = NULL;
     for (int i = 0; i < VFS_MAX_MOUNTS; i++)

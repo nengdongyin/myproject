@@ -524,6 +524,7 @@ int vfs_init(void)
     memset(g_bdevs, 0, sizeof(g_bdevs));
     memset(g_bdev_pool, 0, sizeof(g_bdev_pool));
     memset(g_mounts, 0, sizeof(g_mounts));
+    memset(g_mnt_cfgs, 0, sizeof(g_mnt_cfgs));
     memset(g_files, 0, sizeof(g_files));
     memset(g_dirs, 0, sizeof(g_dirs));
 #if VFS_ENABLE_FILE_LOCK

@@ -279,6 +279,14 @@ int vfs_fatfs_format_bdev(const vfs_bdev_t *bdev)
     if (!bdev || bdev->blk_size != VFS_FATFS_SECTOR)
         return -EINVAL;
 
+    /* 防御：该 bdev 已挂到某个 fat_mnt_t 上则拒绝。直接（绕过 vfs_format）格式化
+     * 一个已挂载卷，会擦掉介质而 FatFs[vol]->fs_type 仍非 0，后续 f_open 走
+     * mount_volume 因 fs_type!=0 跳过重新探测，用旧上下文读新 BPB → 行为未定义。
+     * vfs_format 路径下 mount_point_find 已保证未挂载，此检查不会误触。 */
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+        if (g_fat_mnts[i].used && g_fat_disk[g_fat_mnts[i].pdrv] == bdev)
+            return -EBUSY;
+
     BYTE pdrv = 0xFF;
     for (BYTE i = 0; i < VFS_FATFS_VOLUMES; i++)
         if (!g_fat_disk[i])
