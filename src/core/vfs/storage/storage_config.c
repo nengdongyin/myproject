@@ -2,12 +2,14 @@
  * @file storage_config.c
  * @brief 存储资源配置（设备/分区/挂载点）—— 资源与代码分离的落点
  *
- * 布局（RP2350 内部 flash，基址 0x10000000，共 4MB）：
+ * 布局（RP2350 内部 flash，基址 0x10000000，共 4MB；几何单一数据源在
+ * fal_cfg.h 的 FAL_PART_TABLE，见下）：
  * @verbatim
  *   0x000000 .. 0x100000  app           (FAL: app)
  *   0x110000 .. 0x170000  param banks   (FAL: param_boot/factory/user0..3)
- *   0x170000 .. 0x190000  rawflash demo (本文件定义，2×64KB)
- *   0x200000 .. 0x400000  littlefs      (本文件定义，2MB) → /lfs
+ *   0x170000 .. 0x180000  rawflash 0    (FAL: raw0)
+ *   0x180000 .. 0x190000  rawflash 1    (FAL: raw1)
+ *   0x200000 .. 0x400000  littlefs      (FAL: lfs) → /lfs
  * @endverbatim
  *
  * @section table_driven 表驱动装配
@@ -16,12 +18,13 @@
  *   - @ref s_parts     分区几何表（一行 = 一个分区切片）
  *   - @ref s_raw_cfgs  rawflash 文件表（一行 = 一个静态注册"文件"）
  *   - @ref s_mounts    挂载表（一行 = 一个挂载点）
- * **新增/删除一个分区，只需增删 s_parts 的一行（及引用的挂载行）。**
+ * **新增/删除一个分区，只需增删 FAL 分区表（fal_cfg.h）与 s_parts 的一行。**
  *
  * @section fal_role FAL 的角色
- * FAL 仅作为"介质/几何来源之一"出现在本装配层：分区几何来自本文件的表，
- * FAL 只被 storage_drv_fal_* 用来取整块 flash 的 read/prog/erase 与边界。
- * 若不用 FAL，替换 storage_drv_* 与 s_parts 的来源即可，VFS 核心不受影响。
+ * FAL 分区表（fal_cfg.h 的 FAL_PART_TABLE）是 flash 分区的**单一几何数据源**：
+ * 本文件 s_parts 里的 FAL 分区按名字引用（fal_partition_find），offset/len 取自
+ * 分区表，不再硬编码偏移，避免与 param_manager（flashdb/mkv 也用 FAL 分区）
+ * 双源漂移导致重叠。非 FAL 介质（如 SD）仍通过 get_storage 取整介质。
  */
 
 #include "storage_config.h"
@@ -34,25 +37,9 @@
 #include "fal.h"
 #include <errno.h>
 
-/* ---- 物理 flash 设备名（见 fal_cfg.h 的 RP2350_FLASH_DEV_NAME） ---- */
-/** @brief FAL flash 设备名（分区几何的基准设备） */
-#define STOR_FLASH_DEV "rp2350_flash"
-
-/* ---- littlefs 分区几何 ---- */
-/** @brief littlefs 分区起始偏移（设备内相对偏移，须块对齐） */
-#define LFS_OFFSET 0x00200000u
-/** @brief littlefs 分区大小（2MB） */
-#define LFS_SIZE   0x00200000u
-
-/* ---- rawflash 分区（两块 64KB） ---- */
-/** @brief rawflash 第 0 分区起始偏移 */
-#define RAW0_OFFSET 0x00170000u
-/** @brief rawflash 第 0 分区大小（64KB） */
-#define RAW0_SIZE   0x00010000u
-/** @brief rawflash 第 1 分区起始偏移 */
-#define RAW1_OFFSET 0x00180000u
-/** @brief rawflash 第 1 分区大小（64KB） */
-#define RAW1_SIZE   0x00010000u
+/* ---- flash 分区几何：单一数据源在 fal_cfg.h 的 FAL_PART_TABLE ----
+ * 本文件通过 s_parts 里的 fal_part 名字引用（fal_partition_find），
+ * 不再硬编码偏移/大小；详见文件头 @section fal_role。 */
 
 /* ================================================================
  *  配置数据表（唯一改配置处）
@@ -61,9 +48,6 @@
 /** @brief 介质来源获取器：按名字取得（或探测）一个 vfs_storage_t */
 typedef const vfs_storage_t *(*storage_getter_t)(const char *name);
 
-/** @brief size 字段特殊值：0 = 整介质（从 offset 到介质末尾，如 SD 整卡） */
-#define PART_SIZE_WHOLE 0u
-
 /** @brief 分区可选性：介质缺失时的处理方式 */
 typedef enum
 {
@@ -71,50 +55,38 @@ typedef enum
     PART_OPTIONAL = 1, /**< 可选：介质缺失 → 跳过该分区（如未插 SD 卡） */
 } part_optional_t;
 
-/** @brief 分区几何表条目：一行 = 一个分区切片（换介质只换 get_storage） */
+/** @brief 分区几何表条目：一行 = 一个分区切片 */
 typedef struct
 {
     const char *bdev_name;      /**< 分区名（bdev 注册名 + 挂载表引用名） */
-    storage_getter_t get_storage; /**< 介质来源获取器（FAL/SD/... 各自实现） */
-    const char *media_name;     /**< 传给 getter 的名字（flash 设备名 / 磁盘名） */
-    uint32_t offset;            /**< 设备内起始字节偏移（须块对齐） */
-    uint32_t size;              /**< 分区大小（须块对齐；PART_SIZE_WHOLE = 整介质） */
+    storage_getter_t get_storage; /**< 整介质获取器（非 FAL 介质，如 SD；FAL 介质为 NULL） */
+    const char *media_name;     /**< 传给 get_storage 的名字（磁盘名等；FAL 介质为 NULL） */
+    const char *fal_part;       /**< FAL 分区名（几何单一数据源）；非 FAL 介质为 NULL */
     part_optional_t optional;   /**< PART_REQUIRED / PART_OPTIONAL */
 } part_cfg_t;
 
-/** @brief 分区几何表：加一个分区 = 加一行（换介质只换 get_storage） */
+/** @brief 分区几何表：加一个分区 = 加一行（FAL 介质填 fal_part，非 FAL 填 get_storage） */
 static const part_cfg_t s_parts[] = {
     {
-        .bdev_name   = "flash_lfs",
-        .get_storage = storage_drv_fal_storage,
-        .media_name  = STOR_FLASH_DEV,
-        .offset      = LFS_OFFSET,
-        .size        = LFS_SIZE,
-        .optional    = PART_REQUIRED,
+        .bdev_name = "flash_lfs",
+        .fal_part  = FAL_PART_LFS_NAME,
+        .optional  = PART_REQUIRED,
     },
     {
-        .bdev_name   = "flash_raw0",
-        .get_storage = storage_drv_fal_storage,
-        .media_name  = STOR_FLASH_DEV,
-        .offset      = RAW0_OFFSET,
-        .size        = RAW0_SIZE,
-        .optional    = PART_REQUIRED,
+        .bdev_name = "flash_raw0",
+        .fal_part  = FAL_PART_RAW0_NAME,
+        .optional  = PART_REQUIRED,
     },
     {
-        .bdev_name   = "flash_raw1",
-        .get_storage = storage_drv_fal_storage,
-        .media_name  = STOR_FLASH_DEV,
-        .offset      = RAW1_OFFSET,
-        .size        = RAW1_SIZE,
-        .optional    = PART_REQUIRED,
+        .bdev_name = "flash_raw1",
+        .fal_part  = FAL_PART_RAW1_NAME,
+        .optional  = PART_REQUIRED,
     },
 #if VFS_ENABLE_SD
     {
         .bdev_name   = "sd_card",
         .get_storage = storage_drv_sd_storage,
         .media_name  = STORAGE_SD_DISK_NAME,
-        .offset      = 0,
-        .size        = PART_SIZE_WHOLE,
         .optional    = PART_OPTIONAL,
     },
 #endif
@@ -158,6 +130,8 @@ static const vfs_mount_cfg_t s_mounts[] = {
 
 /**
  * @brief 由分区几何表 + 介质驱动生成 bdev 配置表（可选介质缺失时跳过）
+ * @details FAL 介质的几何取自 FAL 分区表（fal_partition_find，单一数据源）；
+ *          非 FAL 介质取整介质（get_storage）。
  * @return >= 0 生成的 bdev 条目数；-ENOENT 必需介质缺失，-EINVAL 未对齐/越界
  */
 static int build_bdev_cfgs(void)
@@ -167,28 +141,50 @@ static int build_bdev_cfgs(void)
     for (size_t i = 0; i < n; i++)
     {
         const part_cfg_t *p = &s_parts[i];
-        const vfs_storage_t *st = p->get_storage(p->media_name);
+        const vfs_storage_t *st = NULL;
+        uint32_t offset = 0;
+        uint32_t size = 0;
+
+        if (p->fal_part)
+        {
+            /* 几何以 FAL 分区表为准（与 param 区同源，避免双源漂移/重叠） */
+            const struct fal_partition *fp = fal_partition_find(p->fal_part);
+            if (!fp)
+            {
+                if (p->optional)
+                    continue;
+                return -ENOENT;
+            }
+            st = storage_drv_fal_storage(fp->flash_name);
+            offset = (uint32_t)fp->offset;
+            size = (uint32_t)fp->len;
+        }
+        else
+        {
+            /* 非 FAL 介质：整介质（如 SD 整卡） */
+            st = p->get_storage(p->media_name);
+        }
+
         if (!st || st->blk_size == 0)
         {
             if (p->optional)
                 continue;   /* 可选介质缺失 → 跳过该分区，不中断整体 */
             return -ENOENT;
         }
+        if (!p->fal_part)
+            size = st->blk_count * st->blk_size; /* 非 FAL：整介质 */
 
-        /* size == 0 表示"整介质"（如 SD 整卡），否则取表中显式大小 */
-        uint32_t size = p->size ? p->size : st->blk_count * st->blk_size;
-
-        /* 对齐与边界校验（与旧 vfs_bdev_fal_flash_init 的校验一致） */
+        /* 对齐与边界校验 */
         uint32_t dev_total = st->blk_count * st->blk_size;
-        if ((p->offset % st->blk_size) != 0 || (size % st->blk_size) != 0)
+        if ((offset % st->blk_size) != 0 || (size % st->blk_size) != 0)
             return -EINVAL;
-        if (p->offset > dev_total || size > dev_total - p->offset)
+        if (offset > dev_total || size > dev_total - offset)
             return -EINVAL;
 
         vfs_bdev_cfg_t *c = &s_bdev_cfgs[built];
         c->name = p->bdev_name;
         c->storage = st;
-        c->offset = p->offset;
+        c->offset = offset;
         c->blk_size = st->blk_size;
         c->blk_count = size / st->blk_size;
         built++;
@@ -254,7 +250,9 @@ int storage_config_init(void)
     if (rc != 0)
         return rc;
 
-    fal_init(); /* 幂等；FAL 作为介质/几何来源之一 */
+    /* FAL 初始化失败则无法解析分区几何，直接失败（勿继续，否则 fal_partition_find 拿不到分区） */
+    if (fal_init() < 0)
+        return -EIO;
 
     /* 1) 由分区几何表 + 介质驱动生成 bdev 配置，表驱动注册 */
     int nbdev = build_bdev_cfgs();
