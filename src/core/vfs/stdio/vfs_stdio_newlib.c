@@ -6,12 +6,13 @@
  * fopen/fread/fprintf 等标准 I/O 经由本 VFS 落盘。
  *
  * @section fd fd 映射
- *  0/1/2 保留给 stdin/stdout/stderr（本层不接管，交由平台原有实现）。
+ *  0/1/2 = stdin/stdout/stderr：经弱符号 vfs_console_write/vfs_console_read
+ *  交给平台控制台（UART 等），平台未覆盖时返回 -ENOTSUP（printf/scanf 失败）。
  *  应用 fd 从 3 起，g_fdtable[fd] 保存对应的 vfs_fd_t。
  *
  * @section caveat 注意
  *  这些符号是全局系统调用钩子，会与平台 libc 的其它实现冲突。仅当你确实
- *  想让标准 I/O 走 VFS 时才开启，并确保 0/1/2 由平台 UART 等接管。
+ *  想让标准 I/O 走 VFS 时才开启，并让平台覆盖控制台钩子以接通 printf/scanf。
  */
 
 #include "vfs.h"
@@ -25,6 +26,7 @@
 #include <sys/reent.h>
 #include <stddef.h>
 #include <string.h>
+#include "port.h"
 
 #ifndef VFS_STDIO_MAX_FD
 #define VFS_STDIO_MAX_FD 8
@@ -32,8 +34,14 @@
 
 static vfs_fd_t g_fdtable[VFS_STDIO_MAX_FD];
 static int g_stdio_inited;
+/** @brief fd 映射表锁（保护 g_fdtable / g_stdio_inited；句柄式，与 VFS core/后端一致） */
+static sys_mutex_t *g_stdio_lock;
 
-/** @brief 惰性初始化 fd 映射表（全部置为 VFS_FD_INVALID） */
+/**
+ * @brief 惰性初始化 fd 映射表并建锁
+ * @note 首次调用须单线程（启动期）；sys_mutex_create 非线程安全，锁建好后
+ *       后续调用才可并发。
+ */
 static void stdio_ensure_init(void)
 {
     if (!g_stdio_inited)
@@ -42,6 +50,8 @@ static void stdio_ensure_init(void)
             g_fdtable[i] = VFS_FD_INVALID;
         g_stdio_inited = 1;
     }
+    if (!g_stdio_lock)
+        g_stdio_lock = sys_mutex_create();
 }
 
 /** @brief newlib 打开标志 → VFS_O_* */
@@ -65,15 +75,47 @@ static int map_flags(int flags)
  */
 static int appfd_alloc(vfs_fd_t vfd)
 {
+    sys_mutex_lock(g_stdio_lock);
     for (int i = 3; i < VFS_STDIO_MAX_FD; i++)
     {
         if (g_fdtable[i] < 0)
         {
             g_fdtable[i] = vfd;
+            sys_mutex_unlock(g_stdio_lock);
             return i;
         }
     }
+    sys_mutex_unlock(g_stdio_lock);
     return -1;
+}
+
+/* ================================================================
+ *  控制台钩子（stdin/stdout/stderr 的底层 I/O，平台用弱符号覆盖）
+ * ================================================================ */
+
+/**
+ * @brief 控制台输出钩子（fd 1=stdout、fd 2=stderr）
+ * @details 平台用弱符号覆盖本函数，写到底层 UART/console。VFS 不依赖任何具体
+ *          RTOS/硬件，故此处仅占位，默认返回 -ENOTSUP（未接控制台）。
+ * @return 实际写入字节数；< 0 负 errno（-ENOTSUP 未接控制台）
+ */
+__attribute__((weak)) ssize_t vfs_console_write(const void *buf, size_t len)
+{
+    (void)buf;
+    (void)len;
+    return -ENOTSUP;
+}
+
+/**
+ * @brief 控制台输入钩子（fd 0=stdin）
+ * @details 平台用弱符号覆盖本函数，从底层 UART/console 读。默认 -ENOTSUP。
+ * @return 实际读入字节数；< 0 负 errno（-ENOTSUP 未接控制台）
+ */
+__attribute__((weak)) ssize_t vfs_console_read(void *buf, size_t len)
+{
+    (void)buf;
+    (void)len;
+    return -ENOTSUP;
 }
 
 /**
@@ -82,21 +124,20 @@ static int appfd_alloc(vfs_fd_t vfd)
  */
 int _open_r(struct _reent *r, const char *name, int flags, int mode)
 {
-    (void)r;
     (void)mode;
     stdio_ensure_init();
 
     vfs_fd_t vfd = vfs_open(name, map_flags(flags));
     if (vfd < 0)
     {
-        errno = -vfd;
+        r->_errno = -vfd;
         return -1;
     }
     int fd = appfd_alloc(vfd);
     if (fd < 0)
     {
         vfs_close(vfd);
-        errno = ENFILE;
+        r->_errno = ENFILE;
         return -1;
     }
     return fd;
@@ -114,15 +155,20 @@ int _open(const char *name, int flags, int mode)
  */
 int _close_r(struct _reent *r, int fd)
 {
-    (void)r;
     stdio_ensure_init();
+
+    sys_mutex_lock(g_stdio_lock);
     if (fd < 3 || fd >= VFS_STDIO_MAX_FD || g_fdtable[fd] < 0)
     {
-        errno = EBADF;
+        sys_mutex_unlock(g_stdio_lock);
+        r->_errno = EBADF;
         return -1;
     }
-    vfs_close(g_fdtable[fd]);
+    vfs_fd_t vfd = g_fdtable[fd];   /* 锁内快照 + 清表，锁外关闭避免持锁阻塞 */
     g_fdtable[fd] = VFS_FD_INVALID;
+    sys_mutex_unlock(g_stdio_lock);
+
+    vfs_close(vfd);
     return 0;
 }
 
@@ -137,17 +183,39 @@ int _close(int fd)
  */
 _ssize_t _read_r(struct _reent *r, int fd, void *buf, size_t len)
 {
-    (void)r;
     stdio_ensure_init();
-    if (fd < 3 || fd >= VFS_STDIO_MAX_FD || g_fdtable[fd] < 0)
+
+    /* 0 = stdin → 控制台输入；1/2 不可读（不涉及 g_fdtable，无需加锁） */
+    if (fd >= 0 && fd < 3)
     {
-        errno = EBADF;
+        if (fd != 0)
+        {
+            r->_errno = EBADF;
+            return -1;
+        }
+        ssize_t n = vfs_console_read(buf, len);
+        if (n < 0)
+        {
+            r->_errno = -n;
+            return -1;
+        }
+        return (_ssize_t)n;
+    }
+
+    sys_mutex_lock(g_stdio_lock);
+    if (fd < 0 || fd >= VFS_STDIO_MAX_FD || g_fdtable[fd] < 0)
+    {
+        sys_mutex_unlock(g_stdio_lock);
+        r->_errno = EBADF;
         return -1;
     }
-    ssize_t n = vfs_read(g_fdtable[fd], buf, len);
+    vfs_fd_t vfd = g_fdtable[fd];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
+
+    ssize_t n = vfs_read(vfd, buf, len);
     if (n < 0)
     {
-        errno = -n;
+        r->_errno = -n;
         return -1;
     }
     return (_ssize_t)n;
@@ -164,17 +232,39 @@ _ssize_t _read(int fd, void *buf, size_t len)
  */
 _ssize_t _write_r(struct _reent *r, int fd, const void *buf, size_t len)
 {
-    (void)r;
     stdio_ensure_init();
-    if (fd < 3 || fd >= VFS_STDIO_MAX_FD || g_fdtable[fd] < 0)
+
+    /* 1 = stdout、2 = stderr → 控制台输出；0 不可写（不涉及 g_fdtable，无需加锁） */
+    if (fd >= 0 && fd < 3)
     {
-        errno = EBADF;
+        if (fd == 0)
+        {
+            r->_errno = EBADF;
+            return -1;
+        }
+        ssize_t n = vfs_console_write(buf, len);
+        if (n < 0)
+        {
+            r->_errno = -n;
+            return -1;
+        }
+        return (_ssize_t)n;
+    }
+
+    sys_mutex_lock(g_stdio_lock);
+    if (fd < 0 || fd >= VFS_STDIO_MAX_FD || g_fdtable[fd] < 0)
+    {
+        sys_mutex_unlock(g_stdio_lock);
+        r->_errno = EBADF;
         return -1;
     }
-    ssize_t n = vfs_write(g_fdtable[fd], buf, len);
+    vfs_fd_t vfd = g_fdtable[fd];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
+
+    ssize_t n = vfs_write(vfd, buf, len);
     if (n < 0)
     {
-        errno = -n;
+        r->_errno = -n;
         return -1;
     }
     return (_ssize_t)n;
@@ -191,17 +281,22 @@ _ssize_t _write(int fd, const void *buf, size_t len)
  */
 _off_t _lseek_r(struct _reent *r, int fd, _off_t off, int whence)
 {
-    (void)r;
     stdio_ensure_init();
+
+    sys_mutex_lock(g_stdio_lock);
     if (fd < 3 || fd >= VFS_STDIO_MAX_FD || g_fdtable[fd] < 0)
     {
-        errno = EBADF;
+        sys_mutex_unlock(g_stdio_lock);
+        r->_errno = EBADF;
         return -1;
     }
-    off_t rc = vfs_lseek(g_fdtable[fd], (off_t)off, whence);
+    vfs_fd_t vfd = g_fdtable[fd];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
+
+    off_t rc = vfs_lseek(vfd, (off_t)off, whence);
     if (rc < 0)
     {
-        errno = -rc;
+        r->_errno = -rc;
         return -1;
     }
     return (_off_t)rc;
@@ -219,12 +314,11 @@ _off_t _lseek(int fd, _off_t off, int whence)
  */
 int _stat_r(struct _reent *r, const char *name, struct stat *st)
 {
-    (void)r;
     vfs_stat_t vs;
     int rc = vfs_stat(name, &vs);
     if (rc < 0)
     {
-        errno = -rc;
+        r->_errno = -rc;
         return -1;
     }
     memset(st, 0, sizeof(*st));
@@ -245,20 +339,25 @@ int _stat(const char *name, struct stat *st)
  */
 int _fstat_r(struct _reent *r, int fd, struct stat *st)
 {
-    (void)r;
     stdio_ensure_init();
+
+    sys_mutex_lock(g_stdio_lock);
     if (fd < 3 || fd >= VFS_STDIO_MAX_FD || g_fdtable[fd] < 0)
     {
-        errno = EBADF;
+        sys_mutex_unlock(g_stdio_lock);
+        r->_errno = EBADF;
         return -1;
     }
+    vfs_fd_t vfd = g_fdtable[fd];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
+
     memset(st, 0, sizeof(*st));
     st->st_mode = S_IFREG;
     /* 精确大小：记原偏移 → seek 到末尾取长度 → 恢复偏移 */
-    off_t cur = vfs_tell(g_fdtable[fd]);
-    off_t len = vfs_lseek(g_fdtable[fd], 0, VFS_SEEK_END);
+    off_t cur = vfs_tell(vfd);
+    off_t len = vfs_lseek(vfd, 0, VFS_SEEK_END);
     if (cur >= 0)
-        vfs_lseek(g_fdtable[fd], cur, VFS_SEEK_SET);
+        vfs_lseek(vfd, cur, VFS_SEEK_SET);
     st->st_size = (len >= 0) ? (size_t)len : 0;
     return 0;
 }
@@ -288,11 +387,10 @@ int _isatty(int fd)
  */
 int _unlink_r(struct _reent *r, const char *name)
 {
-    (void)r;
     int rc = vfs_unlink(name);
     if (rc < 0)
     {
-        errno = -rc;
+        r->_errno = -rc;
         return -1;
     }
     return 0;

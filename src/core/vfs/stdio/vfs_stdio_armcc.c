@@ -19,6 +19,8 @@
 #if VFS_ENABLE_STDIO && defined(__ARMCC_VERSION)
 
 #include <stdio.h>
+#include <errno.h>
+#include "port.h"
 
 /* ARMCC 的 openmode 位（见 ARM C 库 stdio.h）：此处按惯例取值 */
 #ifndef OPEN_R
@@ -34,8 +36,14 @@
 
 static vfs_fd_t g_fdtable[VFS_STDIO_MAX_FD];
 static int g_stdio_inited;
+/** @brief fd 映射表锁（保护 g_fdtable / g_stdio_inited；句柄式，与 VFS core/后端一致） */
+static sys_mutex_t *g_stdio_lock;
 
-/** @brief 惰性初始化 fd 映射表（全部置为 VFS_FD_INVALID） */
+/**
+ * @brief 惰性初始化 fd 映射表并建锁
+ * @note 首次调用须单线程（启动期）；sys_mutex_create 非线程安全，锁建好后
+ *       后续调用才可并发。
+ */
 static void stdio_ensure_init(void)
 {
     if (!g_stdio_inited)
@@ -44,6 +52,8 @@ static void stdio_ensure_init(void)
             g_fdtable[i] = VFS_FD_INVALID;
         g_stdio_inited = 1;
     }
+    if (!g_stdio_lock)
+        g_stdio_lock = sys_mutex_create();
 }
 
 /** @brief ARMCC openmode → VFS_O_* */
@@ -75,15 +85,38 @@ static int map_openmode(int om)
  */
 static int appfd_alloc(vfs_fd_t vfd)
 {
+    sys_mutex_lock(g_stdio_lock);
     for (int i = 3; i < VFS_STDIO_MAX_FD; i++)
     {
         if (g_fdtable[i] < 0)
         {
             g_fdtable[i] = vfd;
+            sys_mutex_unlock(g_stdio_lock);
             return i;
         }
     }
+    sys_mutex_unlock(g_stdio_lock);
     return -1;
+}
+
+/* ================================================================
+ *  控制台钩子（stdin/stdout/stderr 的底层 I/O，平台用弱符号覆盖）
+ * ================================================================ */
+
+/** @brief 控制台输出钩子（fd 1=stdout、fd 2=stderr）；平台覆盖写到底层 UART */
+__weak ssize_t vfs_console_write(const void *buf, size_t len)
+{
+    (void)buf;
+    (void)len;
+    return -ENOTSUP;
+}
+
+/** @brief 控制台输入钩子（fd 0=stdin）；平台覆盖从底层 UART 读 */
+__weak ssize_t vfs_console_read(void *buf, size_t len)
+{
+    (void)buf;
+    (void)len;
+    return -ENOTSUP;
 }
 
 /**
@@ -114,10 +147,18 @@ FILEHANDLE _sys_open(const char *name, int openmode)
 int _sys_close(FILEHANDLE fh)
 {
     stdio_ensure_init();
+
+    sys_mutex_lock(g_stdio_lock);
     if (fh < 3 || fh >= VFS_STDIO_MAX_FD || g_fdtable[fh] < 0)
+    {
+        sys_mutex_unlock(g_stdio_lock);
         return -1;
-    vfs_close(g_fdtable[fh]);
+    }
+    vfs_fd_t vfd = g_fdtable[fh];   /* 锁内快照 + 清表，锁外关闭避免持锁阻塞 */
     g_fdtable[fh] = VFS_FD_INVALID;
+    sys_mutex_unlock(g_stdio_lock);
+
+    vfs_close(vfd);
     return 0;
 }
 
@@ -129,9 +170,26 @@ int _sys_write(FILEHANDLE fh, const unsigned char *buf, unsigned len, int mode)
 {
     (void)mode;
     stdio_ensure_init();
-    if (fh < 3 || fh >= VFS_STDIO_MAX_FD || g_fdtable[fh] < 0)
+
+    /* 1 = stdout、2 = stderr → 控制台输出；0 不可写（不涉及 g_fdtable，无需加锁） */
+    if (fh >= 0 && fh < 3)
+    {
+        if (fh == 0)
+            return -1;
+        ssize_t n = vfs_console_write(buf, len);
+        return (n == (ssize_t)len) ? 0 : -1;
+    }
+
+    sys_mutex_lock(g_stdio_lock);
+    if (fh < 0 || fh >= VFS_STDIO_MAX_FD || g_fdtable[fh] < 0)
+    {
+        sys_mutex_unlock(g_stdio_lock);
         return -1;
-    ssize_t n = vfs_write(g_fdtable[fh], buf, len);
+    }
+    vfs_fd_t vfd = g_fdtable[fh];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
+
+    ssize_t n = vfs_write(vfd, buf, len);
     return (n == (ssize_t)len) ? 0 : -1; /* ARMCC: 0=全部成功 */
 }
 
@@ -143,9 +201,26 @@ int _sys_read(FILEHANDLE fh, unsigned char *buf, unsigned len, int mode)
 {
     (void)mode;
     stdio_ensure_init();
-    if (fh < 3 || fh >= VFS_STDIO_MAX_FD || g_fdtable[fh] < 0)
+
+    /* 0 = stdin → 控制台输入；1/2 不可读（不涉及 g_fdtable，无需加锁） */
+    if (fh >= 0 && fh < 3)
+    {
+        if (fh != 0)
+            return -1;
+        ssize_t n = vfs_console_read(buf, len);
+        return (n == (ssize_t)len) ? 0 : -1;
+    }
+
+    sys_mutex_lock(g_stdio_lock);
+    if (fh < 0 || fh >= VFS_STDIO_MAX_FD || g_fdtable[fh] < 0)
+    {
+        sys_mutex_unlock(g_stdio_lock);
         return -1;
-    ssize_t n = vfs_read(g_fdtable[fh], buf, len);
+    }
+    vfs_fd_t vfd = g_fdtable[fh];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
+
+    ssize_t n = vfs_read(vfd, buf, len);
     return (n == (ssize_t)len) ? 0 : -1;
 }
 
@@ -156,9 +231,17 @@ int _sys_read(FILEHANDLE fh, unsigned char *buf, unsigned len, int mode)
 int _sys_seek(FILEHANDLE fh, long pos)
 {
     stdio_ensure_init();
+
+    sys_mutex_lock(g_stdio_lock);
     if (fh < 3 || fh >= VFS_STDIO_MAX_FD || g_fdtable[fh] < 0)
+    {
+        sys_mutex_unlock(g_stdio_lock);
         return -1;
-    off_t rc = vfs_lseek(g_fdtable[fh], (off_t)pos, VFS_SEEK_SET);
+    }
+    vfs_fd_t vfd = g_fdtable[fh];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
+
+    off_t rc = vfs_lseek(vfd, (off_t)pos, VFS_SEEK_SET);
     return (rc < 0) ? -1 : 0;
 }
 
@@ -175,16 +258,23 @@ int _sys_istty(FILEHANDLE fh)
 long _sys_flen(FILEHANDLE fh)
 {
     stdio_ensure_init();
+
+    sys_mutex_lock(g_stdio_lock);
     if (fh < 3 || fh >= VFS_STDIO_MAX_FD || g_fdtable[fh] < 0)
+    {
+        sys_mutex_unlock(g_stdio_lock);
         return -1;
+    }
+    vfs_fd_t vfd = g_fdtable[fh];   /* 锁内快照，锁外 I/O */
+    sys_mutex_unlock(g_stdio_lock);
 
     /* 求长度：记原偏移 → seek 末尾 → 恢复原偏移（保持连续读不受影响） */
-    off_t cur = vfs_tell(g_fdtable[fh]);
-    off_t end = vfs_lseek(g_fdtable[fh], 0, VFS_SEEK_END);
+    off_t cur = vfs_tell(vfd);
+    off_t end = vfs_lseek(vfd, 0, VFS_SEEK_END);
     if (end < 0)
         return -1;
     if (cur >= 0)
-        vfs_lseek(g_fdtable[fh], cur, VFS_SEEK_SET);
+        vfs_lseek(vfd, cur, VFS_SEEK_SET);
     return (long)end;
 }
 
