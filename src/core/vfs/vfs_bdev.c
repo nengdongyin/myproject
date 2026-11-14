@@ -12,7 +12,7 @@
 #include <errno.h>
 
 void vfs_bdev_init(vfs_bdev_t *d, const char *name, const vfs_storage_t *s,
-                   uint32_t byte_offset, uint32_t blk_size, uint32_t blk_count)
+                   uint64_t byte_offset, uint32_t blk_size, uint32_t blk_count)
 {
     if (!d)
         return;
@@ -24,11 +24,11 @@ void vfs_bdev_init(vfs_bdev_t *d, const char *name, const vfs_storage_t *s,
     d->blk_count = blk_count;
 }
 
-uint32_t vfs_bdev_size(const vfs_bdev_t *d)
+uint64_t vfs_bdev_size(const vfs_bdev_t *d)
 {
     if (!d)
         return 0;
-    return d->blk_count * d->blk_size;
+    return (uint64_t)d->blk_count * d->blk_size;
 }
 
 int vfs_bdev_read(const vfs_bdev_t *d, uint32_t blk, void *buf, uint32_t nblk)
@@ -40,7 +40,7 @@ int vfs_bdev_read(const vfs_bdev_t *d, uint32_t blk, void *buf, uint32_t nblk)
         return -EINVAL;
 
     int rc = d->storage->read((vfs_storage_t *)d->storage,
-                              d->offset + blk * d->blk_size,
+                              (uint64_t)d->offset + (uint64_t)blk * d->blk_size,
                               buf, (size_t)nblk * d->blk_size);
     return (rc < 0) ? -EIO : 0;
 }
@@ -53,7 +53,7 @@ int vfs_bdev_prog(const vfs_bdev_t *d, uint32_t blk, const void *buf, uint32_t n
         return -EINVAL;
 
     int rc = d->storage->prog((vfs_storage_t *)d->storage,
-                              d->offset + blk * d->blk_size,
+                              (uint64_t)d->offset + (uint64_t)blk * d->blk_size,
                               buf, (size_t)nblk * d->blk_size);
     return (rc < 0) ? -EIO : 0;
 }
@@ -66,17 +66,17 @@ int vfs_bdev_erase(const vfs_bdev_t *d, uint32_t blk, uint32_t nblk)
         return -EINVAL;
 
     int rc = d->storage->erase((vfs_storage_t *)d->storage,
-                               d->offset + blk * d->blk_size,
+                               (uint64_t)d->offset + (uint64_t)blk * d->blk_size,
                                (size_t)nblk * d->blk_size);
     return (rc < 0) ? -EIO : 0;
 }
 
-int vfs_bdev_read_bytes(const vfs_bdev_t *d, uint32_t byte_off, void *buf, size_t n)
+int vfs_bdev_read_bytes(const vfs_bdev_t *d, uint64_t byte_off, void *buf, size_t n)
 {
     if (!d || !d->storage || !d->storage->read || !buf)
         return -EINVAL;
-    uint32_t total = vfs_bdev_size(d);
-    if (byte_off > total || n > (size_t)(total - byte_off))
+    uint64_t total = vfs_bdev_size(d);
+    if (byte_off > total || (uint64_t)n > total - byte_off)
         return -EINVAL;
 
     int rc = d->storage->read((vfs_storage_t *)d->storage,
@@ -84,12 +84,12 @@ int vfs_bdev_read_bytes(const vfs_bdev_t *d, uint32_t byte_off, void *buf, size_
     return (rc < 0) ? -EIO : 0;
 }
 
-int vfs_bdev_prog_bytes(const vfs_bdev_t *d, uint32_t byte_off, const void *buf, size_t n)
+int vfs_bdev_prog_bytes(const vfs_bdev_t *d, uint64_t byte_off, const void *buf, size_t n)
 {
     if (!d || !d->storage || !d->storage->prog || !buf)
         return -EINVAL;
-    uint32_t total = vfs_bdev_size(d);
-    if (byte_off > total || n > (size_t)(total - byte_off))
+    uint64_t total = vfs_bdev_size(d);
+    if (byte_off > total || (uint64_t)n > total - byte_off)
         return -EINVAL;
 
     int rc = d->storage->prog((vfs_storage_t *)d->storage,

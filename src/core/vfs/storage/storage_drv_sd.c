@@ -36,7 +36,7 @@ static sd_state_t s_sd;
  * ================================================================ */
 
 /** @brief 整扇区读；非 512 对齐返回 -EINVAL（见 file 头 @section limits） */
-static int sd_read(vfs_storage_t *s, uint32_t byte_off, void *buf, size_t n)
+static int sd_read(vfs_storage_t *s, uint64_t byte_off, void *buf, size_t n)
 {
     if (!s || !s->ctx || !buf)
         return -EINVAL;
@@ -46,14 +46,14 @@ static int sd_read(vfs_storage_t *s, uint32_t byte_off, void *buf, size_t n)
         return 0;
 
     const sd_state_t *st = (const sd_state_t *)s->ctx;
-    if (disk_access_read(st->name, buf, byte_off / SD_SECTOR_SIZE,
+    if (disk_access_read(st->name, buf, (uint32_t)(byte_off / SD_SECTOR_SIZE),
                          (uint32_t)(n / SD_SECTOR_SIZE)) != 0)
         return -EIO;
     return 0;
 }
 
 /** @brief 整扇区写；写保护的卡返回 -EROFS */
-static int sd_prog(vfs_storage_t *s, uint32_t byte_off, const void *buf, size_t n)
+static int sd_prog(vfs_storage_t *s, uint64_t byte_off, const void *buf, size_t n)
 {
     if (!s || !s->ctx || !buf)
         return -EINVAL;
@@ -66,7 +66,7 @@ static int sd_prog(vfs_storage_t *s, uint32_t byte_off, const void *buf, size_t 
     if (st->write_protect)
         return -EROFS;
 
-    if (disk_access_write(st->name, buf, byte_off / SD_SECTOR_SIZE,
+    if (disk_access_write(st->name, buf, (uint32_t)(byte_off / SD_SECTOR_SIZE),
                           (uint32_t)(n / SD_SECTOR_SIZE)) != 0)
         return -EIO;
     return 0;

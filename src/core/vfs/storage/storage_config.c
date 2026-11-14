@@ -142,8 +142,8 @@ static int build_bdev_cfgs(void)
     {
         const part_cfg_t *p = &s_parts[i];
         const vfs_storage_t *st = NULL;
-        uint32_t offset = 0;
-        uint32_t size = 0;
+        uint64_t offset = 0;
+        uint64_t size = 0;
 
         if (p->fal_part)
         {
@@ -156,8 +156,8 @@ static int build_bdev_cfgs(void)
                 return -ENOENT;
             }
             st = storage_drv_fal_storage(fp->flash_name);
-            offset = (uint32_t)fp->offset;
-            size = (uint32_t)fp->len;
+            offset = (uint64_t)fp->offset;
+            size = (uint64_t)fp->len;
         }
         else
         {
@@ -172,10 +172,10 @@ static int build_bdev_cfgs(void)
             return -ENOENT;
         }
         if (!p->fal_part)
-            size = st->blk_count * st->blk_size; /* 非 FAL：整介质 */
+            size = (uint64_t)st->blk_count * st->blk_size; /* 非 FAL：整介质 */
 
         /* 对齐与边界校验 */
-        uint32_t dev_total = st->blk_count * st->blk_size;
+        uint64_t dev_total = (uint64_t)st->blk_count * st->blk_size;
         if ((offset % st->blk_size) != 0 || (size % st->blk_size) != 0)
             return -EINVAL;
         if (offset > dev_total || size > dev_total - offset)
@@ -186,7 +186,7 @@ static int build_bdev_cfgs(void)
         c->storage = st;
         c->offset = offset;
         c->blk_size = st->blk_size;
-        c->blk_count = size / st->blk_size;
+        c->blk_count = (uint32_t)(size / st->blk_size);
         built++;
     }
     return (int)built;

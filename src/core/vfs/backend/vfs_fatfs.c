@@ -460,11 +460,11 @@ static int fat_vfs_statvfs(vfs_mount_t *mp, vfs_statvfs_t *st)
     FRESULT fr = f_getfree(m->prefix, &nfree, &fs);
     if (fr != FR_OK || !fs)
         return -EIO;
-    uint32_t csize = fs->csize * VFS_FATFS_SECTOR; /* 每簇字节数 */
-    uint32_t total = (fs->n_fatent > 2)
-                         ? (uint32_t)((fs->n_fatent - 2) * (DWORD)csize)
+    uint64_t csize = (uint64_t)fs->csize * VFS_FATFS_SECTOR; /* 每簇字节数 */
+    uint64_t total = (fs->n_fatent > 2)
+                         ? (uint64_t)(fs->n_fatent - 2) * csize
                          : 0;
-    uint32_t freeb = (uint32_t)(nfree * (DWORD)csize);
+    uint64_t freeb = (uint64_t)nfree * csize;
     st->total_bytes = total;
     st->free_bytes = freeb;
     return 0;

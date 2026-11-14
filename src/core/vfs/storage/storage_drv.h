@@ -47,11 +47,11 @@ extern "C"
         uint32_t blk_size;     /**< 擦除/编程粒度（flash 4K，SD 512） */
         uint32_t blk_count;    /**< 整设备块数 */
         /** 从 byte_off 起读 n 字节（byte_off 为设备内相对偏移，非绝对地址） */
-        int (*read)(struct vfs_storage *s, uint32_t byte_off, void *buf, size_t n);
+        int (*read)(struct vfs_storage *s, uint64_t byte_off, void *buf, size_t n);
         /** 从 byte_off 起编程（写）n 字节（byte_off 为设备内相对偏移） */
-        int (*prog)(struct vfs_storage *s, uint32_t byte_off, const void *buf, size_t n);
+        int (*prog)(struct vfs_storage *s, uint64_t byte_off, const void *buf, size_t n);
         /** 从 byte_off 起擦除 n 字节（n 为块大小整数倍，byte_off 为设备内相对偏移） */
-        int (*erase)(struct vfs_storage *s, uint32_t byte_off, size_t n);
+        int (*erase)(struct vfs_storage *s, uint64_t byte_off, size_t n);
         void *ctx;             /**< 驱动私有上下文（fal_flash_dev* / sd_ctx* 等） */
     } vfs_storage_t;
 

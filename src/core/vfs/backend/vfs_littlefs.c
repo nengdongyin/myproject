@@ -499,11 +499,11 @@ static int lfs_vfs_statvfs(vfs_mount_t *mp, vfs_statvfs_t *st)
     lfs_ssize_t used = lfs_fs_size(&m->lfs);
     if (used < 0)
         return lfs_to_errno((int)used);
-    uint32_t total = m->bdev->blk_count * m->bdev->blk_size;
+    uint64_t total = (uint64_t)m->bdev->blk_count * m->bdev->blk_size;
     st->total_bytes = total;
     st->free_bytes = (used > (lfs_ssize_t)m->bdev->blk_count)
                          ? 0
-                         : (uint32_t)(m->bdev->blk_count - (uint32_t)used) * m->bdev->blk_size;
+                         : (uint64_t)(m->bdev->blk_count - (uint32_t)used) * m->bdev->blk_size;
     return 0;
 }
 

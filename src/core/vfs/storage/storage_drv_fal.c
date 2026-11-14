@@ -19,22 +19,26 @@
  *  FAL flash 设备 → vfs_storage_t
  * ================================================================ */
 
-/** @brief FAL 整设备读回调：把 vfs_storage 偏移转发给 FAL flash read */
-static int fal_storage_read(vfs_storage_t *s, uint32_t off, void *buf, size_t n)
+/**
+ * @brief FAL 整设备读回调：把 vfs_storage 偏移转发给 FAL flash read
+ * @note off 为 uint64_t，FAL ops 取 long（32 位平台截断）；FAL 仅服务片上
+ *       flash（<4GB），偏移永不越界，截断安全。
+ */
+static int fal_storage_read(vfs_storage_t *s, uint64_t off, void *buf, size_t n)
 {
     const struct fal_flash_dev *dev = (const struct fal_flash_dev *)s->ctx;
     return dev->ops.read((long)off, (uint8_t *)buf, n);
 }
 
 /** @brief FAL 整设备编程回调：把 vfs_storage 偏移转发给 FAL flash write */
-static int fal_storage_prog(vfs_storage_t *s, uint32_t off, const void *buf, size_t n)
+static int fal_storage_prog(vfs_storage_t *s, uint64_t off, const void *buf, size_t n)
 {
     const struct fal_flash_dev *dev = (const struct fal_flash_dev *)s->ctx;
     return dev->ops.write((long)off, (const uint8_t *)buf, n);
 }
 
 /** @brief FAL 整设备擦除回调：把 vfs_storage 偏移转发给 FAL flash erase */
-static int fal_storage_erase(vfs_storage_t *s, uint32_t off, size_t n)
+static int fal_storage_erase(vfs_storage_t *s, uint64_t off, size_t n)
 {
     const struct fal_flash_dev *dev = (const struct fal_flash_dev *)s->ctx;
     return dev->ops.erase((long)off, n);

@@ -112,8 +112,8 @@ extern "C"
     /** @brief 卷容量统计 */
     typedef struct vfs_statvfs
     {
-        uint32_t total_bytes;
-        uint32_t free_bytes;
+        uint64_t total_bytes;
+        uint64_t free_bytes;
     } vfs_statvfs_t;
 
 /* ================================================================

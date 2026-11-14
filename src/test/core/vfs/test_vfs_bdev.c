@@ -34,19 +34,19 @@ static void bdev_teardown(void)
 static void test_bdev_init_fields(void)
 {
     TEST_ASSERT_EQUAL_STRING("part0", g_flash.bdev.name);
-    TEST_ASSERT_EQUAL_UINT32(0, g_flash.bdev.offset);
+    TEST_ASSERT_EQUAL_UINT64(0, g_flash.bdev.offset);
     TEST_ASSERT_EQUAL_UINT32(4096, g_flash.bdev.blk_size);
     TEST_ASSERT_EQUAL_UINT32(8, g_flash.bdev.blk_count);
 }
 
 static void test_bdev_size(void)
 {
-    TEST_ASSERT_EQUAL_UINT32(8 * 4096, vfs_bdev_size(&g_flash.bdev));
+    TEST_ASSERT_EQUAL_UINT64(8 * 4096, vfs_bdev_size(&g_flash.bdev));
 }
 
 static void test_bdev_size_null(void)
 {
-    TEST_ASSERT_EQUAL_UINT32(0, vfs_bdev_size(NULL));
+    TEST_ASSERT_EQUAL_UINT64(0, vfs_bdev_size(NULL));
 }
 
 /* ================================================================
@@ -122,7 +122,7 @@ static void test_byte_round_trip(void)
 static void test_byte_bounds_reject(void)
 {
     uint8_t buf[8];
-    uint32_t total = vfs_bdev_size(&g_flash.bdev);
+    uint64_t total = vfs_bdev_size(&g_flash.bdev);
     /* off == total 处再读 1 字节越界 */
     TEST_ASSERT_EQUAL_INT(-EINVAL, vfs_bdev_read_bytes(&g_flash.bdev, total, buf, 1));
     /* off + n 超过 total */

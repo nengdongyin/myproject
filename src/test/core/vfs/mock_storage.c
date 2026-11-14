@@ -8,7 +8,7 @@
 #include <string.h>
 
 /** @brief 介质读：越界返回 -1，否则按字节拷贝 */
-static int mock_read(vfs_storage_t *s, uint32_t off, void *buf, size_t n)
+static int mock_read(vfs_storage_t *s, uint64_t off, void *buf, size_t n)
 {
     vfs_mock_flash_t *m = (vfs_mock_flash_t *)s->ctx;
     if ((size_t)off + n > (size_t)m->total)
@@ -24,7 +24,7 @@ static int mock_read(vfs_storage_t *s, uint32_t off, void *buf, size_t n)
  * 因此要正确写入数据，目标区域必须是 0xFF（已擦除）；否则数据被静默损坏，
  * 用于验证 rawflash 的擦除纪律与 append 的 0xFF 脏尾检测。
  */
-static int mock_prog(vfs_storage_t *s, uint32_t off, const void *buf, size_t n)
+static int mock_prog(vfs_storage_t *s, uint64_t off, const void *buf, size_t n)
 {
     vfs_mock_flash_t *m = (vfs_mock_flash_t *)s->ctx;
     if ((size_t)off + n > (size_t)m->total)
@@ -37,7 +37,7 @@ static int mock_prog(vfs_storage_t *s, uint32_t off, const void *buf, size_t n)
 }
 
 /** @brief 介质擦除：置 0xFF */
-static int mock_erase(vfs_storage_t *s, uint32_t off, size_t n)
+static int mock_erase(vfs_storage_t *s, uint64_t off, size_t n)
 {
     vfs_mock_flash_t *m = (vfs_mock_flash_t *)s->ctx;
     if ((size_t)off + n > (size_t)m->total)
@@ -77,7 +77,7 @@ void vfs_mock_flash_free(vfs_mock_flash_t *m)
 }
 
 void vfs_mock_make_bdev(vfs_mock_flash_t *m, const char *name,
-                        uint32_t byte_offset, uint32_t blk_count)
+                        uint64_t byte_offset, uint32_t blk_count)
 {
     vfs_bdev_init(&m->bdev, name, &m->storage, byte_offset,
                   m->storage.blk_size, blk_count);

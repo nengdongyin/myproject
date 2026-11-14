@@ -50,7 +50,7 @@ extern "C"
      * @param blk_count   分区块数
      */
     void vfs_mock_make_bdev(vfs_mock_flash_t *m, const char *name,
-                            uint32_t byte_offset, uint32_t blk_count);
+                            uint64_t byte_offset, uint32_t blk_count);
 
 #ifdef __cplusplus
 }

@@ -38,14 +38,14 @@ extern "C"
      * 是某个 vfs_storage_t 内的一段区域，由 offset + 长度界定。
      * 文件系统后端（littlefs/fatfs）的块设备即此结构。
      *
-     * @note offset/blk_count 为 uint32_t：单分区容量上限 4GB（>4GB 的介质
-     *       需将分区拆分为多个切片分别挂载）。
+     * @note offset 为 uint64_t（字节偏移），blk_count 为 uint32_t（块数）；
+     *       单分区容量上限 2TB，受介质驱动扇区号（uint32_t）与 FatFs 32 位 LBA 约束。
      */
     typedef struct vfs_bdev
     {
         const char *name;            /**< 分区名（如 "flash_app"） */
         const vfs_storage_t *storage;/**< 所属物理设备 */
-        uint32_t offset;             /**< 起始位置：storage 内字节偏移 */
+        uint64_t offset;             /**< 起始位置：storage 内字节偏移 */
         uint32_t blk_size;           /**< 块大小（通常 = storage->blk_size） */
         uint32_t blk_count;          /**< 分区块数（大小 = blk_count × blk_size） */
         const void *ctx;             /**< 可选驱动私有（如分区描述符指针） */
@@ -62,14 +62,14 @@ extern "C"
      * @param blk_count  块数
      */
     void vfs_bdev_init(vfs_bdev_t *d, const char *name, const vfs_storage_t *s,
-                       uint32_t byte_offset, uint32_t blk_size, uint32_t blk_count);
+                       uint64_t byte_offset, uint32_t blk_size, uint32_t blk_count);
 
     /**
      * @brief 分区总字节数
      * @param d 分区切片（不能为 NULL）
      * @return 总字节数 = blk_count × blk_size
      */
-    uint32_t vfs_bdev_size(const vfs_bdev_t *d);
+    uint64_t vfs_bdev_size(const vfs_bdev_t *d);
 
     /**
      * @brief 按"分区内块号"读取 nblk 个块
@@ -108,7 +108,7 @@ extern "C"
      * @param n        读取字节数
      * @return 0 成功，-EINVAL 越界/参数错，-EIO 硬件错误
      */
-    int vfs_bdev_read_bytes(const vfs_bdev_t *d, uint32_t byte_off, void *buf, size_t n);
+    int vfs_bdev_read_bytes(const vfs_bdev_t *d, uint64_t byte_off, void *buf, size_t n);
 
     /**
      * @brief 按字节偏移编程 n 字节（不要求块对齐）
@@ -118,7 +118,7 @@ extern "C"
      * @param n        写入字节数
      * @return 0 成功，-EINVAL 越界/参数错，-EIO 硬件错误
      */
-    int vfs_bdev_prog_bytes(const vfs_bdev_t *d, uint32_t byte_off, const void *buf, size_t n);
+    int vfs_bdev_prog_bytes(const vfs_bdev_t *d, uint64_t byte_off, const void *buf, size_t n);
 
     /**
      * @brief 按名字查找已注册的块设备切片
@@ -137,7 +137,7 @@ extern "C"
     {
         const char *name;             /**< 分区名（全局唯一，挂载表按此名绑定） */
         const vfs_storage_t *storage; /**< 所属物理设备（介质驱动产出） */
-        uint32_t offset;              /**< 介质内起始字节偏移（须块对齐） */
+        uint64_t offset;              /**< 介质内起始字节偏移（须块对齐） */
         uint32_t blk_size;            /**< 块大小（通常 = storage->blk_size） */
         uint32_t blk_count;           /**< 分区块数 */
     } vfs_bdev_cfg_t;
