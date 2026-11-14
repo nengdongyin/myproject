@@ -45,9 +45,12 @@ static raw_slot_t g_raw_files[VFS_MAX_OPEN_FILES];
 static raw_dir_t g_raw_dirs[VFS_MAX_OPEN_DIRS];
 #endif
 
+/** @brief 后端静态句柄池锁（文件槽 + 目录槽共用；独立于 core 与其它后端） */
+static sys_mutex_t *g_raw_pool_lock;
+
 /**
  * @brief 分配 rawflash 文件句柄槽，并在写意图下做写-写互斥
- * @details 用后端池锁 SYS_LOCK_FILE 保护整个"查重 + 分配"临界区：
+ * @details 用后端池锁保护整个"查重 + 分配"临界区：
  *          want_write 时若同 entry 已有写档则拒绝（-EBUSY），保证同一文件
  *          不会有两个写会话交错（append 与整擦写一并保护）。
  * @param e          目标条目（并发检测键；可为 NULL）
@@ -59,7 +62,7 @@ static raw_slot_t *raw_slot_alloc_guarded(const vfs_rawflash_entry_t *e, int wan
 {
     raw_slot_t *slot = NULL;
     int err = 0;
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_raw_pool_lock);
     if (want_write && e)
     {
         for (int i = 0; i < VFS_MAX_OPEN_FILES; i++)
@@ -86,7 +89,7 @@ static raw_slot_t *raw_slot_alloc_guarded(const vfs_rawflash_entry_t *e, int wan
     if (!slot)
         err = -ENFILE;
 out:
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_raw_pool_lock);
     if (err_out)
         *err_out = err;
     return slot;
@@ -97,9 +100,9 @@ static void raw_slot_free(raw_slot_t *s)
 {
     if (!s)
         return;
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_raw_pool_lock);
     memset(s, 0, sizeof(*s));
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_raw_pool_lock);
 }
 
 /** @brief 按相对路径在静态注册表中查找条目 */
@@ -128,6 +131,10 @@ static int raw_mount(vfs_mount_t *mp)
     const vfs_rawflash_vol_t *vol = (const vfs_rawflash_vol_t *)mp->fs_data;
     if (!vol || !vol->entries || vol->count == 0)
         return -EINVAL;
+
+    /* 懒建后端池锁（mount 单线程，首次挂载创建，后续挂载点复用） */
+    if (!g_raw_pool_lock)
+        g_raw_pool_lock = sys_mutex_create();
 
     /* 校验每个分区的容量一致性 */
     for (size_t i = 0; i < vol->count; i++)
@@ -312,7 +319,7 @@ static int raw_opendir(vfs_dir_t *d, const char *rel)
     if (rel[0] != '\0')
         return -ENOTSUP;
 
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_raw_pool_lock);
     for (int i = 0; i < VFS_MAX_OPEN_DIRS; i++)
     {
         if (!g_raw_dirs[i].used)
@@ -320,12 +327,12 @@ static int raw_opendir(vfs_dir_t *d, const char *rel)
             g_raw_dirs[i].used = 1;
             g_raw_dirs[i].vol = (const vfs_rawflash_vol_t *)d->mp->fs_data;
             g_raw_dirs[i].idx = 0;
-            system_unlock(SYS_LOCK_FILE);
+            sys_mutex_unlock(g_raw_pool_lock);
             d->priv = &g_raw_dirs[i];
             return 0;
         }
     }
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_raw_pool_lock);
     return -ENFILE;
 }
 
@@ -358,9 +365,9 @@ static int raw_closedir(vfs_dir_t *d)
     raw_dir_t *it = (raw_dir_t *)d->priv;
     if (it)
     {
-        system_lock(SYS_LOCK_FILE);
+        sys_mutex_lock(g_raw_pool_lock);
         memset(it, 0, sizeof(*it));
-        system_unlock(SYS_LOCK_FILE);
+        sys_mutex_unlock(g_raw_pool_lock);
     }
     d->priv = NULL;
     return 0;

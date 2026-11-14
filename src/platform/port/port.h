@@ -88,9 +88,9 @@ uint32_t system_get_time_ms(void);
  *  与上面的 system_lock(id) 固定枚举锁并存，互不影响。
  * ================================================================ */
 
-/** @brief 内部互斥句柄池容量（需 ≥ 需要的并发锁数，VFS 需 ≥ VFS_MAX_MOUNTS+1） */
+/** @brief 内部互斥句柄池容量（需 ≥ 需要的并发锁数：VFS = 1 核心锁 + N 挂载锁 + 每后端 1 池锁） */
 #ifndef SYS_MUTEX_POOL_SIZE
-#define SYS_MUTEX_POOL_SIZE 12
+#define SYS_MUTEX_POOL_SIZE 16
 #endif
 
 typedef struct sys_mutex sys_mutex_t;

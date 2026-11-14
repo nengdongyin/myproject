@@ -53,14 +53,17 @@ static lfs_file_slot_t g_lfs_files[VFS_MAX_OPEN_FILES];
 static lfs_dir_slot_t g_lfs_dirs[VFS_MAX_OPEN_DIRS];
 #endif
 
+/** @brief 后端静态句柄池锁（文件槽 + 目录槽共用；独立于 core 与其它后端） */
+static sys_mutex_t *g_lfs_pool_lock;
+
 /**
  * @brief 分配一个 littlefs 文件句柄槽
- * @details 用后端池锁 SYS_LOCK_FILE 保护静态池；分配时把每文件 cache 绑定到 cfg。
+ * @details 用后端池锁保护静态池；分配时把每文件 cache 绑定到 cfg。
  * @return 空闲槽指针；池满返回 NULL
  */
 static lfs_file_slot_t *lfs_slot_alloc(void)
 {
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_lfs_pool_lock);
     for (int i = 0; i < VFS_MAX_OPEN_FILES; i++)
     {
         if (!g_lfs_files[i].used)
@@ -68,11 +71,11 @@ static lfs_file_slot_t *lfs_slot_alloc(void)
             memset(&g_lfs_files[i], 0, sizeof(g_lfs_files[i]));
             g_lfs_files[i].used = 1;
             g_lfs_files[i].cfg.buffer = g_lfs_files[i].cache;
-            system_unlock(SYS_LOCK_FILE);
+            sys_mutex_unlock(g_lfs_pool_lock);
             return &g_lfs_files[i];
         }
     }
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_lfs_pool_lock);
     return NULL;
 }
 
@@ -81,9 +84,9 @@ static void lfs_slot_free(lfs_file_slot_t *s)
 {
     if (!s)
         return;
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_lfs_pool_lock);
     memset(s, 0, sizeof(*s));
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_lfs_pool_lock);
 }
 
 /* ================================================================
@@ -221,6 +224,10 @@ static int lfs_vfs_mount(vfs_mount_t *mp)
         VFS_LFS_PROG_SIZE > bdev->blk_size ||
         (bdev->blk_size % VFS_LFS_PROG_SIZE) != 0)
         return -EINVAL;
+
+    /* 懒建后端池锁（mount 单线程，首次挂载创建，后续挂载点复用） */
+    if (!g_lfs_pool_lock)
+        g_lfs_pool_lock = sys_mutex_create();
 
     lfs_mnt_t *m = NULL;
     for (int i = 0; i < VFS_MAX_MOUNTS; i++)
@@ -508,7 +515,7 @@ static int lfs_vfs_opendir(vfs_dir_t *d, const char *rel)
     if (!m)
         return -ENODEV;
 
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_lfs_pool_lock);
     int slot = -1;
     for (int i = 0; i < VFS_MAX_OPEN_DIRS; i++)
     {
@@ -519,17 +526,17 @@ static int lfs_vfs_opendir(vfs_dir_t *d, const char *rel)
             break;
         }
     }
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_lfs_pool_lock);
     if (slot < 0)
         return -ENFILE;
 
-    /* 目录 I/O 不持全局池锁（避免跨卷瓶颈） */
+    /* 目录 I/O 不持后端池锁（避免跨卷瓶颈） */
     int rc = lfs_dir_open(&m->lfs, &g_lfs_dirs[slot].dir, rel);
     if (rc < 0)
     {
-        system_lock(SYS_LOCK_FILE);
+        sys_mutex_lock(g_lfs_pool_lock);
         g_lfs_dirs[slot].used = 0;
-        system_unlock(SYS_LOCK_FILE);
+        sys_mutex_unlock(g_lfs_pool_lock);
         return lfs_to_errno(rc);
     }
     d->priv = &g_lfs_dirs[slot];
@@ -569,9 +576,9 @@ static int lfs_vfs_closedir(vfs_dir_t *d)
     int rc = 0;
     if (m)
         rc = lfs_to_errno(lfs_dir_close(&m->lfs, &s->dir));
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_lfs_pool_lock);
     s->used = 0;
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_lfs_pool_lock);
     d->priv = NULL;
     return rc;
 }

@@ -135,6 +135,9 @@ static fat_file_t g_fat_files[VFS_MAX_OPEN_FILES];
 static fat_dir_t g_fat_dirs[VFS_MAX_OPEN_DIRS];
 #endif
 
+/** @brief 后端静态句柄池锁（文件槽 + 目录槽共用；独立于 core 与其它后端） */
+static sys_mutex_t *g_fat_pool_lock;
+
 /* ================================================================
  *  路径拼装 "N:/rel"
  * ================================================================ */
@@ -163,6 +166,10 @@ static int fat_vfs_mount(vfs_mount_t *mp)
     const vfs_bdev_t *bdev = mp->storage_dev;
     if (!bdev || bdev->blk_size != VFS_FATFS_SECTOR)
         return -EINVAL;
+
+    /* 懒建后端池锁（mount 单线程，首次挂载创建，后续挂载点复用） */
+    if (!g_fat_pool_lock)
+        g_fat_pool_lock = sys_mutex_create();
 
     int idx = -1;
     for (int i = 0; i < VFS_MAX_MOUNTS; i++)
@@ -228,21 +235,21 @@ static int fat_vfs_unmount(vfs_mount_t *mp)
 
 /**
  * @brief 分配一个 FatFs 文件句柄槽
- * @details 用后端池锁 SYS_LOCK_FILE 保护静态池。
+ * @details 用后端池锁保护静态池。
  * @return 空闲槽指针；池满返回 NULL
  */
 static fat_file_t *fat_file_alloc(void)
 {
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_fat_pool_lock);
     for (int i = 0; i < VFS_MAX_OPEN_FILES; i++)
         if (!g_fat_files[i].used)
         {
             memset(&g_fat_files[i], 0, sizeof(g_fat_files[i]));
             g_fat_files[i].used = 1;
-            system_unlock(SYS_LOCK_FILE);
+            sys_mutex_unlock(g_fat_pool_lock);
             return &g_fat_files[i];
         }
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_fat_pool_lock);
     return NULL;
 }
 
@@ -383,9 +390,9 @@ static int fat_vfs_close(vfs_file_t *f)
     if (!s)
         return 0;
     int rc = (f_close(&s->fil) == FR_OK) ? 0 : -EIO;
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_fat_pool_lock);
     s->used = 0;
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_fat_pool_lock);
     f->priv = NULL;
     return rc;
 }
@@ -473,7 +480,7 @@ static int fat_vfs_opendir(vfs_dir_t *d, const char *rel)
     char path[VFS_PATH_MAX + 4];
     fat_path(m, rel, path, sizeof(path));
 
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_fat_pool_lock);
     int slot = -1;
     for (int i = 0; i < VFS_MAX_OPEN_DIRS; i++)
     {
@@ -484,17 +491,17 @@ static int fat_vfs_opendir(vfs_dir_t *d, const char *rel)
             break;
         }
     }
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_fat_pool_lock);
     if (slot < 0)
         return -ENFILE;
 
-    /* 目录 I/O 不持全局池锁（避免跨卷瓶颈） */
+    /* 目录 I/O 不持后端池锁（避免跨卷瓶颈） */
     FRESULT fr = f_opendir(&g_fat_dirs[slot].dir, path);
     if (fr != FR_OK)
     {
-        system_lock(SYS_LOCK_FILE);
+        sys_mutex_lock(g_fat_pool_lock);
         g_fat_dirs[slot].used = 0;
-        system_unlock(SYS_LOCK_FILE);
+        sys_mutex_unlock(g_fat_pool_lock);
         return -ENOENT;
     }
     d->priv = &g_fat_dirs[slot];
@@ -529,9 +536,9 @@ static int fat_vfs_closedir(vfs_dir_t *d)
     if (!s)
         return 0;
     int rc = (f_closedir(&s->dir) == FR_OK) ? 0 : -EIO;
-    system_lock(SYS_LOCK_FILE);
+    sys_mutex_lock(g_fat_pool_lock);
     s->used = 0;
-    system_unlock(SYS_LOCK_FILE);
+    sys_mutex_unlock(g_fat_pool_lock);
     d->priv = NULL;
     return rc;
 }
