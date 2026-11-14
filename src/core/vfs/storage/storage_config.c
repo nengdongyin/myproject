@@ -120,7 +120,7 @@ static const vfs_mount_cfg_t s_mounts[] = {
     {STORAGE_MNT_FILES, VFS_FSTYPE_LITTLEFS, "flash_lfs", VFS_MNT_AUTOFORMAT, NULL},
     {STORAGE_MNT_RAW, VFS_FSTYPE_RAWFLASH, NULL, 0, &s_raw_vol},
 #if VFS_ENABLE_FATFS
-    {STORAGE_MNT_SD, VFS_FSTYPE_FATFS, "sd_card", 0, NULL},
+    {STORAGE_MNT_SD, VFS_FSTYPE_FATFS, "sd_card", VFS_MNT_AUTOFORMAT, NULL},
 #endif
 };
 

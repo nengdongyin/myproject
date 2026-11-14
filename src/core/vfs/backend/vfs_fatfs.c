@@ -32,6 +32,11 @@
 /** @brief pdrv → bdev 映射表（diskio 回调据此转发扇区访问） */
 static const vfs_bdev_t *g_fat_disk[VFS_FATFS_VOLUMES];
 
+#if FF_USE_MKFS
+/** @brief f_mkfs 工作缓冲区（零堆；至少 FF_MAX_SS=512 字节，单扇区足够） */
+static uint8_t g_fat_mkfs_work[VFS_FATFS_SECTOR];
+#endif
+
 /** @brief FatFs diskio：返回盘符状态（已绑定 bdev 则 OK，否则 NOINIT） */
 DSTATUS disk_status(BYTE pdrv)
 {
@@ -149,7 +154,8 @@ static void fat_path(const fat_mnt_t *m, const char *rel, char *out, size_t n)
 /**
  * @brief 挂载 FatFs 卷
  * @details 校验扇区大小须为 512，分配挂载槽与空闲 pdrv，建立 pdrv→bdev 映射，
- *          再 f_mount 立即挂载。失败回滚 pdrv 映射。
+ *          再 f_mount 立即挂载。若挂载点开启 VFS_MNT_AUTOFORMAT 且 f_mount
+ *          返回 FR_NO_FILESYSTEM（未格式化），则先 f_mkfs 再重试挂载；失败回滚 pdrv 映射。
  * @return 0 成功；-EINVAL 扇区大小不符，-ENOSPC 槽/pdrv 耗尽，-EIO f_mount 失败
  */
 static int fat_vfs_mount(vfs_mount_t *mp)
@@ -187,6 +193,16 @@ static int fat_vfs_mount(vfs_mount_t *mp)
     m->prefix[2] = '\0';
 
     FRESULT fr = f_mount(&m->fs, m->prefix, 1);
+#if FF_USE_MKFS
+    /* 首次上电/未格式化：f_mount 报 FR_NO_FILESYSTEM。若挂载点开启
+       VFS_MNT_AUTOFORMAT，则自动 f_mkfs 后重试挂载（破坏性，仅对无文件系统的卡生效）。 */
+    if (fr == FR_NO_FILESYSTEM && (mp->flags & VFS_MNT_AUTOFORMAT))
+    {
+        fr = f_mkfs(m->prefix, NULL, g_fat_mkfs_work, sizeof(g_fat_mkfs_work));
+        if (fr == FR_OK)
+            fr = f_mount(&m->fs, m->prefix, 1);
+    }
+#endif
     if (fr != FR_OK)
     {
         g_fat_disk[pdrv] = NULL;
