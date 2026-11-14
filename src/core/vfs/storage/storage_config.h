@@ -18,6 +18,8 @@ extern "C"
 #define STORAGE_MNT_FILES "/lfs"
 /** @brief 裸 flash 挂载点（静态注册伪 FS） */
 #define STORAGE_MNT_RAW "/raw"
+/** @brief SD 卡挂载点（FatFs） */
+#define STORAGE_MNT_SD "/sd"
 
 /**
  * @brief 初始化并挂载所有存储卷

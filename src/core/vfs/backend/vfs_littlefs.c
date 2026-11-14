@@ -199,6 +199,8 @@ static void lfs_build_cfg(lfs_mnt_t *m, const vfs_bdev_t *bdev)
  * @details 先校验 bdev 与几何参数（read ≤ prog ≤ block、cache ≥ prog、block
  *          为 prog 整数倍），再从静态池取一个空闲挂载槽，构建 lfs_config 并
  *          调用 lfs_mount；失败返回负 errno（LFS_ERR_CORRUPT → -EIO）。
+ *          若挂载点开启 VFS_MNT_AUTOFORMAT 且 lfs_mount 返回 LFS_ERR_CORRUPT
+ *          （首次上电未格式化/分区损坏），则自动 lfs_format 后重试挂载。
  * @return 0 成功；-EINVAL 几何非法，-ENOSPC 挂载槽满，< 0 lfs 错误码
  */
 static int lfs_vfs_mount(vfs_mount_t *mp)
@@ -236,6 +238,15 @@ static int lfs_vfs_mount(vfs_mount_t *mp)
 
     lfs_build_cfg(m, bdev);
     int rc = lfs_mount(&m->lfs, &m->cfg);
+    /* 首次上电/分区未格式化：lfs_mount 报 LFS_ERR_CORRUPT。若挂载点开启
+       VFS_MNT_AUTOFORMAT，则自动格式化后重试挂载，实现免预格式化自动挂载。
+       仅对 CORRUPT（未格式化/损坏）生效；I/O 错误（LFS_ERR_IO）不做破坏性恢复。 */
+    if (rc == LFS_ERR_CORRUPT && (mp->flags & VFS_MNT_AUTOFORMAT))
+    {
+        rc = lfs_format(&m->lfs, &m->cfg);
+        if (rc == LFS_ERR_OK)
+            rc = lfs_mount(&m->lfs, &m->cfg);
+    }
     if (rc < 0)
     {
         m->used = 0;

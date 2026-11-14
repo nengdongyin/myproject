@@ -95,6 +95,16 @@
 #endif
 
 /**
+ * @brief SD 卡介质驱动（默认关：需 Zephyr 磁盘驱动 + STORAGE_SD_DISK_NAME 匹配）
+ *
+ * 置 1 后把 storage_drv_sd.c 纳入构建（把 Zephyr disk_access 封装为 vfs_storage_t）。
+ * 依赖工程先启用一个磁盘驱动（SDMMC / SPI SD）并在 devicetree 给出对应盘名。
+ */
+#ifndef VFS_ENABLE_SD
+#define VFS_ENABLE_SD             0
+#endif
+
+/**
  * @brief FatFs 后端（默认关：需工程先引入 FatFs 库 + SD 块设备）
  *
  * 置 1 后把 vfs_fatfs.c 纳入构建；FatFs 缺失时保持 0。

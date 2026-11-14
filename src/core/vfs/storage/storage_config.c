@@ -28,7 +28,9 @@
 #include "vfs.h"
 #include "vfs_littlefs.h"
 #include "vfs_rawflash.h"
+#include "vfs_fatfs.h"
 #include "storage_drv_fal.h"
+#include "storage_drv_sd.h"
 #include "fal.h"
 #include <errno.h>
 
@@ -56,20 +58,66 @@
  *  配置数据表（唯一改配置处）
  * ================================================================ */
 
-/** @brief 分区几何表条目：一行 = 一个分区切片 */
+/** @brief 介质来源获取器：按名字取得（或探测）一个 vfs_storage_t */
+typedef const vfs_storage_t *(*storage_getter_t)(const char *name);
+
+/** @brief size 字段特殊值：0 = 整介质（从 offset 到介质末尾，如 SD 整卡） */
+#define PART_SIZE_WHOLE 0u
+
+/** @brief 分区可选性：介质缺失时的处理方式 */
+typedef enum
+{
+    PART_REQUIRED = 0, /**< 必需：介质缺失 → 整体装配失败 */
+    PART_OPTIONAL = 1, /**< 可选：介质缺失 → 跳过该分区（如未插 SD 卡） */
+} part_optional_t;
+
+/** @brief 分区几何表条目：一行 = 一个分区切片（换介质只换 get_storage） */
 typedef struct
 {
-    const char *bdev_name; /**< 分区名（bdev 注册名 + 挂载表引用名） */
-    const char *fal_flash; /**< 介质/几何来源：FAL flash 设备名 */
-    uint32_t offset;       /**< 设备内起始字节偏移（须块对齐） */
-    uint32_t size;         /**< 分区大小（须块对齐） */
+    const char *bdev_name;      /**< 分区名（bdev 注册名 + 挂载表引用名） */
+    storage_getter_t get_storage; /**< 介质来源获取器（FAL/SD/... 各自实现） */
+    const char *media_name;     /**< 传给 getter 的名字（flash 设备名 / 磁盘名） */
+    uint32_t offset;            /**< 设备内起始字节偏移（须块对齐） */
+    uint32_t size;              /**< 分区大小（须块对齐；PART_SIZE_WHOLE = 整介质） */
+    part_optional_t optional;   /**< PART_REQUIRED / PART_OPTIONAL */
 } part_cfg_t;
 
-/** @brief 分区几何表：加一个分区 = 加一行 */
+/** @brief 分区几何表：加一个分区 = 加一行（换介质只换 get_storage） */
 static const part_cfg_t s_parts[] = {
-    {"flash_lfs", STOR_FLASH_DEV, LFS_OFFSET, LFS_SIZE},
-    {"flash_raw0", STOR_FLASH_DEV, RAW0_OFFSET, RAW0_SIZE},
-    {"flash_raw1", STOR_FLASH_DEV, RAW1_OFFSET, RAW1_SIZE},
+    {
+        .bdev_name   = "flash_lfs",
+        .get_storage = storage_drv_fal_storage,
+        .media_name  = STOR_FLASH_DEV,
+        .offset      = LFS_OFFSET,
+        .size        = LFS_SIZE,
+        .optional    = PART_REQUIRED,
+    },
+    {
+        .bdev_name   = "flash_raw0",
+        .get_storage = storage_drv_fal_storage,
+        .media_name  = STOR_FLASH_DEV,
+        .offset      = RAW0_OFFSET,
+        .size        = RAW0_SIZE,
+        .optional    = PART_REQUIRED,
+    },
+    {
+        .bdev_name   = "flash_raw1",
+        .get_storage = storage_drv_fal_storage,
+        .media_name  = STOR_FLASH_DEV,
+        .offset      = RAW1_OFFSET,
+        .size        = RAW1_SIZE,
+        .optional    = PART_REQUIRED,
+    },
+#if VFS_ENABLE_SD
+    {
+        .bdev_name   = "sd_card",
+        .get_storage = storage_drv_sd_storage,
+        .media_name  = STORAGE_SD_DISK_NAME,
+        .offset      = 0,
+        .size        = PART_SIZE_WHOLE,
+        .optional    = PART_OPTIONAL,
+    },
+#endif
 };
 
 /** @brief rawflash 文件表条目：一行 = 一个静态注册"文件" */
@@ -97,8 +145,11 @@ static vfs_rawflash_vol_t s_raw_vol = {s_raw_entries,
 
 /** @brief 挂载表：一行 = 一个挂载点 */
 static const vfs_mount_cfg_t s_mounts[] = {
-    {STORAGE_MNT_FILES, VFS_FSTYPE_LITTLEFS, "flash_lfs", 0, NULL},
+    {STORAGE_MNT_FILES, VFS_FSTYPE_LITTLEFS, "flash_lfs", VFS_MNT_AUTOFORMAT, NULL},
     {STORAGE_MNT_RAW, VFS_FSTYPE_RAWFLASH, NULL, 0, &s_raw_vol},
+#if VFS_ENABLE_FATFS
+    {STORAGE_MNT_SD, VFS_FSTYPE_FATFS, "sd_card", 0, NULL},
+#endif
 };
 
 /* ================================================================
@@ -106,33 +157,43 @@ static const vfs_mount_cfg_t s_mounts[] = {
  * ================================================================ */
 
 /**
- * @brief 由分区几何表 + 介质驱动生成 bdev 配置表
- * @return 0 成功；-ENOENT 介质设备不存在，-EINVAL 未对齐/越界
+ * @brief 由分区几何表 + 介质驱动生成 bdev 配置表（可选介质缺失时跳过）
+ * @return >= 0 生成的 bdev 条目数；-ENOENT 必需介质缺失，-EINVAL 未对齐/越界
  */
 static int build_bdev_cfgs(void)
 {
     size_t n = sizeof(s_parts) / sizeof(s_parts[0]);
+    size_t built = 0;
     for (size_t i = 0; i < n; i++)
     {
         const part_cfg_t *p = &s_parts[i];
-        const vfs_storage_t *st = storage_drv_fal_storage(p->fal_flash);
+        const vfs_storage_t *st = p->get_storage(p->media_name);
         if (!st || st->blk_size == 0)
+        {
+            if (p->optional)
+                continue;   /* 可选介质缺失 → 跳过该分区，不中断整体 */
             return -ENOENT;
+        }
+
+        /* size == 0 表示"整介质"（如 SD 整卡），否则取表中显式大小 */
+        uint32_t size = p->size ? p->size : st->blk_count * st->blk_size;
 
         /* 对齐与边界校验（与旧 vfs_bdev_fal_flash_init 的校验一致） */
         uint32_t dev_total = st->blk_count * st->blk_size;
-        if ((p->offset % st->blk_size) != 0 || (p->size % st->blk_size) != 0)
+        if ((p->offset % st->blk_size) != 0 || (size % st->blk_size) != 0)
             return -EINVAL;
-        if (p->offset > dev_total || p->size > dev_total - p->offset)
+        if (p->offset > dev_total || size > dev_total - p->offset)
             return -EINVAL;
 
-        s_bdev_cfgs[i].name = p->bdev_name;
-        s_bdev_cfgs[i].storage = st;
-        s_bdev_cfgs[i].offset = p->offset;
-        s_bdev_cfgs[i].blk_size = st->blk_size;
-        s_bdev_cfgs[i].blk_count = p->size / st->blk_size;
+        vfs_bdev_cfg_t *c = &s_bdev_cfgs[built];
+        c->name = p->bdev_name;
+        c->storage = st;
+        c->offset = p->offset;
+        c->blk_size = st->blk_size;
+        c->blk_count = size / st->blk_size;
+        built++;
     }
-    return 0;
+    return (int)built;
 }
 
 /**
@@ -158,10 +219,30 @@ static int build_raw_entries(void)
 }
 
 /**
+ * @brief 按挂载表挂载已注册 bdev 的卷
+ * @details 对 bdev_name 非空但 bdev 未注册的挂载条目（如未插卡的可选 SD 卷），
+ *          跳过挂载；其余条目交 vfs_mount_table 一次性挂载。
+ * @return vfs_mount_table 的返回码（0 全部成功，否则最后一个失败码）
+ */
+static int mount_registered(void)
+{
+    vfs_mount_cfg_t mnts[sizeof(s_mounts) / sizeof(s_mounts[0])];
+    size_t nm = 0;
+    for (size_t i = 0; i < sizeof(s_mounts) / sizeof(s_mounts[0]); i++)
+    {
+        const vfs_mount_cfg_t *m = &s_mounts[i];
+        if (m->bdev_name && !vfs_bdev_find(m->bdev_name))
+            continue; /* bdev 未注册（可选介质缺失）→ 跳过该挂载点 */
+        mnts[nm++] = *m;
+    }
+    return vfs_mount_table(mnts, nm);
+}
+
+/**
  * @brief 初始化并挂载所有存储卷
  * @details 通用装配流程（与具体分区无关）：vfs_init → fal_init → 由表生成
  *          bdev 配置 → 表驱动注册 bdev → 生成 rawflash 条目 → 注册 FS 类型
- *          → 按挂载表一次性挂载。
+ *          → 按挂载表挂载（可选介质缺失时跳过其挂载点）。
  * @return 0 成功；< 0 失败步骤的负 errno
  */
 int storage_config_init(void)
@@ -176,13 +257,15 @@ int storage_config_init(void)
     fal_init(); /* 幂等；FAL 作为介质/几何来源之一 */
 
     /* 1) 由分区几何表 + 介质驱动生成 bdev 配置，表驱动注册 */
-    rc = build_bdev_cfgs();
-    if (rc != 0)
-        return rc;
-    rc = vfs_bdev_register_table(s_bdev_cfgs,
-                                 sizeof(s_bdev_cfgs) / sizeof(s_bdev_cfgs[0]));
-    if (rc != 0)
-        return rc;
+    int nbdev = build_bdev_cfgs();
+    if (nbdev < 0)
+        return nbdev;
+    if (nbdev > 0)
+    {
+        rc = vfs_bdev_register_table(s_bdev_cfgs, (size_t)nbdev);
+        if (rc != 0)
+            return rc;
+    }
 
     /* 2) 由 rawflash 文件表 + 已注册分区生成 rawflash 条目表 */
     rc = build_raw_entries();
@@ -196,9 +279,14 @@ int storage_config_init(void)
     rc = vfs_register(VFS_FSTYPE_RAWFLASH, &vfs_rawflash_ops);
     if (rc != 0 && rc != -EALREADY)
         return rc;
+#if VFS_ENABLE_FATFS
+    rc = vfs_register(VFS_FSTYPE_FATFS, &vfs_fatfs_ops);
+    if (rc != 0 && rc != -EALREADY)
+        return rc;
+#endif
 
-    /* 4) 按挂载表挂载 */
-    return vfs_mount_table(s_mounts, sizeof(s_mounts) / sizeof(s_mounts[0]));
+    /* 4) 按挂载表挂载（可选介质缺失时其 bdev 未注册，自动跳过该挂载点） */
+    return mount_registered();
 }
 
 void storage_config_deinit(void)

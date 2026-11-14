@@ -86,6 +86,7 @@ target_sources(app PRIVATE
       src/core/vfs/stdio/vfs_stdio_armcc.c
       src/core/vfs/storage/storage_config.c
       src/core/vfs/storage/storage_drv_fal.c
+      src/core/vfs/storage/storage_drv_sd.c
       src/core/vfs/rawflash/rawflash.c
       src/lib/flashdb/src/fdb.c
       src/lib/flashdb/src/fdb_kvdb.c
