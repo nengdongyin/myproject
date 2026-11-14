@@ -16,6 +16,7 @@ extern const test_suite_t _ts_vsc_resolver;
 extern const test_suite_t _ts_vfs_bdev;
 extern const test_suite_t _ts_rawflash;
 extern const test_suite_t _ts_vfs_core;
+extern const test_suite_t _ts_vfs_format;
 extern const test_suite_t _ts_mkv;
 
 int main(void)
@@ -37,6 +38,7 @@ int main(void)
     test_suite_add(&_ts_vfs_bdev);
     test_suite_add(&_ts_rawflash);
     test_suite_add(&_ts_vfs_core);
+    test_suite_add(&_ts_vfs_format);
     test_suite_add(&_ts_mkv);
 
     int failures = test_suite_run_all();

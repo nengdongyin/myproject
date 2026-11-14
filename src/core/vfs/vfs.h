@@ -154,6 +154,8 @@ extern "C"
 #define VFS_CAP_MKDIR    (1u << 7)
 /** @brief 支持卷容量查询（statvfs） */
 #define VFS_CAP_STATVFS  (1u << 8)
+/** @brief 支持格式化（vfs_format） */
+#define VFS_CAP_FORMAT   (1u << 9)
 
     /* ---- 前向声明 ---- */
     struct vfs_mount;
@@ -213,6 +215,13 @@ extern "C"
         /* ---- 文件系统生命周期 ---- */
         int (*mount)(vfs_mount_t *mp);   /**< 读 mp->fs_data、建 mp->fs_ctx；可 NULL */
         int (*unmount)(vfs_mount_t *mp); /**< 释放 mp->fs_ctx；可 NULL */
+        /**
+         * @brief 格式化挂载点背后的块设备（破坏性，由 vfs_format 调用）
+         * @param bdev 挂载点绑定的分区切片（= mp->storage_dev，不依赖 mount 是否成功）
+         * @return 0 成功；< 0 负 errno
+         * @note 仅对声明 VFS_CAP_FORMAT 的后端有意义；不可格式化（如 rawflash）置 NULL。
+         */
+        int (*format)(const vfs_bdev_t *bdev);
 
         /* ---- 文件操作（open/read/write/lseek/close 必需） ---- */
         /**
@@ -370,6 +379,23 @@ extern "C"
      * @note 并发：仅限启动/关闭阶段单线程调用（见 vfs_mount）。
      */
     int vfs_unmount(const char *mnt_point);
+
+    /**
+     * @brief 按路径强制格式化对应卷（破坏性，仅格式化，不重挂载）
+     * @details 流程：由挂载配置注册表解析路径（不要求卷已挂载，挂载失败/未挂载
+     *          仍可解析）→ 校验后端支持 VFS_CAP_FORMAT → 解析块设备 → 卷已挂载则
+     *          拒绝(-EBUSY，须先 vfs_unmount) → 调用后端 format 格式化块设备。
+     *          本接口只做格式化，重新挂载由应用层负责。
+     * @param path 挂载点绝对路径，如 "/sd"
+     * @retval 0      成功
+     * @retval -EINVAL 路径非绝对
+     * @retval -ENOENT 挂载点未配置 / 介质未就绪（无块设备）
+     * @retval -ENOTSUP 后端不支持格式化（无 VFS_CAP_FORMAT / format 回调）
+     * @retval -EBUSY 卷已挂载（须先 vfs_unmount）
+     * @note 并发：仅限启动/恢复期单线程调用（见 vfs_mount）；格式化是破坏性操作，
+     *       是否执行应由应用层确认。
+     */
+    int vfs_format(const char *path);
 
 /* ================================================================
  *  文件操作

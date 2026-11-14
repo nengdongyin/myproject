@@ -22,6 +22,13 @@
 #define VFS_FATFS_VOLUMES 2
 #endif
 
+/* 编译期防御：盘符用单个十进制数字 '0'+pdrv 拼装，故逻辑盘数上限为 10（'0'..'9'）。
+ * 超过则 pdrv>=10 会拼出 ':' 等非法盘符，f_mkfs/f_mount 的 get_ldnumber 只认单个
+ * 数字盘符（IsDigit），必然 FR_INVALID_DRIVE。此处编译报错，避免运行期静默失败。 */
+#if VFS_FATFS_VOLUMES > 10
+#error "VFS_FATFS_VOLUMES must be <= 10: drive letter is a single decimal digit '0'..'9'"
+#endif
+
 /** @brief FatFs 约定的扇区大小（与 SD 一致） */
 #define VFS_FATFS_SECTOR 512u
 
@@ -257,6 +264,48 @@ static int fat_vfs_unmount(vfs_mount_t *mp)
     mp->fs_ctx = NULL;
     return 0;
 }
+
+#if FF_USE_MKFS
+/**
+ * @brief 格式化 FatFs 卷（破坏性，强制）：无条件 f_mkfs，不判空白/分区表
+ * @details 借用一个空闲 pdrv 建立 pdrv→bdev 映射后 f_mkfs，随后归还映射。
+ *          与 AUTOFORMAT 的保守路径不同：本函数由应用显式调用（vfs_format），
+ *          故不做空白/分区表保护，可格式化乱数据、exFAT（若编译支持）、MBR/GPT 卡。
+ * @param bdev 分区切片（须 blk_size == 512）
+ * @return 0 成功；-EINVAL 参数错，-ENOSPC 无空闲 pdrv，-EIO f_mkfs 失败
+ */
+int vfs_fatfs_format_bdev(const vfs_bdev_t *bdev)
+{
+    if (!bdev || bdev->blk_size != VFS_FATFS_SECTOR)
+        return -EINVAL;
+
+    BYTE pdrv = 0xFF;
+    for (BYTE i = 0; i < VFS_FATFS_VOLUMES; i++)
+        if (!g_fat_disk[i])
+        {
+            pdrv = i;
+            break;
+        }
+    if (pdrv == 0xFF)
+        return -ENOSPC;
+
+    char prefix[4];
+    prefix[0] = (char)('0' + pdrv);
+    prefix[1] = ':';
+    prefix[2] = '\0';
+
+    g_fat_disk[pdrv] = bdev;
+    FRESULT fr = f_mkfs(prefix, NULL, g_fat_mkfs_work, sizeof(g_fat_mkfs_work));
+    g_fat_disk[pdrv] = NULL;
+    return (fr == FR_OK) ? 0 : -EIO;
+}
+#else /* !FF_USE_MKFS */
+int vfs_fatfs_format_bdev(const vfs_bdev_t *bdev)
+{
+    (void)bdev;
+    return -ENOTSUP;
+}
+#endif
 
 /**
  * @brief 分配一个 FatFs 文件句柄槽
@@ -577,9 +626,10 @@ const vfs_fs_ops_t vfs_fatfs_ops = {
     .name = "fatfs",
     .caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_APPEND | VFS_CAP_SEEK |
             VFS_CAP_TRUNCATE | VFS_CAP_DIR | VFS_CAP_RENAME | VFS_CAP_MKDIR |
-            VFS_CAP_STATVFS,
+            VFS_CAP_STATVFS | VFS_CAP_FORMAT,
     .mount = fat_vfs_mount,
     .unmount = fat_vfs_unmount,
+    .format = vfs_fatfs_format_bdev,
     .open = fat_vfs_open,
     .read = fat_vfs_read,
     .write = fat_vfs_write,

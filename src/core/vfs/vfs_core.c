@@ -75,6 +75,15 @@ typedef struct
     const vfs_bdev_t *bdev;    /**< 分区切片指针 */
 } vfs_bdev_entry_t;
 
+/** @brief 挂载配置登记项（路径 → FS 类型 + 块设备），供 vfs_format 按路径解析 */
+typedef struct
+{
+    uint8_t used;                  /**< 槽位占用标记 */
+    char mnt_point[VFS_PATH_MAX];  /**< 规范挂载点（去尾部 '/'） */
+    uint8_t fstype;                /**< vfs_fstype_t */
+    const vfs_bdev_t *bdev;        /**< 记录时解析的块设备（介质缺失时为 NULL） */
+} vfs_mnt_cfg_entry_t;
+
 /* ---- 全局状态（全部静态池，零堆） ---- */
 /** @brief 文件系统类型注册表（静态池） */
 static vfs_reg_entry_t g_registry[VFS_MAX_TYPES];
@@ -88,6 +97,8 @@ static vfs_bdev_t g_bdev_pool[VFS_MAX_BDEVS];
 static int g_bdev_pool_n;
 /** @brief 挂载点表（静态池） */
 static vfs_mount_t g_mounts[VFS_MAX_MOUNTS];
+/** @brief 挂载配置注册表（静态池）：mount 时登记、挂载失败也保留，供 vfs_format 解析 */
+static vfs_mnt_cfg_entry_t g_mnt_cfgs[VFS_MAX_MOUNTS];
 /** @brief 文件句柄池（静态池，零堆） */
 static vfs_handle_t g_files[VFS_MAX_OPEN_FILES];
 /** @brief 目录句柄池（静态池，零堆） */
@@ -123,6 +134,72 @@ static const vfs_bdev_t *bdev_find(const char *name)
             return g_bdevs[i].bdev;
     }
     return NULL;
+}
+
+/** @brief 规范化挂载点长度（去掉尾部 '/'，至少保留根 '/'） */
+static size_t mnt_point_norm_len(const char *p)
+{
+    size_t l = strlen(p);
+    while (l > 1 && p[l - 1] == '/')
+        l--;
+    return l;
+}
+
+/** @brief 在挂载配置注册表中按挂载点查找（容忍尾部 '/'） */
+static const vfs_mnt_cfg_entry_t *mount_cfg_find(const char *mnt_point)
+{
+    if (!mnt_point)
+        return NULL;
+    size_t plen = mnt_point_norm_len(mnt_point);
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+    {
+        if (g_mnt_cfgs[i].used && strlen(g_mnt_cfgs[i].mnt_point) == plen &&
+            strncmp(g_mnt_cfgs[i].mnt_point, mnt_point, plen) == 0)
+            return &g_mnt_cfgs[i];
+    }
+    return NULL;
+}
+
+/** @brief 在活动挂载点表中按挂载点查找（容忍尾部 '/'；未挂载返回 NULL） */
+static vfs_mount_t *mount_point_find(const char *mnt_point)
+{
+    if (!mnt_point)
+        return NULL;
+    size_t plen = mnt_point_norm_len(mnt_point);
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+    {
+        if (g_mounts[i].used && g_mounts[i].mnt_len == plen &&
+            strncmp(g_mounts[i].mnt_point, mnt_point, plen) == 0)
+            return &g_mounts[i];
+    }
+    return NULL;
+}
+
+/** @brief 登记挂载配置（已存在则更新；表满则忽略，与 g_mounts 同上限不致溢出） */
+static void mount_cfg_record(const char *mnt_point, uint8_t fstype, const vfs_bdev_t *bdev)
+{
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+    {
+        if (g_mnt_cfgs[i].used && strcmp(g_mnt_cfgs[i].mnt_point, mnt_point) == 0)
+        {
+            g_mnt_cfgs[i].fstype = fstype;
+            g_mnt_cfgs[i].bdev = bdev;
+            return;
+        }
+    }
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+    {
+        if (!g_mnt_cfgs[i].used)
+        {
+            memset(&g_mnt_cfgs[i], 0, sizeof(g_mnt_cfgs[i]));
+            g_mnt_cfgs[i].used = 1;
+            strncpy(g_mnt_cfgs[i].mnt_point, mnt_point, VFS_PATH_MAX - 1);
+            g_mnt_cfgs[i].mnt_point[VFS_PATH_MAX - 1] = '\0';
+            g_mnt_cfgs[i].fstype = fstype;
+            g_mnt_cfgs[i].bdev = bdev;
+            return;
+        }
+    }
 }
 
 /**
@@ -407,6 +484,9 @@ static int mount_one(const vfs_mount_cfg_t *cfg)
     mp->fs_ctx = NULL;          /* [out] backend 运行时实例：mount 填充 */
     mp->storage_dev = bdev_find(cfg->bdev_name);
 
+    /* 登记挂载配置（挂载失败也保留，供 vfs_format 解析未挂载的卷） */
+    mount_cfg_record(norm, cfg->fstype, mp->storage_dev);
+
     /* 每挂载点锁 */
 #if VFS_ENABLE_MP_LOCK
     mp->lock = VFS_LOCK_CREATE();
@@ -503,6 +583,7 @@ void vfs_deinit(void)
         VFS_LOCK_DESTROY(mp->lock);
     }
     memset(g_mounts, 0, sizeof(g_mounts));
+    memset(g_mnt_cfgs, 0, sizeof(g_mnt_cfgs));
     memset(g_registry, 0, sizeof(g_registry));
     memset(g_bdevs, 0, sizeof(g_bdevs));
     g_bdev_n = 0;
@@ -696,6 +777,30 @@ int vfs_unmount(const char *mnt_point)
     return -ENOTSUP;
 }
 #endif /* VFS_ENABLE_DYNAMIC_MOUNT */
+
+int vfs_format(const char *path)
+{
+    if (!path || path[0] != '/')
+        return -EINVAL;
+
+    /* 由挂载配置注册表解析（不要求卷已挂载：SD 乱数据挂载失败后仍可解析） */
+    const vfs_mnt_cfg_entry_t *e = mount_cfg_find(path);
+    if (!e)
+        return -ENOENT;
+
+    const vfs_fs_ops_t *ops = registry_find(e->fstype);
+    if (!ops || !ops->format || !(ops->caps & VFS_CAP_FORMAT))
+        return -ENOTSUP;
+
+    if (!e->bdev)
+        return -ENOENT; /* 介质未就绪（如未插卡） */
+
+    /* 卷已挂载则拒绝：格式化会破坏活动挂载点，须先 vfs_unmount */
+    if (mount_point_find(e->mnt_point))
+        return -EBUSY;
+
+    return ops->format(e->bdev);
+}
 
 const vfs_fs_ops_t *vfs_fstype_lookup(uint8_t fstype)
 {

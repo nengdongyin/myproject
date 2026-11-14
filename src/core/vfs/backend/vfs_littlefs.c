@@ -592,9 +592,10 @@ const vfs_fs_ops_t vfs_littlefs_ops = {
     .name = "littlefs",
     .caps = VFS_CAP_READ | VFS_CAP_WRITE | VFS_CAP_APPEND | VFS_CAP_SEEK |
             VFS_CAP_TRUNCATE | VFS_CAP_DIR | VFS_CAP_RENAME | VFS_CAP_MKDIR |
-            VFS_CAP_STATVFS,
+            VFS_CAP_STATVFS | VFS_CAP_FORMAT,
     .mount = lfs_vfs_mount,
     .unmount = lfs_vfs_unmount,
+    .format = vfs_littlefs_format_bdev,
     .open = lfs_vfs_open,
     .read = lfs_vfs_read,
     .write = lfs_vfs_write,

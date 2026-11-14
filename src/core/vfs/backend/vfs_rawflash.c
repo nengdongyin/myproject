@@ -400,6 +400,7 @@ const vfs_fs_ops_t vfs_rawflash_ops = {
     .rename = NULL,
     .mkdir = NULL,
     .statvfs = NULL,
+    .format = NULL,
 #if VFS_ENABLE_DIR
     .opendir = raw_opendir,
     .readdir = raw_readdir,

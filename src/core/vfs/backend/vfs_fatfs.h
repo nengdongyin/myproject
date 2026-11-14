@@ -26,6 +26,14 @@ extern "C"
     /** @brief FatFs 后端虚函数表 */
     extern const vfs_fs_ops_t vfs_fatfs_ops;
 
+    /**
+     * @brief 格式化 FatFs 分区（破坏性，强制；无需先挂载）
+     * @param bdev 分区切片（须 blk_size == 512）
+     * @return 0 成功；-EINVAL 参数错，-ENOSPC 无空闲 pdrv，
+     *         -EIO f_mkfs 失败，-ENOTSUP 未开 FF_USE_MKFS
+     */
+    int vfs_fatfs_format_bdev(const vfs_bdev_t *bdev);
+
 #ifdef __cplusplus
 }
 #endif

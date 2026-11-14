@@ -641,7 +641,7 @@ typedef struct vfs_mount_cfg {
 | rawflash 写返回 `-EBUSY` | 同文件已有写会话未关闭 | 先 `vfs_close` 旧写 fd；查是否有 fd 泄漏 |
 | `-ENFILE` | 句柄池耗尽 | 增大 `VFS_MAX_OPEN_FILES/DIRS`，或检查是否有 fd 泄漏（未 close） |
 | `-ENOSPC` | 空间不足 / 挂载槽或锁池耗尽 | 检查介质剩余；增大 `VFS_MAX_MOUNTS` / `SYS_MUTEX_POOL_SIZE` |
-| 挂载返回 `-EIO` | littlefs 分区未格式化/损坏（且未开 `VFS_MNT_AUTOFORMAT`） | 挂载点加 `VFS_MNT_AUTOFORMAT` 自动格式化，或手动 `storage_config_format("flash_lfs")` / `vfs_littlefs_format_bdev(bdev)` |
+| 挂载返回 `-EIO` | littlefs 分区未格式化/损坏（且未开 `VFS_MNT_AUTOFORMAT`） | 挂载点加 `VFS_MNT_AUTOFORMAT` 自动格式化，或手动 `vfs_format("/lfs")` |
 | 挂载返回 `-EINVAL` | 分区几何非法（对齐/容量/参数） | 检查 `storage_config.c` 分区表的 offset/size 是否块对齐、≤ 设备容量 |
 | 并发下数据错乱 | 固定锁未初始化 | 确认启动早期调用了 `system_mutex_init()` |
 | 挂载 `-ENOSPC` | `SYS_MUTEX_POOL_SIZE` 不足 | 需 ≥ `VFS_MAX_MOUNTS + 1`（核心锁）+ 后端池锁数（当前 3 把） |
