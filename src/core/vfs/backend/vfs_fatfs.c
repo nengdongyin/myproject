@@ -155,10 +155,35 @@ static void fat_path(const fat_mnt_t *m, const char *rel, char *out, size_t n)
  * ================================================================ */
 
 /**
+ * @brief 判断 SD 卡首扇区是否空白（全 0xFF 或全 0x00，即从未格式化）
+ * @details f_mount 对「空白卡」「exFAT 卡（FF_FS_EXFAT=0 不识别）」「带 MBR/GPT
+ *          分区表的卡」都返回 FR_NO_FILESYSTEM。自动 f_mkfs 前须确认确为空白，
+ *          否则会误擦 exFAT / 分区表卡上的数据。读扇区 0 判全 0xFF 或全 0x00。
+ * @return 1 = 空白；0 = 非空白或读失败（保守，不格式化）
+ */
+static int fat_bdev_is_blank(const vfs_bdev_t *bdev)
+{
+    uint8_t buf[VFS_FATFS_SECTOR];
+    if (vfs_bdev_read(bdev, 0, buf, 1) != 0)
+        return 0;
+    int all_ff = 1, all_00 = 1;
+    for (int i = 0; i < VFS_FATFS_SECTOR; i++)
+    {
+        if (buf[i] != 0xFF)
+            all_ff = 0;
+        if (buf[i] != 0x00)
+            all_00 = 0;
+        if (!all_ff && !all_00)
+            return 0;
+    }
+    return 1;
+}
+
+/**
  * @brief 挂载 FatFs 卷
  * @details 校验扇区大小须为 512，分配挂载槽与空闲 pdrv，建立 pdrv→bdev 映射，
  *          再 f_mount 立即挂载。若挂载点开启 VFS_MNT_AUTOFORMAT 且 f_mount
- *          返回 FR_NO_FILESYSTEM（未格式化），则先 f_mkfs 再重试挂载；失败回滚 pdrv 映射。
+ *          返回 FR_NO_FILESYSTEM 且首扇区确为空白，则先 f_mkfs 再重试挂载；失败回滚 pdrv 映射。
  * @return 0 成功；-EINVAL 扇区大小不符，-ENOSPC 槽/pdrv 耗尽，-EIO f_mount 失败
  */
 static int fat_vfs_mount(vfs_mount_t *mp)
@@ -201,9 +226,9 @@ static int fat_vfs_mount(vfs_mount_t *mp)
 
     FRESULT fr = f_mount(&m->fs, m->prefix, 1);
 #if FF_USE_MKFS
-    /* 首次上电/未格式化：f_mount 报 FR_NO_FILESYSTEM。若挂载点开启
-       VFS_MNT_AUTOFORMAT，则自动 f_mkfs 后重试挂载（破坏性，仅对无文件系统的卡生效）。 */
-    if (fr == FR_NO_FILESYSTEM && (mp->flags & VFS_MNT_AUTOFORMAT))
+    /* 自动格式化仅在「确为空白卡」时进行：f_mount 对空白卡 / exFAT 卡 / 带分区
+       表的卡都返回 FR_NO_FILESYSTEM，须用首扇区空白判断排除后两类，避免误擦数据。 */
+    if (fr == FR_NO_FILESYSTEM && (mp->flags & VFS_MNT_AUTOFORMAT) && fat_bdev_is_blank(bdev))
     {
         fr = f_mkfs(m->prefix, NULL, g_fat_mkfs_work, sizeof(g_fat_mkfs_work));
         if (fr == FR_OK)

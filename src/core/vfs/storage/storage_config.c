@@ -102,8 +102,16 @@ typedef struct
 
 /** @brief rawflash 文件表：数据容量由分区几何自动推导 */
 static const raw_cfg_t s_raw_cfgs[] = {
-    {"boot_log", "flash_raw0", 0},
-    {"factory", "flash_raw1", 0},
+    {
+        .file_name = "boot_log",
+        .bdev_name = "flash_raw0",
+        .flags     = 0,
+    },
+    {
+        .file_name = "factory",
+        .bdev_name = "flash_raw1",
+        .flags     = 0,
+    },
 };
 
 /* ---- 运行时派生物（由上面的表在 init 时生成，核心侧持备份） ---- */
@@ -117,10 +125,28 @@ static vfs_rawflash_vol_t s_raw_vol = {s_raw_entries,
 
 /** @brief 挂载表：一行 = 一个挂载点 */
 static const vfs_mount_cfg_t s_mounts[] = {
-    {STORAGE_MNT_FILES, VFS_FSTYPE_LITTLEFS, "flash_lfs", VFS_MNT_AUTOFORMAT, NULL},
-    {STORAGE_MNT_RAW, VFS_FSTYPE_RAWFLASH, NULL, 0, &s_raw_vol},
+    {
+        .mnt_point = STORAGE_MNT_FILES,
+        .fstype    = VFS_FSTYPE_LITTLEFS,
+        .bdev_name = "flash_lfs",
+        .flags     = VFS_MNT_AUTOFORMAT,
+        .fs_data   = NULL,
+    },
+    {
+        .mnt_point = STORAGE_MNT_RAW,
+        .fstype    = VFS_FSTYPE_RAWFLASH,
+        .bdev_name = NULL,
+        .flags     = 0,
+        .fs_data   = &s_raw_vol,
+    },
 #if VFS_ENABLE_FATFS
-    {STORAGE_MNT_SD, VFS_FSTYPE_FATFS, "sd_card", VFS_MNT_AUTOFORMAT, NULL},
+    {
+        .mnt_point = STORAGE_MNT_SD,
+        .fstype    = VFS_FSTYPE_FATFS,
+        .bdev_name = "sd_card",
+        .flags     = VFS_MNT_AUTOFORMAT,
+        .fs_data   = NULL,
+    },
 #endif
 };
 

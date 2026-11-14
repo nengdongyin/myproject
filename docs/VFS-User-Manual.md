@@ -167,15 +167,14 @@ vfs_open("/lfs/foo.bin", VFS_O_RDONLY)
 
 void app_init(void)
 {
-    /* 1) 初始化并挂载所有卷（分区/挂载点定义见
-     *    src/core/vfs/storage/storage_config.c 的 s_parts/s_raw_cfgs/s_mounts 三张表） */
+    /* 初始化并挂载所有卷（分区/挂载点定义见
+     * src/core/vfs/storage/storage_config.c 的 s_parts/s_raw_cfgs/s_mounts 三张表）。
+     * 首次上电未格式化的 littlefs 分区会自动格式化（VFS_MNT_AUTOFORMAT），无需手动 format。 */
     if (storage_config_init() != 0) {
-        /* 2) 首次上电 / 分区未格式化：先格式化再重试（破坏性，仅出厂用） */
-        storage_config_format("flash_lfs");
-        storage_config_init();
+        /* 处理挂载失败 */
     }
 
-    /* 3) 直接使用 */
+    /* 直接使用 */
     vfs_fd_t fd = vfs_open("/lfs/foo.bin", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
     vfs_write(fd, "hi", 2);
     vfs_truncate(fd, 1);      /* 截断到 1 字节 */
@@ -292,6 +291,7 @@ if (n < 0) { int e = -n; /* e 为 errno 值，如 ENOSPC */ }
 | `VFS_ENABLE_STDIO` | 0 | stdio 适配层（另见 §8.4） | 需要 `fopen/fprintf` 走 VFS |
 | `VFS_ENABLE_MP_LOCK` | 1 | 每挂载点互斥锁 + 核心锁 | 多任务环境（强烈建议开） |
 | `STORAGE_DRV_FAL_ENABLE` | 1 | FAL 介质驱动（装配层 `storage_drv_fal.h`，依赖 `fal.h`） | 使用 FAL flash 作为介质 |
+| `VFS_ENABLE_SD` | 0 | SD 介质驱动（Zephyr `disk_access` → `vfs_storage_t`） | 使用 SD 卡作为介质 |
 | `VFS_ENABLE_FATFS` | 0 | 引入 FatFs 后端（依赖 `ff.h`） | 使用 SD + FatFs |
 | `VFS_RAWFLASH_ENABLE_APPEND` | 0 | rawflash 尾部续写追加写（定义于 `vfs_rawflash.h`，见 §7.1） | rawflash 需追加写 |
 
@@ -390,7 +390,8 @@ if (fd < 0) {
 - 直接调用原生 `lfs_*` API（RTOS 无关）；每个挂载点持有独立 `lfs_t`（多分区 = 多 `lfs_t`）。
 - `lfs_t` / `lfs_file_t` / `lfs_dir_t` 及每文件 cache 全部来自**静态池**。
 - 本后端**关闭** littlefs 自带线程安全，由 VFS 每挂载点锁统一串行化（若构建开了 `LFS_THREADSAFE` 需在 core 侧关闭，避免双重加锁）。
-- 首次使用未格式化的分区，`mount` 会失败（`-EIO`）；可调用：
+- 挂载点带 `VFS_MNT_AUTOFORMAT` 时，首次上电未格式化（或损坏）的分区在 `mount` 时自动 `lfs_format` 后重试挂载，无需手动格式化。
+- 不带该标志时，未格式化分区 `mount` 返回 `-EIO`，可手动调用：
 
 ```c
 int vfs_littlefs_format(vfs_mount_t *mp);   /* 破坏性：格式化 */
@@ -404,7 +405,8 @@ int vfs_littlefs_format(vfs_mount_t *mp);   /* 破坏性：格式化 */
 
 - 每个挂载点占用一个 FatFs 逻辑盘号 `pdrv`，路径自动加盘符前缀（`"0:/..."`）。
 - 自带 `diskio`：`disk_read/write/ioctl` 转发到 `vfs_bdev_*`，扇区约定 **512 字节**。
-- 启用前需：工程引入 FatFs（`ff.h`/`diskio.h`）+ 提供 SD `vfs_bdev`（512B 块），并置 `VFS_ENABLE_FATFS=1`。
+- 挂载点带 `VFS_MNT_AUTOFORMAT` 时，仅当 `f_mount` 返回 `FR_NO_FILESYSTEM` **且首扇区确为空白**（全 0xFF 或全 0x00）才自动 `f_mkfs` 后重试挂载；exFAT 卡或带 MBR/GPT 分区表的卡不会被误擦。
+- 启用前需：工程引入 FatFs（`ff.h`/`diskio.h`）+ 提供 SD `vfs_bdev`（512B 块），置 `VFS_ENABLE_SD=1`（SD 介质驱动）与 `VFS_ENABLE_FATFS=1`（FatFs 后端），并在 `ffconf.h` 打开 `FF_USE_MKFS=1`。
 
 ---
 
@@ -428,7 +430,7 @@ void     sys_mutex_unlock(sys_mutex_t *m);
 
 在 `port_impl.c` 中按 `PORT_OS_*` 分支实现（FreeRTOS / Zephyr / RT-Thread / LIBC 已内置）。裸机单线程可用 `PORT_OS_LIBC`（空锁 + `malloc`）。
 
-> **务必在启动早期调用 `system_mutex_init()`**，否则固定 ID 锁（`SYS_LOCK_*`）为空操作，后端池锁失效。
+> **务必在启动早期调用 `system_mutex_init()`**，否则固定 ID 锁（`SYS_LOCK_*`）为空操作——该锁供 param_manager / ISC / file_io 等子系统使用。VFS 核心与后端使用句柄式 `sys_mutex`（`sys_mutex_create`），不依赖本步骤。
 
 ### 8.2 移植到新存储器（新 flash / 新 SD）
 
@@ -451,7 +453,7 @@ void     sys_mutex_unlock(sys_mutex_t *m);
 
 - 回调的路径参数 `rel` 是**挂载点内相对路径**（核心已剥离前缀），后端不要再假设带前缀。
 - `mount()` 中用自己的 `mp->storage_dev` 建立 FS 实例，存入 `mp->fs_ctx`。
-- 句柄从静态池取；池扫描必须用 `system_lock(SYS_LOCK_FILE)` 保护（因为池是后端全局的，可能被多个挂载点并发访问）。
+- 句柄从静态池取；池扫描用**后端自有**的句柄式 `sys_mutex`（`sys_mutex_create`，懒建于 `mount`）保护——因为池是后端全局的，可能被多个挂载点并发访问。
 - 不支持的操作：可选回调置 `NULL`，或从 `caps` 中省略对应位。
 
 ### 8.4 stdio 适配（编译链）
@@ -465,22 +467,23 @@ void     sys_mutex_unlock(sys_mutex_t *m);
 
 **要点**：
 
-- 用一张 `fd → vfs_fd_t` 小映射表；**0/1/2 保留**给 stdin/stdout/stderr，应用 fd 从 3 起。
-- 内部把 `-errno` 转为 newlib 约定（返回 `-1` 并置 `errno`）。
+- 用一张 `fd → vfs_fd_t` 小映射表；应用 fd 从 3 起。
+- **0/1/2（stdin/stdout/stderr）经弱符号 `vfs_console_write` / `vfs_console_read` 交给平台控制台**（UART 等）；平台未覆盖时返回 `-ENOTSUP`，`printf/scanf` 失败。
+- 内部把 `-errno` 转为 newlib 约定（返回 `-1` 并写 `r->_errno`）。
 - 这些是**全局系统调用钩子**，会与平台 libc 的其它实现冲突；仅当你确实要让标准 I/O 走 VFS 时才开启。
-- **加锁提醒**：stdio 的 `g_fdtable` 目前无锁，多线程 `fopen/fclose` 需外部同步。
+- **线程安全**：`g_fdtable` 由句柄式 `sys_mutex`（`g_stdio_lock`）保护；首次 stdio 调用须在启动期单线程阶段完成（建锁）。
 
 ---
 
 ## 9. 并发模型
 
-三层锁，加锁顺序**恒定**（`mp_lock → SYS_LOCK_FILE`），无 ABBA 死锁：
+三层锁，加锁顺序**恒定**（`mp_lock → 后端池锁`），无 ABBA 死锁：
 
 | 锁 | 实现 | 保护对象 | 临界区 |
 | --- | --- | --- | --- |
 | 核心锁 | `g_core_lock`（`sys_mutex`） | 注册表 / 挂载槽 / 句柄池 alloc-free / `g_flocks` | 极短 |
 | 每挂载点锁 | `mp->lock`（`sys_mutex`） | 单次后端调用（littlefs/fatfs 非线程安全） | 一次调用 |
-| 后端池锁 | `SYS_LOCK_FILE`（固定 ID） | 各后端**全局**静态池的扫描分配 | 极短 |
+| 后端池锁 | 各后端自有 `sys_mutex`（littlefs/rawflash/fatfs 各一把，懒建于 `mount`） | 各后端**全局**静态池的扫描分配 | 极短 |
 | 同文件锁（可选） | `g_flocks[]` | 同一 `(挂载点, 相对路径)` 的写意图打开 | 打开期 |
 
 **使用约定**：
@@ -562,7 +565,7 @@ typedef enum {
 | 函数 | 说明 |
 | --- | --- |
 | `void vfs_bdev_init(d, name, storage, byte_offset, blk_size, blk_count)` | 初始化分区切片 |
-| `uint32_t vfs_bdev_size(const vfs_bdev_t *d)` | 分区总字节数 |
+| `uint64_t vfs_bdev_size(const vfs_bdev_t *d)` | 分区总字节数 |
 | `int vfs_bdev_read/prog/erase(d, blk, buf/nblk, nblk)` | 按**块号**访问 |
 | `int vfs_bdev_read_bytes/prog_bytes(d, byte_off, buf, n)` | 按**字节偏移**访问 |
 | `int vfs_bdev_register_table(const vfs_bdev_cfg_t *tbl, size_t n)` | 表驱动批量注册切片（核心持静态池） |
@@ -615,13 +618,13 @@ typedef struct vfs_mount_cfg {
 
 ## 12. 限制与注意事项
 
-1. **单分区 ≤ 4GB**：`vfs_bdev_t` 的 `offset`/`blk_count` 为 `uint32_t`。>4GB 介质需拆分为多个切片。
+1. **单分区 ≤ 2TB**：`vfs_bdev_t` 的字节偏移（`offset`）与卷容量为 `uint64_t`，块号 `blk_count` 为 `uint32_t`。上限受介质驱动扇区号（uint32）与 FatFs 32 位 LBA 约束；>2TB 需升级 Zephyr 磁盘 API 与 FatFs `FF_LBA64`。
 2. **`vfs_pread` 非 POSIX 语义**：等价 `lseek+read`，**会改变当前偏移**。
 3. **`vfs_deinit` / `vfs_mount_table` 非并发安全**：只在初始化/反初始化阶段调用。
 4. **`vfs_deinit` 后须重新 `vfs_init`** 才能再用。
 5. **rawflash 写打开即整分区擦除**：只读打开零副作用；`O_RDONLY|O_TRUNC` 被核心拦截为 `-EINVAL`。（追加写打开 `O_APPEND` 除外——它不擦数据区。）
 6. **rawflash** 不支持 rename / mkdir / 写模式 lseek（caps 声明，返回 `-ENOTSUP`）；**跨会话 append** 仅在 `VFS_RAWFLASH_ENABLE_APPEND=1` 时支持，脏尾返回 `-EIO`、写-写并发返回 `-EBUSY`。
-7. **stdio 适配层是全局钩子**：与平台 libc 可能冲突；0/1/2 保留；`g_fdtable` 无锁。
+7. **stdio 适配层是全局钩子**：与平台 libc 可能冲突；0/1/2 经弱符号控制台钩子交给平台；`g_fdtable` 由 `g_stdio_lock` 保护。
 8. **FatFs 后端默认关**：需自行引入 FatFs 库与 SD 块设备。
 9. **`mount` 不做重复挂载点**：重复挂载点返回 `-EEXIST`；bdev 重名返回 `-EEXIST`。
 
@@ -638,10 +641,10 @@ typedef struct vfs_mount_cfg {
 | rawflash 写返回 `-EBUSY` | 同文件已有写会话未关闭 | 先 `vfs_close` 旧写 fd；查是否有 fd 泄漏 |
 | `-ENFILE` | 句柄池耗尽 | 增大 `VFS_MAX_OPEN_FILES/DIRS`，或检查是否有 fd 泄漏（未 close） |
 | `-ENOSPC` | 空间不足 / 挂载槽或锁池耗尽 | 检查介质剩余；增大 `VFS_MAX_MOUNTS` / `SYS_MUTEX_POOL_SIZE` |
-| 挂载返回 `-EIO` | littlefs 分区未格式化/损坏 | 调用 `storage_config_format("flash_lfs")`（或 `vfs_littlefs_format_bdev(bdev)`）后重试 |
+| 挂载返回 `-EIO` | littlefs 分区未格式化/损坏（且未开 `VFS_MNT_AUTOFORMAT`） | 挂载点加 `VFS_MNT_AUTOFORMAT` 自动格式化，或手动 `storage_config_format("flash_lfs")` / `vfs_littlefs_format_bdev(bdev)` |
 | 挂载返回 `-EINVAL` | 分区几何非法（对齐/容量/参数） | 检查 `storage_config.c` 分区表的 offset/size 是否块对齐、≤ 设备容量 |
 | 并发下数据错乱 | 固定锁未初始化 | 确认启动早期调用了 `system_mutex_init()` |
-| 挂载 `-ENOSPC` | `SYS_MUTEX_POOL_SIZE` 不足 | 需 ≥ `VFS_MAX_MOUNTS + 1`（含核心锁） |
+| 挂载 `-ENOSPC` | `SYS_MUTEX_POOL_SIZE` 不足 | 需 ≥ `VFS_MAX_MOUNTS + 1`（核心锁）+ 后端池锁数（当前 3 把） |
 
 ---
 
