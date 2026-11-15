@@ -680,6 +680,83 @@ void test_chain_remove_middle_preserves_remaining(void)
 }
 
 /* ================================================================ */
+/*  致命错误后不得重复解析同一字节 (自动模式)                          */
+/* ================================================================ */
+
+#if PROTOCOL_CHAIN_AUTO_MATCH
+
+static uint32_t mock_parse_calls;
+
+static int mock_parse_fatal_counted(protocol_parser_t *p, const uint8_t *d, uint32_t len)
+{
+    (void)p; (void)d; (void)len;
+    mock_parse_calls++;
+    return PARSER_ERR_FRAME;
+}
+
+static const struct protocol_parser_ops mock_ops_fatal_counted = {
+    .parse_data = mock_parse_fatal_counted, .reset = mock_reset,
+};
+
+void test_chain_feed_fatal_error_not_reparsed(void)
+{
+    g_chain = protocol_chain_create(2);
+    protocol_chain_add_parser(g_chain, mock_p_fatal_ptr);
+    mock_p_fatal.ops = &mock_ops_fatal_counted;
+
+    TEST_ASSERT(protocol_chain_set_locked_parser(g_chain, mock_p_fatal_ptr));
+
+    mock_parse_calls = 0;
+    parser_error_t err = protocol_chain_feed(g_chain, g_test_data, 3);
+
+    /* 锁定解析器报致命错误 → 解锁并落到遍历循环, 但必须跳过它自己,
+       否则同一字节被解析两次(统计与 on_frame_error 双倍) */
+    TEST_ASSERT_EQUAL_INT(1, (int)mock_parse_calls);
+    TEST_ASSERT_EQUAL(PARSER_ERR_UNKNOWN, err);
+    TEST_ASSERT_NULL(protocol_chain_get_locked_parser(g_chain));
+}
+
+#endif /* PROTOCOL_CHAIN_AUTO_MATCH */
+
+/* ================================================================ */
+/*  手动模式 (PROTOCOL_CHAIN_AUTO_MATCH == 0)                         */
+/* ================================================================ */
+
+#if !PROTOCOL_CHAIN_AUTO_MATCH
+
+void test_chain_manual_unlocked_feed_is_ignored(void)
+{
+    g_chain = protocol_chain_create(2);
+    protocol_chain_add_parser(g_chain, mock_p_ok_ptr);
+
+    /* 未锁定: 手动模式不自动匹配, 数据被丢弃, 也不产生锁定 */
+    parser_error_t err = protocol_chain_feed(g_chain, g_test_data, 3);
+    TEST_ASSERT_EQUAL(PARSER_ERR_UNKNOWN, err);
+    TEST_ASSERT_NULL(protocol_chain_get_locked_parser(g_chain));
+    TEST_ASSERT_FALSE(mock_p_ok.locked);
+}
+
+void test_chain_manual_locked_keeps_lock_on_fatal(void)
+{
+    g_chain = protocol_chain_create(2);
+    protocol_chain_add_parser(g_chain, mock_p_fatal_ptr);
+
+    TEST_ASSERT(protocol_chain_set_locked_parser(g_chain, mock_p_fatal_ptr));
+
+    /* 致命错误不得冲掉手动指定 */
+    parser_error_t err = protocol_chain_feed(g_chain, g_test_data, 3);
+    TEST_ASSERT_EQUAL(PARSER_ERR_FRAME, err);
+    TEST_ASSERT(protocol_chain_get_locked_parser(g_chain) == mock_p_fatal_ptr);
+
+    /* 整帧入口同款语义 */
+    err = protocol_chain_feed_frame(g_chain, g_test_data, 3);
+    TEST_ASSERT_EQUAL(PARSER_ERR_FRAME, err);
+    TEST_ASSERT(protocol_chain_get_locked_parser(g_chain) == mock_p_fatal_ptr);
+}
+
+#endif /* !PROTOCOL_CHAIN_AUTO_MATCH */
+
+/* ================================================================ */
 /*  Runner                                                            */
 /* ================================================================ */
 
@@ -747,6 +824,13 @@ int chain_run_all_tests(void)
     RUN_TEST(test_chain_single_parser_feed_no_match);
 
     RUN_TEST(test_chain_remove_middle_preserves_remaining);
+
+#if PROTOCOL_CHAIN_AUTO_MATCH
+    RUN_TEST(test_chain_feed_fatal_error_not_reparsed);
+#else
+    RUN_TEST(test_chain_manual_unlocked_feed_is_ignored);
+    RUN_TEST(test_chain_manual_locked_keeps_lock_on_fatal);
+#endif
 
     return UNITY_END();
 }

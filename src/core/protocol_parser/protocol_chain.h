@@ -16,6 +16,28 @@
 #include "protocol_parser.h"
 
 /**
+ * @brief 自动协议匹配开关 (编译期)
+ *
+ *  1 (默认) = **自动模式**: 未锁定时按添加顺序遍历所有解析器; 锁定的解析器
+ *            报致命错误时解锁并重新匹配。适合一条链上挂多种协议、需要自动切换。
+ *
+ *  0 = **手动模式**: 只把数据喂给 protocol_chain_set_locked_parser() 指定的
+ *            解析器。未锁定时直接丢弃数据(返回 PARSER_ERR_UNKNOWN), 且致命
+ *            错误**不解锁** —— 手动指定不会被一次错误冲垮。
+ *
+ * 手动模式适用于两类场合:
+ *  - 产品只跑单一协议, 不需要(也不希望)自动切换;
+ *  - 某协议的 parse_data 不适合被试探性调用(有副作用)。
+ *
+ * @note 手动模式下**必须先** set_locked_parser() 指定解析器, 链才有解析行为。
+ * @note 本开关不影响 protocol_chain_check_timeout_poll 的语义
+ *       (有锁定只轮询锁定者, 无锁定轮询全部)。
+ */
+#ifndef PROTOCOL_CHAIN_AUTO_MATCH
+#define PROTOCOL_CHAIN_AUTO_MATCH 1
+#endif
+
+/**
  * @struct protocol_chain
  * @brief  协议链管理器(不透明结构体)
  */
@@ -79,6 +101,9 @@ bool protocol_chain_remove_parser(protocol_chain* chain, protocol_parser_t* pars
  * @retval PARSER_ERR_NONE        解析成功
  * @retval PARSER_ERR_INCOMPLETE  需要更多数据
  * @retval PARSER_ERR_UNKNOWN     无解析器能匹配
+ *
+ * @note 遍历匹配仅存在于自动模式; 手动模式(PROTOCOL_CHAIN_AUTO_MATCH == 0)
+ *       下未锁定时直接返回 PARSER_ERR_UNKNOWN, 数据不交给任何解析器。
  */
 parser_error_t protocol_chain_feed(protocol_chain* chain, const uint8_t* data, uint32_t len);
 
@@ -86,7 +111,10 @@ parser_error_t protocol_chain_feed(protocol_chain* chain, const uint8_t* data, u
  * @brief  向协议链送入完整帧
  *
  * 与 @ref protocol_chain_feed() 不同, 本函数将输入视为完整帧.
- * 若锁定解析器返回任何错误, 则解锁.
+ * 若锁定解析器返回任何错误, 则解锁。
+ *
+ * @note 解锁仅发生在自动模式; 手动模式下任何错误都保持锁定,
+ *       且未锁定时直接返回 PARSER_ERR_UNKNOWN。
  *
  * @param chain  协议链实例
  * @param data   完整帧数据

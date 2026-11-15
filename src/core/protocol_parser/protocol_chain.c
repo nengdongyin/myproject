@@ -95,6 +95,9 @@ bool protocol_chain_remove_parser(protocol_chain* chain, protocol_parser_t* pars
 parser_error_t protocol_chain_feed(protocol_chain* chain,
                                    const uint8_t* data, uint32_t len) {
     parser_error_t gen_err;
+#if PROTOCOL_CHAIN_AUTO_MATCH
+    protocol_parser_t* just_failed = NULL; /* 刚报致命错误的解析器, 遍历时跳过 */
+#endif
 
     if (!chain || !data || !len || chain->count == 0) {
         return PARSER_ERR_INVALID_PARAM;
@@ -117,14 +120,26 @@ parser_error_t protocol_chain_feed(protocol_chain* chain,
         }
 
         if (parser_error_is_fatal(gen_err)) {
+#if PROTOCOL_CHAIN_AUTO_MATCH
             locked->locked = false;
             chain->locked_parser = NULL;  /* 致命错误时解锁 */
+            just_failed = locked;         /* 同一字节不在下方被它重解析一次 */
+#else
+            /* 手动模式: 致命错误**不解锁** —— 手动指定不该被一次错误冲垮,
+               后续字节继续交给同一解析器。要换协议请显式 set_locked_parser */
+            return gen_err;
+#endif
         }
         else {
             return gen_err;
         }
     }
 
+#if !PROTOCOL_CHAIN_AUTO_MATCH
+    /* 手动模式: 未锁定 → 不解析任何数据, 数据被丢弃。
+       需要解析行为请先 protocol_chain_set_locked_parser() */
+    return PARSER_ERR_UNKNOWN;
+#else
     /* 遍历每个解析器:
      * - NONE (成功)     → 锁定并返回
      * - INCOMPLETE      → 记录标记, 继续尝试其他解析器
@@ -132,6 +147,12 @@ parser_error_t protocol_chain_feed(protocol_chain* chain,
     bool saw_incomplete = false;
     for (uint32_t i = 0; i < chain->count; i++) {
         protocol_parser_t* parser = chain->parsers[i];
+
+        /* 刚在锁定路径上失败的那个解析器跳过: 同一字节喂它第二次必然同样
+           失败, 只会让 stats 与 on_frame_error 被多记一次 */
+        if (parser == just_failed) {
+            continue;
+        }
 
         gen_err = protocol_parser_parse_data(parser, data, len);
 
@@ -157,6 +178,7 @@ parser_error_t protocol_chain_feed(protocol_chain* chain,
     }
 
     return PARSER_ERR_UNKNOWN;
+#endif /* PROTOCOL_CHAIN_AUTO_MATCH */
 }
 
 parser_error_t protocol_chain_feed_frame(protocol_chain* chain,
@@ -167,7 +189,7 @@ parser_error_t protocol_chain_feed_frame(protocol_chain* chain,
         return PARSER_ERR_INVALID_PARAM;
     }
 
-    /* 锁定状态下送入整帧 — 任何错误都导致解锁 */
+    /* 锁定状态下送入整帧 */
     if (chain->locked_parser != NULL) {
         protocol_parser_t* locked = chain->locked_parser;
 
@@ -178,13 +200,21 @@ parser_error_t protocol_chain_feed_frame(protocol_chain* chain,
             return gen_err;
         }
 
+#if PROTOCOL_CHAIN_AUTO_MATCH
+        /* 自动模式: 任何错误都导致解锁 */
         if (gen_err != PARSER_ERR_NONE) {
             locked->locked = false;
             chain->locked_parser = NULL;
         }
+#endif
+        /* 手动模式保持锁定 */
         return gen_err;
     }
 
+#if !PROTOCOL_CHAIN_AUTO_MATCH
+    /* 手动模式: 未锁定 → 不解析 */
+    return PARSER_ERR_UNKNOWN;
+#else
     /* 遍历每个解析器 */
     for (uint32_t i = 0; i < chain->count; i++) {
         protocol_parser_t* parser = chain->parsers[i];
@@ -201,6 +231,7 @@ parser_error_t protocol_chain_feed_frame(protocol_chain* chain,
     }
 
     return PARSER_ERR_UNKNOWN;
+#endif /* PROTOCOL_CHAIN_AUTO_MATCH */
 }
 
 /* ======================== 锁定管理 ================================== */
