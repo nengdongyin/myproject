@@ -5,9 +5,6 @@
 #include "protocol_chain.h"
 #include "protocol_parser_imperx.h"
 #include "protocol_parser_camyu.h"
-#include "protocol_parser_ymodem.h"
-#include "vfs.h"
-#include "ymodem_common.h"
 
 #define TEST_BAUD_RATE 460800
 #define STACK_SIZE 12288
@@ -19,37 +16,29 @@
 #define IMPERX_TX_BUF_SIZE 32
 #define CAMYU_RX_BUF_SIZE 320
 #define CAMYU_TX_BUF_SIZE 320
-#define YMODEM_RECV_RX_BUF_SIZE YMODEM_STX_FRAME_LEN_BYTE
-#define YMODEM_RECV_TX_BUF_SIZE 4
-#define YMODEM_SEND_RX_BUF_SIZE 4
-#define YMODEM_SEND_TX_BUF_SIZE YMODEM_STX_FRAME_LEN_BYTE
 
+/**
+ * @brief 应用上下文
+ *
+ * @note 只承载 imperx / camyu 与全局收发统计。ymodem 的状态、文件句柄、
+ *       收发缓冲区全部归 src/core/file_transfer 组件所有 —— 传输相关配置
+ *       走参数系统 (PID_FT_*), 不再进本结构体。
+ */
 typedef struct
 {
     protocol_chain *chain;
 
     imperx_protocol_parser_t *imperx_parser;
     camyu_protocol_parser_t *camyu_parser;
-    ymodem_protocol_parser_t *ymodem_recv_parser;
-    ymodem_protocol_parser_t *ymodem_send_parser;
 
     uint8_t imperx_rx_buf[IMPERX_RX_BUF_SIZE];
     uint8_t imperx_tx_buf[IMPERX_TX_BUF_SIZE];
     uint8_t camyu_rx_buf[CAMYU_RX_BUF_SIZE];
     uint8_t camyu_tx_buf[CAMYU_TX_BUF_SIZE];
-    uint8_t ymodem_recv_rx_buf[YMODEM_RECV_RX_BUF_SIZE];
-    uint8_t ymodem_recv_tx_buf[YMODEM_RECV_TX_BUF_SIZE];
-    uint8_t ymodem_send_rx_buf[YMODEM_SEND_RX_BUF_SIZE];
-    uint8_t ymodem_send_tx_buf[YMODEM_SEND_TX_BUF_SIZE];
-
-    vfs_fd_t recv_fd;   /**< ymodem 接收文件句柄（每次传输 open/close） */
-    vfs_fd_t send_fd;   /**< ymodem 发送文件句柄 */
-    char send_file_name[VFS_NAME_MAX];
 
     uint32_t total_rx_bytes;
-    uint32_t total_tx_bytes;
-} test_ctx_t;
+} app_ctx_t;
 
-extern test_ctx_t test_ctx;
+extern app_ctx_t app_ctx;
 extern const struct device *const uart1_dev;
 extern struct k_pipe uart_pipe;

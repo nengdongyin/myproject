@@ -26,6 +26,7 @@ target_include_directories(app PRIVATE
     src/protocols/imperx
     src/protocols/camyu
     src/core/file_process
+    src/core/file_transfer
     src/core/vfs
     src/core/vfs/backend
     src/core/vfs/rawflash
@@ -77,6 +78,8 @@ target_sources(app PRIVATE
       src/protocols/ymodem/src/ymodem_common.c
       src/protocols/ymodem/src/ymodem_receiver.c
       src/protocols/ymodem/src/ymodem_sender.c
+      src/core/file_transfer/file_transfer.c
+      src/core/file_transfer/file_transfer_param.c
       src/core/vfs/vfs_core.c
       src/core/vfs/vfs_bdev.c
       src/core/vfs/backend/vfs_rawflash.c

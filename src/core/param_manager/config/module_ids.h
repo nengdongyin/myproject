@@ -50,7 +50,8 @@ extern "C"
     X(IP_PWM,           0x83u, ip_pwm_module_init,            0) \
     X(MODULE_VSC_LITE,  0x03u, vsc_lite_control_module_init,  0) \
     X(MODULE_AUTO_EXP,  0x01u, auto_exp_module_init,          1) \
-    X(MODULE_SYS,       0x02u, param_service_module_init,     0)
+    X(MODULE_SYS,       0x02u, param_service_module_init,     0) \
+    X(MODULE_FILE_TRANSFER, 0x04u, file_transfer_module_init, 1)
 
 /**
  * @brief 清单行数计数器 — 每个 X(...) 展开为 "+1"

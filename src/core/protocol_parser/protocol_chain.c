@@ -102,9 +102,22 @@ parser_error_t protocol_chain_feed(protocol_chain* chain,
 
     /* 如果已锁定解析器, 直接转发数据 */
     if (chain->locked_parser != NULL) {
-        gen_err = protocol_parser_parse_data(chain->locked_parser, data, len);
+        /* 先缓存本次喂入的解析器: 回调里可能改掉 chain->locked_parser,
+           之后不能再重新读它(可能已是 NULL 或另一个解析器) */
+        protocol_parser_t* locked = chain->locked_parser;
+
+        gen_err = protocol_parser_parse_data(locked, data, len);
+
+        /* 回调内改动过锁定 → 尊重用户的显式指定, 不再覆盖也不解引用旧指针:
+         *   - 置 NULL   = 用户主动解链(如会话终结、强制重匹配)
+         *   - 换成别的   = 用户手动切协议(如通过控制寄存器切换)
+         * 与下方 NONE 分支的"用户回调已提前锁定"是同一个契约。 */
+        if (chain->locked_parser != locked) {
+            return gen_err;
+        }
+
         if (parser_error_is_fatal(gen_err)) {
-            chain->locked_parser->locked = false;
+            locked->locked = false;
             chain->locked_parser = NULL;  /* 致命错误时解锁 */
         }
         else {
@@ -156,9 +169,17 @@ parser_error_t protocol_chain_feed_frame(protocol_chain* chain,
 
     /* 锁定状态下送入整帧 — 任何错误都导致解锁 */
     if (chain->locked_parser != NULL) {
-        gen_err = protocol_parser_parse_data(chain->locked_parser, frame, len);
+        protocol_parser_t* locked = chain->locked_parser;
+
+        gen_err = protocol_parser_parse_data(locked, frame, len);
+
+        /* 回调内改动过锁定 → 尊重用户的显式指定(同 protocol_chain_feed) */
+        if (chain->locked_parser != locked) {
+            return gen_err;
+        }
+
         if (gen_err != PARSER_ERR_NONE) {
-            chain->locked_parser->locked = false;
+            locked->locked = false;
             chain->locked_parser = NULL;
         }
         return gen_err;

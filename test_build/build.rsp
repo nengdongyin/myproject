@@ -33,12 +33,14 @@
 -Isrc/core/param_manager/config
 -Isrc/core/param_manager/storage
 -Isrc/core/protocol_parser
+-Isrc/core/file_transfer
 -Isrc/core/vfs
 -Isrc/core/vfs/backend
 -Isrc/core/vfs/rawflash
 -Isrc/core/vfs/storage
 -Isrc/test/core/vfs
 -Isrc/protocols/ymodem/src
+-Isrc/protocols/ymodem/adapter
 -Isrc/protocols/imperx
 -Isrc/protocols/camyu
 -Isrc/lib/mkv
@@ -64,6 +66,7 @@ src/test/protocols/ymodem/unit/test_sender.c
 src/test/protocols/ymodem/unit/test_receiver.c
 src/test/protocols/ymodem/mocks/mock_time.c
 src/test/core/protocol_chain/test_chain.c
+src/test/core/file_transfer/test_ft.c
 src/test/protocols/imperx/test_imperx.c
 src/test/protocols/camyu/test_camyu.c
 src/platform/port/port_impl.c
@@ -84,6 +87,9 @@ src/test/core/vfs/test_vfs_core.c
 src/protocols/ymodem/src/ymodem_common.c
 src/protocols/ymodem/src/ymodem_sender.c
 src/protocols/ymodem/src/ymodem_receiver.c
+src/protocols/ymodem/adapter/protocol_parser_ymodem.c
+src/core/file_transfer/file_transfer.c
+src/core/file_transfer/file_transfer_param.c
 src/protocols/imperx/protocol_parser_imperx.c
 src/protocols/camyu/protocol_parser_camyu.c
 src/camera/core/isc/core/isc_core.c

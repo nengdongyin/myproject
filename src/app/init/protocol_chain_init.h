@@ -1,5 +1,5 @@
 #pragma once
 #include "app_config.h"
 
-bool protocol_chain_init(test_ctx_t *ctx);
-void protocol_chain_cleanup(test_ctx_t *ctx);
+bool protocol_chain_init(app_ctx_t *ctx);
+void protocol_chain_cleanup(app_ctx_t *ctx);

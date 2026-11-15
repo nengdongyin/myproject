@@ -82,52 +82,6 @@ ymodem_protocol_parser_t* ymodem_protocol_create_sender(void* rx_buffer, uint32_
                                                          void* tx_buffer, uint32_t tx_buffer_size);
 
 /**
- * @brief  获取内部 Ymodem 发送器实例
- *
- * 发送器 event_callback 和 send_packet 已由适配器桥接到基类的
- * frame_ready / tx_ready 回调。用户应在调用 @ref ymodem_adapter_start_sender()
- * 之前通过 @ref protocol_parser_set_callbacks() 设置好回调。
- *
- * 发送器已挂载到 @ref protocol_chain, 无需手动调用 parse_data。
- * 典型流程:
- * @code
- *   parser = ymodem_protocol_create_sender(rx_buf, 4, tx_buf, 1029);
- *   protocol_parser_set_callbacks(base, my_frame_ready, ctx, my_tx_ready, NULL);
- *   protocol_chain_add_parser(chain, (protocol_parser_t*)parser);
- *   // ---- 发送器 IDLE 静默, 等待触发 ----
- *   // 收到 Imperx "start ymodem send" 命令后:
- *   ymodem_adapter_start_sender(parser);
- *   protocol_chain_set_locked_parser(chain, (protocol_parser_t*)parser);
- *   // 后续数据由 protocol_chain_feed 自动转发到发送器
- * @endcode
- *
- * @param parser  适配器实例
- * @return  Ymodem 发送器指针, 失败返回 NULL
- */
-ymodem_sender_t* ymodem_adapter_get_sender(ymodem_protocol_parser_t* parser);
-
-/**
- * @brief  获取内部 Ymodem 接收器实例
- *
- * 适配器已预设 event_callback 和 send_response 桥接回调。
- * 用户应通过 @ref protocol_parser_set_callbacks() 设置 frame_ready 回调。
- *
- * 接收器创建后静默, 需通过 @ref ymodem_adapter_start_receiver() 激活:
- * @code
- *   recv = ymodem_adapter_get_receiver(parser);
- *   ymodem_receiver_set_event_callback(recv, my_evt_cb, ctx);
- *   // ---- 接收器静默, 等待触发 ----
- *   // 收到 Imperx "start ymodem recv" 命令后:
- *   ymodem_adapter_start_receiver(parser);
- *   // 传入数据路径: protocol_chain_feed → parse_data → ymodem_receiver_parse
- * @endcode
- *
- * @param parser  适配器实例
- * @return  Ymodem 接收器指针, 失败返回 NULL
- */
-ymodem_receiver_parser_t* ymodem_adapter_get_receiver(ymodem_protocol_parser_t* parser);
-
-/**
  * @brief  启动 Ymodem 接收握手
  *
  * 发送初始 'C' 字节请求 CRC16 校验模式, 通过 tx_ready 回调输出。
@@ -150,3 +104,22 @@ bool ymodem_adapter_start_receiver(ymodem_protocol_parser_t* parser);
  * @retval false parser 为 NULL
  */
 bool ymodem_adapter_start_sender(ymodem_protocol_parser_t* parser);
+
+/**
+ * @brief  中止当前会话并通知对端
+ *
+ * 由上层(如文件传输组件)在自身侧发生不可恢复错误时调用 —— 例如写文件
+ * 失败/-ENOSPC, 本机已无法继续接收, 必须让对端停止发包。
+ *
+ * @par 为何放在适配层
+ * "怎么在对端表达中止"(CAN CAN)是 Ymodem 的线协议细节。调用方只应该说
+ * "中止这个会话", 不该自己构字节写入物理通道 —— 那会绕开 tx_ready 通道。
+ * 本函数将 CAN CAN 填进接收器应答缓冲, 再走 send_response 桥接
+ * (→ base->tx → tx_ready), 与协议自己的应答完全同一条路径。
+ *
+ * @param parser  适配器实例
+ *
+ * @note 只发 CAN CAN, 不改协议阶段也不发 frame_ready 事件; 会话的最终
+ *       回收(关文件/解链)仍由调用方自己做, 或等下一次 start_* 整块复位。
+ */
+void ymodem_adapter_cancel(ymodem_protocol_parser_t* parser);

@@ -5,33 +5,37 @@
 #include "param_manager.h"
 #include <string.h>
 #include "param_dump.h"
-#include "storage_config.h"
 #include <stdio.h>
+#include "file_transfer.h"
 
 LOG_MODULE_REGISTER(chain_test, LOG_LEVEL_DBG);
 
-static void on_tx_ready(protocol_parser_t *parser, void *user_ctx)
+/* ================================================================
+ *  平台出口 —— 本文件是唯一认识 uart1_dev 的地方
+ * ================================================================ */
+
+/** @brief 字节流出口: 供 file_transfer 组件与各协议 tx_ready 共用 */
+static void uart_tx_write(const uint8_t *data, uint32_t len)
 {
-    test_ctx_t *ctx = (test_ctx_t *)user_ctx;
-    uint32_t len = parser->tx.data_len;
     for (uint32_t i = 0; i < len; i++)
     {
-        uart_poll_out(uart1_dev, parser->tx.buffer[i]);
+        uart_poll_out(uart1_dev, data[i]);
     }
-    ctx->total_tx_bytes += len;
-    LOG_DBG("TX: %u bytes", len);
 }
+
+/** @brief 各协议共用的发送就绪回调 */
+static void on_tx_ready(protocol_parser_t *parser, void *user_ctx)
+{
+    (void)user_ctx;
+    uart_tx_write(parser->tx.buffer, parser->tx.data_len);
+}
+
 static void dump_cb(const char *line, void *user_data)
 {
     (void)user_data;
     LOG_INF("%s", line);
 }
 
-/** @brief 拼装 "/lfs/<name>" 完整路径，便于 vfs_open/stat */
-static void fp_path(char *buf, size_t n, const char *name)
-{
-    snprintf(buf, n, STORAGE_MNT_FILES "/%s", name);
-}
 /* ================================================================
  *  字节序转换 — wire format 为 big-endian
  * ================================================================ */
@@ -47,10 +51,20 @@ static inline uint32_t endian_swap32(uint32_t val)
          | ((val & 0x0000FF00ul) << 8)  | ((val & 0x000000FFul) << 24);
 }
 
+/* ================================================================
+ *  协议回调
+ *
+ *  地址 → param_id 的映射全部在 imperx_cmd_map.c 的 g_cmd_map 里,
+ *  本文件不做任何命令分发:
+ *   - WRITE: param_write_raw —— 对普通参数落位, 对 EXEC 参数自动路由到
+ *            模块的 exec 回调 (文件传输的启动命令就是这样触发的);
+ *   - READ : param_read —— 回填 4 字节应答。
+ * ================================================================ */
+
 static void imperx_on_frame_ready(protocol_parser_t *parser,
                                   void *parsed_data, void *user_ctx)
 {
-    test_ctx_t *ctx = (test_ctx_t *)user_ctx;
+    (void)user_ctx;
     imperx_private_t *pri = (imperx_private_t *)parsed_data;
     imperx_cmd_type_t cmd = (pri->parsed_len == 0) ? IMPERX_CMD_READ
                                                    : IMPERX_CMD_WRITE;
@@ -62,53 +76,50 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
     uint16_t raw_addr = (uint16_t)(pri->parsed_id & 0xFFFF);
     uint16_t addr = endian_swap16(raw_addr);
     const cmd_map_entry_t *e = cmd_map_lookup(addr);
-    if (e) {
-        if (cmd == IMPERX_CMD_WRITE) {
-            uint32_t raw;
-            memcpy(&raw, pri->parsed_data, 4);
-            uint32_t val = endian_swap32(raw);
-            /* 字节级协议接口用 param_write_raw: 按条目类型落位
-               (UINT/INT/FLOAT 的 32-bit 位模式都正确), 而 typed 包装
-               校验类型 —— 对 FLOAT 参数 (如 gain) 调
-               param_write_u32 会被拒绝 */
-            int ret = param_write_raw(e->param_id, (const uint8_t *)&val, sizeof(val));
-            (void)ret;
-            param_flush();
-            param_dump(PARAM_MODULE_ID(e->param_id), NULL);
-        } else {
-            param_value_t v;
-            int ret = param_read(e->param_id, &v);
-            if (ret == PARAM_OK) {
-                static uint8_t s_resp[4];
-                uint32_t raw = endian_swap32(v.u32);
-                memcpy(s_resp, &raw, 4);
-                pri->parsed_data = s_resp;
-                pri->parsed_len = sizeof(s_resp);
-            }
-        }
-        LOG_INF("Resp Imperx %s, Address: 0x%04llX",
-                (cmd == IMPERX_CMD_READ) ? "READ" : "WRITE",
-                (unsigned long long)pri->parsed_id);
+    if (!e) {
+        LOG_WRN("Unknown address: 0x%04X", addr);
         return;
     }
 
-    if (cmd == IMPERX_CMD_WRITE && addr == 0xF000) {
-        LOG_INF("Triggering Ymodem receiver start...");
-        ymodem_adapter_start_receiver(ctx->ymodem_recv_parser);
-        protocol_chain_set_locked_parser(ctx->chain,
-                                         (protocol_parser_t *)ctx->ymodem_recv_parser);
-    } else if (cmd == IMPERX_CMD_WRITE && addr == 0xF001) {
-        LOG_INF("Triggering Ymodem sender start...");
-        ymodem_adapter_start_sender(ctx->ymodem_send_parser);
-        protocol_chain_set_locked_parser(ctx->chain,
-                                         (protocol_parser_t *)ctx->ymodem_send_parser);
+    if (cmd == IMPERX_CMD_WRITE) {
+        uint32_t raw;
+        memcpy(&raw, pri->parsed_data, 4);
+        uint32_t val = endian_swap32(raw);
+        /* 字节级协议接口用 param_write_raw: 按条目类型落位
+           (UINT/INT/FLOAT 的 32-bit 位模式都正确), 而 typed 包装
+           校验类型 —— 对 FLOAT 参数 (如 gain) 调
+           param_write_u32 会被拒绝。
+           EXEC 参数 (如 PID_FT_RECV_START) 由它在内部路由到 exec 回调。 */
+        int ret = param_write_raw(e->param_id, (const uint8_t *)&val, sizeof(val));
+        if (ret != PARAM_OK) {
+            LOG_WRN("Write 0x%04X -> %s", addr, param_strerror(ret));
+        }
+        param_flush();
+        param_dump(PARAM_MODULE_ID(e->param_id), NULL);
+    } else {
+        param_value_t v;
+        int ret = param_read(e->param_id, &v);
+        if (ret == PARAM_OK) {
+            static uint8_t s_resp[4];
+            uint32_t raw = endian_swap32(v.u32);
+            memcpy(s_resp, &raw, 4);
+            pri->parsed_data = s_resp;
+            pri->parsed_len = sizeof(s_resp);
+        }
     }
+
+    LOG_INF("Resp Imperx %s, Address: 0x%04llX",
+            (cmd == IMPERX_CMD_READ) ? "READ" : "WRITE",
+            (unsigned long long)pri->parsed_id);
 }
 
 static void camyu_on_frame_ready(protocol_parser_t *parser,
                                  void *parsed_data, void *user_ctx)
 {
     camyu_private_t *pri = (camyu_private_t *)parsed_data;
+
+    (void)parser;
+    (void)user_ctx;
 
     LOG_INF("Camyu Opcode:%d, Address: 0x%08llX",
             pri->current_frame_info.opcode,
@@ -122,166 +133,37 @@ static void camyu_on_frame_ready(protocol_parser_t *parser,
     }
 }
 
-static void ymodem_recv_on_frame_ready(protocol_parser_t *parser,
-                                       void *parsed_data, void *user_ctx)
-{
-    ymodem_receiver_event_t *event = (ymodem_receiver_event_t *)parsed_data;
-    test_ctx_t *ctx = (test_ctx_t *)user_ctx;
+/* ================================================================
+ *  装配
+ * ================================================================ */
 
-    if (!event)
-    {
-        return;
-    }
-
-    switch (event->type)
-    {
-
-    case YMODEM_RECV_EVENT_FILE_INFO:
-    {
-        char path[VFS_PATH_MAX];
-        fp_path(path, sizeof(path), event->file_name);
-        LOG_INF("Ymodem recv FILE_INFO: name=\"%s\" size=%u",
-                event->file_name, event->file_size);
-        if (ctx->recv_fd >= 0) /* 上一传输未正常收尾则先释放 */
-            vfs_close(ctx->recv_fd);
-        ctx->recv_fd = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC);
-        if (ctx->recv_fd < 0)
-            LOG_ERR("Ymodem recv: open %s failed: %d", path, (int)ctx->recv_fd);
-        break;
-    }
-
-    case YMODEM_RECV_EVENT_DATA_PACKET:
-        if (ctx->recv_fd >= 0)
-            vfs_write(ctx->recv_fd, event->data, event->data_len);
-        break;
-
-    case YMODEM_RECV_EVENT_TRANSFER_COMPLETE:
-        LOG_INF("Ymodem recv: TRANSFER_COMPLETE (%u bytes total)",
-                event->total_received);
-        if (ctx->recv_fd >= 0)
-        {
-            vfs_close(ctx->recv_fd);
-            ctx->recv_fd = VFS_FD_INVALID;
-        }
-        break;
-
-    case YMODEM_RECV_EVENT_TRANSFER_FINISHED:
-        LOG_INF("Ymodem recv: session finished");
-        break;
-
-    case YMODEM_RECV_EVENT_ERROR:
-        LOG_ERR("Ymodem recv: transfer aborted");
-        if (ctx->recv_fd >= 0)
-        {
-            vfs_close(ctx->recv_fd);
-            ctx->recv_fd = VFS_FD_INVALID;
-        }
-        break;
-
-    default:
-        break;
-    }
-}
-
-static void ymodem_send_on_frame_ready(protocol_parser_t *parser,
-                                       void *parsed_data, void *user_ctx)
-{
-    ymodem_sender_event_t *event = (ymodem_sender_event_t *)parsed_data;
-    test_ctx_t *ctx = (test_ctx_t *)user_ctx;
-
-    switch (event->type)
-    {
-
-    case YMODEM_SENDER_EVENT_FILE_INFO:
-        if (event->file_index != 0)
-        {
-            ymodem_sender_t *send =
-                ymodem_adapter_get_sender((ymodem_protocol_parser_t *)parser);
-            send->file_info.file_name[0] = '\0';
-            send->file_info.file_total_size = 0;
-            LOG_INF("Ymodem send: no more files, ending session");
-        }
-        else
-        {
-            if (ctx->send_fd >= 0) /* 上一传输未正常收尾则先释放 */
-            {
-                vfs_close(ctx->send_fd);
-                ctx->send_fd = VFS_FD_INVALID;
-            }
-            char path[VFS_PATH_MAX];
-            fp_path(path, sizeof(path), ctx->send_file_name);
-            vfs_stat_t st;
-            if (vfs_stat(path, &st) < 0)
-            {
-                LOG_ERR("Ymodem send: cannot stat %s", path);
-                break;
-            }
-            uint32_t size = st.size;
-            ctx->send_fd = vfs_open(path, VFS_O_RDONLY);
-            if (ctx->send_fd < 0)
-            {
-                LOG_ERR("Ymodem send: cannot open %s: %d", path, (int)ctx->send_fd);
-                break;
-            }
-            ymodem_sender_t *send =
-                ymodem_adapter_get_sender((ymodem_protocol_parser_t *)parser);
-            strncpy(send->file_info.file_name, ctx->send_file_name,
-                    sizeof(send->file_info.file_name) - 1);
-            send->file_info.file_total_size = size;
-            ymodem_sender_enable_1k(send);
-            LOG_INF("Ymodem send: FILE_INFO idx=%u name=%s size=%u",
-                    event->file_index, ctx->send_file_name, size);
-        }
-        break;
-
-    case YMODEM_SENDER_EVENT_DATA_PACKET:
-    {
-        ssize_t actual = 0;
-        if (ctx->send_fd >= 0)
-            actual = vfs_pread(ctx->send_fd, event->data, 1024,
-                               (off_t)(event->data_seq * 1024));
-        event->data_len = (actual > 0) ? (uint32_t)actual : 0;
-        break;
-    }
-
-    case YMODEM_SENDER_EVENT_TRANSFER_COMPLETE:
-        LOG_INF("Ymodem send: TRANSFER_COMPLETE");
-        if (ctx->send_fd >= 0)
-        {
-            vfs_close(ctx->send_fd);
-            ctx->send_fd = VFS_FD_INVALID;
-        }
-        break;
-
-    case YMODEM_SENDER_EVENT_SESSION_FINISHED:
-        LOG_INF("Ymodem send: SESSION_FINISHED");
-        break;
-
-    case YMODEM_SENDER_EVENT_ERROR:
-        LOG_ERR("Ymodem send: transfer aborted");
-        if (ctx->send_fd >= 0)
-        {
-            vfs_close(ctx->send_fd);
-            ctx->send_fd = VFS_FD_INVALID;
-        }
-        break;
-
-    default:
-        break;
-    }
-}
-
-bool protocol_chain_init(test_ctx_t *ctx)
+bool protocol_chain_init(app_ctx_t *ctx)
 {
     param_dump_set_output(dump_cb);
 
-    ctx->chain = protocol_chain_create(4);
+    ctx->chain = protocol_chain_create(4); /* ymodem×2 + imperx + camyu */
     if (!ctx->chain)
     {
         LOG_ERR("Failed to create protocol chain");
         return false;
     }
 
+    /* ---- ymodem 文件传输组件 ----
+       顺序契约: 必须第一个挂。protocol_chain_feed 按添加顺序依次尝试,
+       ymodem 在链首才能先于 imperx/camyu 匹配到自己的帧。
+       组件内部负责创建收/发两个 parser、设置回调并 add_parser。 */
+    file_transfer_cfg_t ft_cfg = {
+        .chain    = ctx->chain,
+        .tx_write = uart_tx_write,
+    };
+    int ft_ret = file_transfer_attach(&ft_cfg);
+    if (ft_ret != PARAM_OK)
+    {
+        LOG_ERR("file_transfer attach failed: %s", param_strerror(ft_ret));
+        goto fail_ft;
+    }
+
+    /* ---- Imperx ---- */
     ctx->imperx_parser = imperx_protocol_create(
         ctx->imperx_rx_buf, sizeof(ctx->imperx_rx_buf),
         ctx->imperx_tx_buf, sizeof(ctx->imperx_tx_buf));
@@ -293,7 +175,9 @@ bool protocol_chain_init(test_ctx_t *ctx)
     protocol_parser_set_callbacks((protocol_parser_t *)ctx->imperx_parser,
                                   imperx_on_frame_ready, ctx,
                                   on_tx_ready, ctx);
+    protocol_chain_add_parser(ctx->chain, (protocol_parser_t *)ctx->imperx_parser);
 
+    /* ---- Camyu ---- */
     ctx->camyu_parser = camyu_protocol_create(
         ctx->camyu_rx_buf, sizeof(ctx->camyu_rx_buf),
         ctx->camyu_tx_buf, sizeof(ctx->camyu_tx_buf));
@@ -305,65 +189,28 @@ bool protocol_chain_init(test_ctx_t *ctx)
     protocol_parser_set_callbacks((protocol_parser_t *)ctx->camyu_parser,
                                   camyu_on_frame_ready, ctx,
                                   on_tx_ready, ctx);
+    protocol_chain_add_parser(ctx->chain, (protocol_parser_t *)ctx->camyu_parser);
 
-    ctx->ymodem_recv_parser = ymodem_protocol_create_receiver(
-        ctx->ymodem_recv_rx_buf, sizeof(ctx->ymodem_recv_rx_buf),
-        ctx->ymodem_recv_tx_buf, sizeof(ctx->ymodem_recv_tx_buf));
-    if (!ctx->ymodem_recv_parser)
-    {
-        LOG_ERR("Failed to create Ymodem receiver parser");
-        goto fail_ymodem_recv;
-    }
-    protocol_parser_set_callbacks((protocol_parser_t *)ctx->ymodem_recv_parser,
-                                  ymodem_recv_on_frame_ready, ctx,
-                                  on_tx_ready, ctx);
-
-    ctx->ymodem_send_parser = ymodem_protocol_create_sender(
-        ctx->ymodem_send_rx_buf, sizeof(ctx->ymodem_send_rx_buf),
-        ctx->ymodem_send_tx_buf, sizeof(ctx->ymodem_send_tx_buf));
-    if (!ctx->ymodem_send_parser)
-    {
-        LOG_ERR("Failed to create Ymodem sender parser");
-        goto fail_ymodem_send;
-    }
-    protocol_parser_set_callbacks((protocol_parser_t *)ctx->ymodem_send_parser,
-                                  ymodem_send_on_frame_ready, ctx,
-                                  on_tx_ready, ctx);
-
-    protocol_chain_add_parser(ctx->chain,
-                              (protocol_parser_t *)ctx->ymodem_recv_parser);
-    protocol_chain_add_parser(ctx->chain,
-                              (protocol_parser_t *)ctx->ymodem_send_parser);
-    protocol_chain_add_parser(ctx->chain,
-                              (protocol_parser_t *)ctx->imperx_parser);
-    protocol_chain_add_parser(ctx->chain,
-                              (protocol_parser_t *)ctx->camyu_parser);
-
-    LOG_INF("Protocol chain initialized: Ymodem(Rx), Ymodem(Tx), Imperx, Camyu");
+    LOG_INF("Protocol chain initialized: Ymodem(Rx/Tx), Imperx, Camyu");
     return true;
 
-fail_ymodem_send:
-    protocol_parser_destroy((protocol_parser_t *)ctx->ymodem_recv_parser);
-    ctx->ymodem_recv_parser = NULL;
-fail_ymodem_recv:
-    protocol_parser_destroy((protocol_parser_t *)ctx->camyu_parser);
-    ctx->camyu_parser = NULL;
 fail_camyu:
     protocol_parser_destroy((protocol_parser_t *)ctx->imperx_parser);
     ctx->imperx_parser = NULL;
 fail_imperx:
+    file_transfer_detach();
+fail_ft:
     protocol_chain_destroy(ctx->chain);
     ctx->chain = NULL;
     return false;
 }
 
-void protocol_chain_cleanup(test_ctx_t *ctx)
+void protocol_chain_cleanup(app_ctx_t *ctx)
 {
-    if (ctx->chain)
-    {
-        protocol_chain_destroy(ctx->chain);
-        ctx->chain = NULL;
-    }
+    /* 组件必须先拆: remove_parser 需要 chain 存活, 且会顺手清掉链上的锁定。
+       现有顺序是 destroy chain → destroy parser, 这里必须反过来。 */
+    file_transfer_detach();
+
     if (ctx->imperx_parser)
     {
         protocol_parser_destroy((protocol_parser_t *)ctx->imperx_parser);
@@ -374,14 +221,9 @@ void protocol_chain_cleanup(test_ctx_t *ctx)
         protocol_parser_destroy((protocol_parser_t *)ctx->camyu_parser);
         ctx->camyu_parser = NULL;
     }
-    if (ctx->ymodem_recv_parser)
+    if (ctx->chain)
     {
-        protocol_parser_destroy((protocol_parser_t *)ctx->ymodem_recv_parser);
-        ctx->ymodem_recv_parser = NULL;
-    }
-    if (ctx->ymodem_send_parser)
-    {
-        protocol_parser_destroy((protocol_parser_t *)ctx->ymodem_send_parser);
-        ctx->ymodem_send_parser = NULL;
+        protocol_chain_destroy(ctx->chain);
+        ctx->chain = NULL;
     }
 }

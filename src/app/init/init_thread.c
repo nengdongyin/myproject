@@ -21,7 +21,7 @@ LOG_MODULE_REGISTER(init_thread, LOG_LEVEL_INF);
 K_THREAD_STACK_DEFINE(protocol_parser_stack, STACK_SIZE);
 static struct k_thread protocol_parser_thread_data;
 
-test_ctx_t test_ctx;
+app_ctx_t app_ctx;
 extern void app_sensor_demo(void);
 void init_thread_entry(void *arg1, void *arg2, void *arg3)
 {
@@ -29,9 +29,9 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
     ARG_UNUSED(arg2);
     ARG_UNUSED(arg3);
 
-    test_ctx_t *ctx = &test_ctx;
+    app_ctx_t *ctx = &app_ctx;
 
-    memset(ctx, 0, sizeof(test_ctx_t));
+    memset(ctx, 0, sizeof(app_ctx_t));
 
     /* 平台互斥锁初始化：param/file 等子系统的 system_lock(id) 依赖此步 */
     system_mutex_init();
@@ -53,8 +53,8 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
     LOG_INF("===== Protocol Chain Test Started =====");
     LOG_INF("  Imperx:     ready (send hex frames to test)");
     LOG_INF("  Camyu:      ready (send hex frames to test)");
-    LOG_INF("  Ymodem Rx:  idle (start via Imperx WRITE 0xF000)");
-    LOG_INF("  Ymodem Tx:  idle (start via Imperx WRITE 0xF001)");
+    LOG_INF("  Ymodem Rx:  idle (Imperx WRITE 0xF000 -> PID_FT_RECV_START)");
+    LOG_INF("  Ymodem Tx:  idle (Imperx WRITE 0xF001 -> PID_FT_SEND_START)");
     LOG_INF("  File io:   LittleFS (file_io_fs)");
     LOG_INF("=========================================");
 

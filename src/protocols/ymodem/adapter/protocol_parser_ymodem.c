@@ -107,17 +107,17 @@ static const ErrorMapper ymodem_error_mapper = {
  * - reset: Ymodem 采用延迟复位机制(frame_is_end), 由下次帧头触发,
  *   框架立即复位会破坏该机制
  *
- * @note  ERROR 事件不触发 frame_ready(走 parse_data 错误码返回路径)。
+ * @note  ERROR 事件**必须**转发 —— 这是本协议与 imperx/camyu 的根本差异:
+ *        无状态协议(寄存器读写)只在命令完整时才需要用户动手, 出错自有
+ *        parser_error_t 通道; 而 ymodem 的用户持有会话资源(文件句柄/落盘
+ *        位置), 传输中止时必须能收回资源(关文件/解链), 否则只能等下一次
+ *        start 兜底。因此对 ymodem 而言, 错误终结也是一种 frame_ready。
  */
 static void ymodem_receiver_event_bridge(ymodem_receiver_parser_t* recv,
                                           const ymodem_receiver_event_t* event,
                                           void* user_ctx)
 {
     (void)user_ctx;
-
-    if (event->type == YMODEM_RECV_EVENT_ERROR) {
-        return;
-    }
 
     ymodem_protocol_parser_t* yp = (ymodem_protocol_parser_t*)
         ((uint8_t*)recv - offsetof(ymodem_protocol_parser_t, pri.receiver));
@@ -145,20 +145,20 @@ static void ymodem_receiver_event_bridge(ymodem_receiver_parser_t* recv,
  * - reset: 由 frame_stage_process 末尾统一调用 ymodem_sender_reset,
  *   框架提前 reset 会清零 frame_info 导致 build_data_packet 读到全零字段
  *
- * ERROR 和 SESSION_FINISHED 事件不触发 frame_ready:
- * - SESSION_FINISHED: 发送器自行回到 IDLE, 用户通过 tx_ready 收最后一帧
- * - ERROR: 走 sender_parse 返回的错误码路径
+ * ERROR 和 SESSION_FINISHED 事件同样转发到 frame_ready:
+ * - 语义依据: 对 ymodem 这类有状态协议, 用户持有会话资源(文件句柄),
+ *   会话终结(正常或异常)都必须通知用户回收资源, 否则只能等下一次 start
+ *   兜底。这与 imperx/camyu 那类"只在命令完整时通知"的无状态协议不同。
+ * - 安全性: 两者都在"帧已发出"之后触发, 回调返回后不再有依赖它的
+ *   帧构建, 因此不会扰乱发送器状态机。
+ * - SESSION_FINISHED: 空文件名包已发, 发送器随后回 IDLE
+ * - ERROR: CAN CAN 已发, 发送器转 ABORTED (与 parse_data 错误码路径并行)
  */
 static void ymodem_sender_event_bridge(ymodem_sender_t* send,
                                         ymodem_sender_event_t* event,
                                         void* user_ctx)
 {
     (void)user_ctx;
-
-    if (event->type == YMODEM_SENDER_EVENT_ERROR ||
-        event->type == YMODEM_SENDER_EVENT_SESSION_FINISHED) {
-        return;
-    }
 
     ymodem_protocol_parser_t* yp = (ymodem_protocol_parser_t*)
         ((uint8_t*)send - offsetof(ymodem_protocol_parser_t, pri.sender));
@@ -281,22 +281,6 @@ ymodem_protocol_parser_t* ymodem_protocol_create_sender(void* rx_buffer, uint32_
     return yp;
 }
 
-/* ==================== 访问器 ======================================== */
-
-ymodem_sender_t* ymodem_adapter_get_sender(ymodem_protocol_parser_t* parser) {
-    if (!parser) {
-        return NULL;
-    }
-    return &parser->pri.sender;
-}
-
-ymodem_receiver_parser_t* ymodem_adapter_get_receiver(ymodem_protocol_parser_t* parser) {
-    if (!parser) {
-        return NULL;
-    }
-    return &parser->pri.receiver;
-}
-
 /* ==================== 生命周期控制 =================================== */
 
 bool ymodem_adapter_start_receiver(ymodem_protocol_parser_t* parser) {
@@ -311,6 +295,30 @@ bool ymodem_adapter_start_sender(ymodem_protocol_parser_t* parser) {
         return false;
     }
     return ymodem_sender_start(&parser->pri.sender);
+}
+
+void ymodem_adapter_cancel(ymodem_protocol_parser_t* parser) {
+    ymodem_receiver_parser_t* recv;
+
+    if (!parser) {
+        return;
+    }
+
+    recv = &parser->pri.receiver;
+
+    /* 用协议自己的中止串填充应答缓冲, 再走 send_response 桥接发出:
+       调用方因此不需要认识 CAN, 也不会绕开 tx_ready 直写物理通道 */
+    recv->buffer.tx_buffer[0] = YMODEM_CAN;
+    recv->buffer.tx_buffer[1] = YMODEM_CAN;
+    recv->buffer.tx_buffer_ack_len = 2;
+
+    if (recv->callbacks.send_response) {
+        recv->callbacks.send_response(recv, recv->callbacks.send_response_user_ctx);
+    }
+
+    /* 清掉应答长度: frame_stage_process 尾部会无条件下 send_response,
+       残留长度会让下一次无关的帧处理尾巴多吐一对 CAN */
+    recv->buffer.tx_buffer_ack_len = 0;
 }
 
 /* ==================== 数据解析 ====================================== */

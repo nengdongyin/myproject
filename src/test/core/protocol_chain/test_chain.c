@@ -543,6 +543,64 @@ void test_chain_feed_respects_user_manual_lock(void)
     TEST_ASSERT(protocol_chain_get_locked_parser(g_chain) == mock_p_inc_ptr);
 }
 
+/* ---- 回调内改动锁定 —— 框架必须尊重 ---------------------------------------------------- */
+
+/* 模拟上层在会话终结时显式解链, 并返回致命错误 */
+static int mock_parse_unlock_chain(protocol_parser_t *p, const uint8_t *d, uint32_t len)
+{
+    (void)p; (void)d; (void)len;
+    protocol_chain_set_locked_parser(g_chain, NULL);
+    return PARSER_ERR_FRAME;
+}
+
+static const struct protocol_parser_ops mock_ops_unlock_chain = {
+    .parse_data = mock_parse_unlock_chain, .reset = mock_reset,
+};
+
+/* 模拟上层在回调里手动切到另一个解析器 */
+static int mock_parse_switch_lock(protocol_parser_t *p, const uint8_t *d, uint32_t len)
+{
+    (void)p; (void)d; (void)len;
+    protocol_chain_set_locked_parser(g_chain, mock_p_fatal_ptr);
+    return PARSER_ERR_FRAME;
+}
+
+static const struct protocol_parser_ops mock_ops_switch_lock = {
+    .parse_data = mock_parse_switch_lock, .reset = mock_reset,
+};
+
+void test_chain_feed_callback_unlock_is_respected(void)
+{
+    g_chain = protocol_chain_create(2);
+    protocol_chain_add_parser(g_chain, mock_p_inc_ptr);
+    mock_p_inc.ops = &mock_ops_unlock_chain;
+
+    TEST_ASSERT(protocol_chain_set_locked_parser(g_chain, mock_p_inc_ptr));
+
+    /* 回调在 parse 内把 locked_parser 置 NULL 且返回致命错误:
+       框架不得解引用已置空的指针, 且须尊重用户的解锁 */
+    parser_error_t err = protocol_chain_feed(g_chain, g_test_data, 3);
+
+    TEST_ASSERT_EQUAL(PARSER_ERR_FRAME, err);
+    TEST_ASSERT_NULL(protocol_chain_get_locked_parser(g_chain));
+}
+
+void test_chain_feed_callback_switch_lock_is_respected(void)
+{
+    g_chain = protocol_chain_create(3);
+    protocol_chain_add_parser(g_chain, mock_p_inc_ptr);
+    protocol_chain_add_parser(g_chain, mock_p_fatal_ptr);
+    mock_p_inc.ops = &mock_ops_switch_lock;
+
+    TEST_ASSERT(protocol_chain_set_locked_parser(g_chain, mock_p_inc_ptr));
+
+    parser_error_t err = protocol_chain_feed(g_chain, g_test_data, 3);
+
+    TEST_ASSERT_EQUAL(PARSER_ERR_FRAME, err);
+    /* 用户在回调里改锁到 fatal parser —— 框架不再覆盖 */
+    TEST_ASSERT(protocol_chain_get_locked_parser(g_chain) == mock_p_fatal_ptr);
+}
+
 void test_chain_feed_user_lock_prevents_new_match(void)
 {
     g_chain = protocol_chain_create(3);
@@ -680,6 +738,8 @@ int chain_run_all_tests(void)
 
     RUN_TEST(test_chain_feed_respects_user_manual_lock);
     RUN_TEST(test_chain_feed_user_lock_prevents_new_match);
+    RUN_TEST(test_chain_feed_callback_unlock_is_respected);
+    RUN_TEST(test_chain_feed_callback_switch_lock_is_respected);
 
     RUN_TEST(test_chain_feed_frame_locked_none_keeps_lock);
 
