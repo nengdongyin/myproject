@@ -7,6 +7,7 @@
 #include "param_dump.h"
 #include <stdio.h>
 #include "file_transfer.h"
+#include "log_api.h"
 
 LOG_MODULE_REGISTER(chain_test, LOG_LEVEL_DBG);
 
@@ -140,6 +141,11 @@ static void camyu_on_frame_ready(protocol_parser_t *parser,
 bool protocol_chain_init(app_ctx_t *ctx)
 {
     param_dump_set_output(dump_cb);
+
+    /* 日志: 注入串口字节出口并初始化 (EasyLogger elog_init + elog_start) */
+    log_sink_set(uart_tx_write);
+    log_init();
+    LOG_I("boot", "EasyLogger up");
 
     ctx->chain = protocol_chain_create(4); /* ymodem×2 + imperx + camyu */
     if (!ctx->chain)

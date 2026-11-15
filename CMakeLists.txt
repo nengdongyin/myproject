@@ -27,9 +27,11 @@ target_include_directories(app PRIVATE
     src/protocols/camyu
     src/core/file_process
     src/core/file_transfer
+    src/core/log
     src/core/vfs
     src/core/vfs/backend
     src/core/vfs/rawflash
+    src/lib/EasyLogger/easylogger/inc
     src/lib/flashdb/inc
     src/lib/mkv
     src/lib/flashdb/port/fal/inc
@@ -70,6 +72,10 @@ target_sources(app PRIVATE
       src/core/param_manager/storage/param_storage_flashdb.c
       src/core/param_manager/storage/param_storage_mkv.c
       src/lib/mkv/mkv.c
+      src/lib/EasyLogger/easylogger/src/elog.c
+      src/lib/EasyLogger/easylogger/src/elog_utils.c
+      src/lib/EasyLogger/easylogger/src/elog_buf.c
+      src/lib/EasyLogger/easylogger/src/elog_async.c
       src/platform/bsp/rp2350/fal_flash_rp2350.c
       src/protocols/camyu/protocol_parser_camyu.c
       src/protocols/imperx/protocol_parser_imperx.c
@@ -80,6 +86,7 @@ target_sources(app PRIVATE
       src/protocols/ymodem/src/ymodem_sender.c
       src/core/file_transfer/file_transfer.c
       src/core/file_transfer/file_transfer_param.c
+      src/core/log/log_elog_port.c
       src/core/vfs/vfs_core.c
       src/core/vfs/vfs_bdev.c
       src/core/vfs/backend/vfs_rawflash.c
