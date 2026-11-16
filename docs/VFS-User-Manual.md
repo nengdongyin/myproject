@@ -20,6 +20,7 @@
 11. [内存与 ROM 预算](#11-内存与-rom-预算)
 12. [限制与注意事项](#12-限制与注意事项)
 13. [故障排查](#13-故障排查)
+14. [shell 命令集](#14-shell-命令集文件系统在线调试)
 
 ---
 
@@ -532,6 +533,7 @@ typedef enum {
 | `int vfs_mount(const vfs_mount_cfg_t *cfg)` | 动态挂载（需 `VFS_ENABLE_DYNAMIC_MOUNT`） | 0 / `-ENOTSUP`（未开） |
 | `int vfs_unmount(const char *mnt_point)` | 动态卸载（需 `VFS_ENABLE_DYNAMIC_MOUNT`） | 0 / `-ENOENT` / `-EBUSY` |
 | `const vfs_fs_ops_t *vfs_fstype_lookup(uint8_t fstype)` | 查后端（诊断） | 指针 / NULL |
+| `int vfs_mount_get(size_t idx, const char **mnt, uint8_t *fstype, uint8_t *flags)` | 遍历已挂载卷（诊断/shell） | 1 命中 / 0 结束 |
 
 ### 10.3 文件操作
 
@@ -645,6 +647,63 @@ typedef struct vfs_mount_cfg {
 | 挂载返回 `-EINVAL` | 分区几何非法（对齐/容量/参数） | 检查 `storage_config.c` 分区表的 offset/size 是否块对齐、≤ 设备容量 |
 | 并发下数据错乱 | 固定锁未初始化 | 确认启动早期调用了 `system_mutex_init()` |
 | 挂载 `-ENOSPC` | `SYS_MUTEX_POOL_SIZE` 不足 | 需 ≥ `VFS_MAX_MOUNTS + 1`（核心锁）+ 后端池锁数（当前 3 把） |
+
+---
+
+---
+
+## 14. shell 命令集（文件系统在线调试）
+
+`vfs_shell.c`（`VFS_ENABLE_SHELL=1`，默认开）提供一套**与 shell 后端无关**的文件命令：命令全部经 `shell_api.h` 门面注册，不 include 任何 shell 后端头文件，换后端/换 RTOS 零改动。
+
+### 14.1 命令一览
+
+| 命令 | 用法 | 说明 |
+| --- | --- | --- |
+| `pwd` | `pwd` | 打印当前目录 |
+| `cd` | `cd [path]` | 切换目录（无参回 `/`）；`.`/`..`/相对路径均可用 |
+| `ls` | `ls [path]` | 列目录；`ls /` 列所有挂载卷（`d /lfs rw fstype=1`） |
+| `cat` | `cat <file>` | 文本输出，不可打印字符记 `.` |
+| `hexdump` | `hexdump <file> [off] [len]` | 十六进制 + ASCII，`off`/`len` 支持 `0x` |
+| `mkdir` | `mkdir <path>` | 建目录 |
+| `rm` | `rm <path>` | 删除文件或空目录（走 `vfs_unlink`；VFS 无 rmdir） |
+| `stat` | `stat <path>` | 类型 + 大小 |
+| `write` | `write <file> <text...>` | 覆盖写文本（调试用，自动补换行） |
+| `mv` | `mv <from> <to>` | **仅当 `VFS_ENABLE_RENAME=1`** 时注册 |
+| `df` | `df` | **仅当 `VFS_ENABLE_STATVFS=1`** 时注册 |
+
+### 14.2 当前目录从哪来
+
+VFS 故意不提供 `chdir`（所有 API 的 path 都要求绝对路径），所以 cwd 由 shell 层维护：`vfs_shell.c` 里一个 `static char s_cwd[VFS_PATH_MAX]`，`vfs_sh_resolve()` 负责相对路径拼接与 `.`/`..` 的词法归一（不碰介质，不解析链接）。
+
+### 14.3 三个硬约束
+
+1. **输出必须封顶**：命令在调用 `shell_rx_feed()` 的那个线程里同步执行（本工程是协议接收线程），一条命令按住它等于协议停摆。因此 `cat` 单次 ≤ 4 KiB、`hexdump` ≤ 512 B、`ls` ≤ 64 项。
+2. **行宽受限**：shell 单行缓冲 = 512/(5+1) ≈ 85 字符（`SHELL_HISTORY_MAX_NUMBER=5`），所以 `ls` 每项只打印 `类型 + 大小 + 名字`。
+3. **可能与日志交错**：shell 与 EasyLogger 各持一把输出锁（见 `shell_config.h` 的 `SHELL_USING_LOCK` 注释），`cat` 大文件时会混进日志行 —— 只影响可读性。
+
+### 14.4 装配与关闭
+
+无需任何显式初始化：命令通过链接器 `shellCommand` 段自动注册。前提两条：
+
+- 源列表包含 `src/core/vfs/vfs_shell.c`；
+- 链接脚本保留了 `shellCommand` 段（GCC: `shell_sections_gcc.ld`；Zephyr: `CMakeLists.txt` 的 `zephyr_linker_sources`）。
+
+关闭方式：`-DVFS_ENABLE_SHELL=0`；若整个 shell 门面关闭（`SHELL_BACKEND_NONE`），本模块自动编译为空，不占 ROM。
+
+### 14.5 上板自检
+
+```text
+ls /                 →  d /lfs    rw fstype=1
+                        d /raw    rw fstype=0
+cd /lfs
+pwd                  →  /lfs
+ls                   →  f     1234  foo.bin
+stat foo.bin         →  /lfs/foo.bin
+                        type: file
+                        size: 1234
+hexdump foo.bin 0 32
+```
 
 ---
 

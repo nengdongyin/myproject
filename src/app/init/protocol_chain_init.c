@@ -8,8 +8,14 @@
 #include <stdio.h>
 #include "file_transfer.h"
 #include "log_api.h"
+#include "shell_api.h"
+#include "mem_regions.h"
 
 LOG_MODULE_REGISTER(chain_test, LOG_LEVEL_DBG);
+
+/* shell 的字节入口不走协议透传帧了: 通信串口由 core/console 的 console_mode
+   在“协议解析 / shell”之间时分复用 (WRITE 0xF003 切 shell, shell 内
+   `uart_mode proto` 切回)。本文件只负责注入字节出口与初始化 shell。 */
 
 /* ================================================================
  *  平台出口 —— 本文件是唯一认识 uart1_dev 的地方
@@ -76,6 +82,7 @@ static void imperx_on_frame_ready(protocol_parser_t *parser,
 
     uint16_t raw_addr = (uint16_t)(pri->parsed_id & 0xFFFF);
     uint16_t addr = endian_swap16(raw_addr);
+
     const cmd_map_entry_t *e = cmd_map_lookup(addr);
     if (!e) {
         LOG_WRN("Unknown address: 0x%04X", addr);
@@ -147,6 +154,20 @@ bool protocol_chain_init(app_ctx_t *ctx)
     log_init();
     LOG_I("boot", "EasyLogger up");
 
+    /* shell: 只注入字节出口 + 初始化。字节**入口**由 core/console 的
+       console_mode 分流 (协议模式不喂 shell), 详见本文件头的说明。
+       sink 签名与 log_sink_fn / ft_tx_fn 一致, 故 uart_tx_write 一函数多用。 */
+    shell_sink_set(uart_tx_write);
+    shell_init();
+    LOG_I("boot", "letter-shell up (WRITE 0xF003 -> shell)");
+
+    /* md/mw 的地址白名单: 板级表 → core/debug。不注入的话两条命令一律拒绝
+       (fail-closed), 这是故意的不做"默认全放开"。 */
+    if (mem_regions_configure() != 0)
+    {
+        LOG_WRN("mem whitelist not configured, md/mw will be refused");
+    }
+
     ctx->chain = protocol_chain_create(4); /* ymodem×2 + imperx + camyu */
     if (!ctx->chain)
     {
@@ -213,6 +234,9 @@ fail_ft:
 
 void protocol_chain_cleanup(app_ctx_t *ctx)
 {
+    /* shell 先关: 之后不再有任何入口能把字节喂进 shellHandler */
+    shell_deinit();
+
     /* 组件必须先拆: remove_parser 需要 chain 存活, 且会顺手清掉链上的锁定。
        现有顺序是 destroy chain → destroy parser, 这里必须反过来。 */
     file_transfer_detach();

@@ -4,6 +4,28 @@
  */
 
 #include "port.h"
+#include "port_rtos.h"
+#include <errno.h>
+
+/**
+ * @brief 有界字符串拷贝 (不依赖 libc): 保证 dst 以 '\0' 结尾
+ *
+ * 线程名/状态名可能超长或为 NULL, 命令侧只关心"能打印出来"。
+ * static inline 定义在文件顶部, 未使用的分支不会产生 unused 警告。
+ */
+static inline void port_str_copy(char *dst, size_t cap, const char *src)
+{
+    size_t i = 0;
+
+    if (dst == NULL || cap == 0)
+        return;
+    if (src != NULL)
+    {
+        for (; i + 1 < cap && src[i] != '\0'; i++)
+            dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
 
 #if PORT_OS_CUSTOM
 
@@ -95,6 +117,68 @@ void sys_mutex_unlock(sys_mutex_t *m)
         xSemaphoreGive(m->h);
 }
 
+/* ================================================================
+ *  线程/栈信息 (ps / stacks)
+ *
+ *  需 configUSE_TRACE_FACILITY = 1; 否则 TaskStatus_t / usStackHighWaterMark
+ *  根本不存在 → 退化 -ENOTSUP。
+ *
+ *  @note FreeRTOS 的 uxTaskGetSystemState() 在**数组装不下全部任务时返回 0**,
+ *        所以任务数超过 PORT_FREERTOS_STAT_MAX 时这里也返回 0 (似为空), 命令侧
+ *        会显示 "(none)" —— 调大下面的常量即可。
+ * ================================================================ */
+#if (configUSE_TRACE_FACILITY == 1)
+
+#define PORT_FREERTOS_STAT_MAX 24
+
+static TaskStatus_t s_task_status[PORT_FREERTOS_STAT_MAX];
+
+static const char *port_task_state_name(eTaskState st)
+{
+    switch (st)
+    {
+    case eRunning:   return "running";
+    case eReady:     return "ready";
+    case eBlocked:   return "blocked";
+    case eSuspended: return "suspended";
+    case eDeleted:   return "deleted";
+    default:         return "invalid";
+    }
+}
+
+int port_thread_stat(size_t idx, port_thread_info_t *out)
+{
+    UBaseType_t n;
+
+    if (out == NULL)
+        return -EINVAL;
+
+    /* 每次调用都重取一次快照: 命令是低频调试路径, 代码简单比缓存新重要 */
+    n = uxTaskGetSystemState(s_task_status, PORT_FREERTOS_STAT_MAX, NULL);
+    if (idx >= (size_t)n)
+        return 0;
+
+    port_str_copy(out->name, sizeof(out->name), s_task_status[idx].pcTaskName);
+    port_str_copy(out->state, sizeof(out->state),
+                  port_task_state_name(s_task_status[idx].eCurrentState));
+    out->prio = (int32_t)s_task_status[idx].uxCurrentPriority;
+    out->stack_size = 0u; /* TaskStatus_t 不提供栈总大小 */
+    out->stack_free_min = (uint32_t)s_task_status[idx].usStackHighWaterMark *
+                          (uint32_t)sizeof(StackType_t);
+    return 1;
+}
+
+#else /* !configUSE_TRACE_FACILITY */
+
+int port_thread_stat(size_t idx, port_thread_info_t *out)
+{
+    (void)idx;
+    (void)out;
+    return -ENOTSUP;
+}
+
+#endif /* configUSE_TRACE_FACILITY */
+
 #elif PORT_OS_ZEPHYR
 
 /* ================================================================
@@ -177,6 +261,72 @@ void sys_mutex_unlock(sys_mutex_t *m)
     if (m && m->used)
         k_mutex_unlock(&m->m);
 }
+
+/* ================================================================
+ *  线程/栈信息 (ps / stacks)
+ *
+ *  三个 Kconfig 必须同时开, 缺一不可:
+ *    CONFIG_THREAD_MONITOR     → k_thread_foreach() 可遍历
+ *    CONFIG_THREAD_STACK_INFO  → thread->stack_info.size 有效
+ *    CONFIG_INIT_STACKS        → 栈以 0xAA 填充, 才能量出"历史未用量"
+ *  任一缺失 → 返回 -ENOTSUP, 命令侧打印"当前后端不支持"。
+ * ================================================================ */
+#if defined(CONFIG_THREAD_MONITOR) && defined(CONFIG_INIT_STACKS) && \
+    defined(CONFIG_THREAD_STACK_INFO)
+
+struct port_thread_walk
+{
+    size_t              want;
+    size_t              seen;
+    port_thread_info_t *out;
+    int                 found;
+};
+
+static void port_thread_walk_cb(const struct k_thread *t, void *user_data)
+{
+    struct port_thread_walk *w = (struct port_thread_walk *)user_data;
+    size_t unused = 0;
+
+    if (w->found || w->seen++ != w->want)
+        return;
+
+    port_str_copy(w->out->name, sizeof(w->out->name),
+                  k_thread_name_get((k_tid_t)t));
+    (void)k_thread_state_str((k_tid_t)t, w->out->state, sizeof(w->out->state));
+    w->out->prio = (int32_t)t->base.prio;
+    w->out->stack_size = (uint32_t)t->stack_info.size;
+    /* 返回的是"从未被写过的字节数", 即历史最小剩余量 (需 INIT_STACKS) */
+    w->out->stack_free_min =
+        (k_thread_stack_space_get(t, &unused) == 0) ? (uint32_t)unused : 0u;
+    w->found = 1;
+}
+
+int port_thread_stat(size_t idx, port_thread_info_t *out)
+{
+    struct port_thread_walk w;
+
+    if (out == NULL)
+        return -EINVAL;
+
+    w.want = idx;
+    w.seen = 0;
+    w.out = out;
+    w.found = 0;
+    /* k_thread_foreach 内部持调度器锁, 遍历期间不会新建/销毁线程 */
+    k_thread_foreach(port_thread_walk_cb, &w);
+    return w.found;
+}
+
+#else /* 所需 Kconfig 未全部开启 */
+
+int port_thread_stat(size_t idx, port_thread_info_t *out)
+{
+    (void)idx;
+    (void)out;
+    return -ENOTSUP;
+}
+
+#endif /* CONFIG_THREAD_MONITOR && CONFIG_INIT_STACKS && CONFIG_THREAD_STACK_INFO */
 
 #elif PORT_OS_RTTHREAD
 
@@ -264,6 +414,14 @@ void sys_mutex_unlock(sys_mutex_t *m)
         rt_mutex_release(m->h);
 }
 
+/* 线程/栈枚举未实现: RT-Thread 的内部对象容器遍历依赖具体版本, 暂不支持 */
+int port_thread_stat(size_t idx, port_thread_info_t *out)
+{
+    (void)idx;
+    (void)out;
+    return -ENOTSUP;
+}
+
 #elif PORT_OS_LIBC
 
 /* ================================================================
@@ -336,5 +494,13 @@ sys_mutex_t *sys_mutex_create(void)
 void sys_mutex_destroy(sys_mutex_t *m) { if (m) m->used = 0; }
 void sys_mutex_lock(sys_mutex_t *m)    { (void)m; }
 void sys_mutex_unlock(sys_mutex_t *m)  { (void)m; }
+
+/* 无 RTOS: 没有"线程"可枚举 */
+int port_thread_stat(size_t idx, port_thread_info_t *out)
+{
+    (void)idx;
+    (void)out;
+    return -ENOTSUP;
+}
 
 #endif /* PORT_OS_* */

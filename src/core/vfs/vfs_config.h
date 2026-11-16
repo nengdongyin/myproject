@@ -89,6 +89,18 @@
 #define VFS_ENABLE_STDIO          0
 #endif
 
+/**
+ * @brief 文件系统 shell 命令集（vfs_shell.c: pwd/cd/ls/cat/hexdump/...）
+ *
+ * 置 1 后把 vfs_shell.c 纳入构建。命令全部经 shell_api.h 门面注册, 因此与
+ * shell 后端无关; 若 SHELL_BACKEND_NONE 生效, 本模块自动编译为空。
+ *
+ * @note 只影响“是否提供命令”, 不改变 VFS 内核行为。
+ */
+#ifndef VFS_ENABLE_SHELL
+#define VFS_ENABLE_SHELL          1
+#endif
+
 /** @brief 多任务保护：每挂载点互斥锁 */
 #ifndef VFS_ENABLE_MP_LOCK
 #define VFS_ENABLE_MP_LOCK        1

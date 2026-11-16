@@ -18,6 +18,7 @@ target_include_directories(app PRIVATE
     src/core/protocol_parser
     src/platform
     src/platform/port
+    src/platform/bsp
     src/core/param_manager/core
     src/core/param_manager/config
     src/core/param_manager/storage
@@ -28,6 +29,10 @@ target_include_directories(app PRIVATE
     src/core/file_process
     src/core/file_transfer
     src/core/log
+    src/core/shell
+    src/core/console
+    src/core/debug
+    src/lib/letter-shell/src
     src/core/vfs
     src/core/vfs/backend
     src/core/vfs/rawflash
@@ -52,6 +57,24 @@ target_include_directories(app PRIVATE
 
 target_compile_definitions(app PRIVATE PARAM_MKV_ENABLE=1)
 
+# letter-shell 配置覆盖层: 全局注入, 使 shell.c / shell_ext.c 等后端自身
+# 编译单元也能拿到 shell_config.h (其中含 port.h → stddef.h, 顺带修复
+# shell_ext.h 裸用 size_t 的依赖问题)。引号必须保留, 故用转义形式。
+target_compile_definitions(app PRIVATE "SHELL_CFG_USER=\"shell_config.h\"")
+
+# letter-shell 命令导出段: 保持 shellCommand 段并提供起止符号
+# (片段: src/core/shell/shell_sections_zephyr.ld)
+#
+# location 必须是 SECTIONS: 片段自带输出段 (SECTION_PROLOGUE(shellCommand,,)),
+# 需要落在全局链接脚本的 SECTIONS 块里。若用 RODATA (即“包含在 .rodata 内部”),
+# 就成了输出段套输出段, 链接必失败。Zephyr 4.x 的合法 location 里本来也没有
+# RODATA_SECTIONS 这个名字 (只有 SECTIONS/ROM_SECTIONS/RODATA/...)。
+#
+# 非 Zephyr (FreeRTOS + GCC) 构建时这三行 Zephyr 专用调用整段删掉, 改在工程
+# 自己的 .ld 的 SECTIONS 块里加一行:
+#     INCLUDE "src/core/shell/shell_sections_gcc.ld"
+zephyr_linker_sources(SECTIONS ${CMAKE_CURRENT_SOURCE_DIR}/src/core/shell/shell_sections_zephyr.ld)
+
 target_sources(app PRIVATE
       src/app/main.c
       src/app/init/init_thread.c
@@ -59,6 +82,7 @@ target_sources(app PRIVATE
       src/app/init/param_manager_init.c
       src/app/init/file_storage_init.c
       src/app/init/protocol_parser_thread.c
+      src/app/init/shell_cmds.c
       src/core/protocol_parser/protocol_chain.c
       src/core/protocol_parser/protocol_parser.c
       src/core/param_manager/core/param_manager.c
@@ -87,8 +111,17 @@ target_sources(app PRIVATE
       src/core/file_transfer/file_transfer.c
       src/core/file_transfer/file_transfer_param.c
       src/core/log/log_elog_port.c
+      src/core/shell/shell_letter_port.c
+      src/core/console/console_mode.c
+      src/core/debug/mem_access.c
+      src/core/debug/rtos_shell.c
+      src/core/file_transfer/file_transfer_shell.c
+      src/platform/bsp/mem_regions.c
+      src/lib/letter-shell/src/shell.c
+      src/lib/letter-shell/src/shell_ext.c
       src/core/vfs/vfs_core.c
       src/core/vfs/vfs_bdev.c
+      src/core/vfs/vfs_shell.c
       src/core/vfs/backend/vfs_rawflash.c
       src/core/vfs/backend/vfs_littlefs.c
       src/core/vfs/backend/vfs_fatfs.c

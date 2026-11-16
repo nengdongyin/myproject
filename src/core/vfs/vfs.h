@@ -563,6 +563,24 @@ extern "C"
      */
     const vfs_fs_ops_t *vfs_fstype_lookup(uint8_t fstype);
 
+    /**
+     * @brief 遍历已挂载卷（诊断/工具用，只读）
+     *
+     * 供 shell、生产测试等需要的“列出挂载点”场景：从 idx=0 开始递增直到
+     * 返回 0。本接口不分配任何资源，调用方自带循环变量。
+     *
+     * @param idx       遍历下标（从 0 开始）
+     * @param mnt_point 输出挂载点字符串（如 "/lfs"）；可为 NULL
+     * @param fstype    输出 vfs_fstype_t；可为 NULL
+     * @param flags     输出 VFS_MNT_* 标志；可为 NULL
+     * @retval 1 命中，输出参数已填充
+     * @retval 0 idx 越界，遍历结束
+     *
+     * @note 只读且不加锁（与 vfs_fstype_lookup 同级）：挂载点表在启动阶段
+     *       固定，运行期只读安全；仅适合 shell/诊断这类非装配场景。
+     */
+    int vfs_mount_get(size_t idx, const char **mnt_point, uint8_t *fstype, uint8_t *flags);
+
 #ifdef __cplusplus
 }
 #endif

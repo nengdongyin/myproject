@@ -808,6 +808,28 @@ const vfs_fs_ops_t *vfs_fstype_lookup(uint8_t fstype)
     return registry_find(fstype);
 }
 
+int vfs_mount_get(size_t idx, const char **mnt_point, uint8_t *fstype, uint8_t *flags)
+{
+    size_t seen = 0;
+
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++)
+    {
+        if (!g_mounts[i].used)
+            continue;
+        if (seen++ != idx)
+            continue;
+
+        if (mnt_point)
+            *mnt_point = g_mounts[i].mnt_point;
+        if (fstype)
+            *fstype = g_mounts[i].fstype;
+        if (flags)
+            *flags = g_mounts[i].flags;
+        return 1;
+    }
+    return 0;
+}
+
 /* ================================================================
  *  文件操作
  * ================================================================ */

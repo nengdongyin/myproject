@@ -2,6 +2,8 @@
 #include "app_config.h"
 #include "ymodem_common.h"
 #include "file_transfer.h"
+#include "console_mode.h"
+#include "shell_api.h"
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(protocol_parser_thread, LOG_LEVEL_DBG);
@@ -40,7 +42,18 @@ void protocol_parser_thread_entry(void *arg1, void *arg2, void *arg3)
         if (n > 0)
         {
             ctx->total_rx_bytes += (uint32_t)n;
-            (void)protocol_chain_feed(ctx->chain, data_buf, (uint32_t)n);
+
+            /* 通信串口是时分复用: 同一批字节只能交给一个消费者。
+               shell 模式下 shellHandler 逐字节解析并回显, 再喂协议链就会
+               同时踩回显污染 / 0x0A 触发命令行执行 / 0x52,0x57 撞 Imperx 帧头。 */
+            if (console_mode_get() == CONSOLE_MODE_SHELL)
+            {
+                shell_rx_feed(data_buf, (uint32_t)n);
+            }
+            else
+            {
+                (void)protocol_chain_feed(ctx->chain, data_buf, (uint32_t)n);
+            }
         }
         else
         {
