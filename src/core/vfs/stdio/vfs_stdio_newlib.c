@@ -13,6 +13,8 @@
  * @section caveat 注意
  *  这些符号是全局系统调用钩子，会与平台 libc 的其它实现冲突。仅当你确实
  *  想让标准 I/O 走 VFS 时才开启，并让平台覆盖控制台钩子以接通 printf/scanf。
+ *  _rename_r/_rename 始终编译（保住符号，避免关掉 VFS_ENABLE_RENAME 时
+ *  链接缺符号）；开关为 0 时函数内部分支直接返回 ENOSYS。
  */
 
 #include "vfs.h"
@@ -22,6 +24,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdio.h> /* 声明 _rename_r 等钩子原型，供编译器校验签名 */
 #include <sys/stat.h>
 #include <sys/reent.h>
 #include <stddef.h>
@@ -400,6 +403,40 @@ int _unlink_r(struct _reent *r, const char *name)
 int _unlink(const char *name)
 {
     return _unlink_r(_REENT, name);
+}
+
+/**
+ * @brief newlib rename 钩子：转发 vfs_rename
+ * @details newlib 的 rename() 只调用 _rename_r。特性开关 VFS_ENABLE_RENAME=0
+ *          时本函数仍存在但显式返回 -1/ENOSYS（既避免链接期缺符号，又让调用方
+ *          能区分“未编译”与“该文件系统不支持”——后者由 core 返回 ENOTSUP）。
+ * @param r     newlib 重入结构，失败时写 r->_errno
+ * @param from  源路径（须与 to 在同一挂载点）
+ * @param to    目标路径
+ * @return 0 成功；失败返回 -1 并设 errno（ENOSYS 未编译，其余为 -rc）
+ */
+int _rename_r(struct _reent *r, const char *from, const char *to)
+{
+#if VFS_ENABLE_RENAME
+    int rc = vfs_rename(from, to);
+    if (rc < 0)
+    {
+        r->_errno = -rc;
+        return -1;
+    }
+    return 0;
+#else
+    (void)from;
+    (void)to;
+    r->_errno = ENOSYS; /* 功能被 VFS_ENABLE_RENAME=0 编译裁剪 */
+    return -1;
+#endif
+}
+
+/** @brief _rename 的全局线程本地包装（委托 _rename_r） */
+int _rename(const char *from, const char *to)
+{
+    return _rename_r(_REENT, from, to);
 }
 
 #endif /* VFS_ENABLE_STDIO */
