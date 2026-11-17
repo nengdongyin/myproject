@@ -634,8 +634,12 @@ extern "C"
      *
      * **不得**为"遍历条目 / 恢复缓存"而包含 param_manager_internal.h 或
      * 调用 param_foreach、param_cache_restore、条目 vtable —— 那是控制流
-     * 反转 (后端指挥框架), 会与框架的锁域冲突。唯一的例外是纯装饰性的
-     * 调试名标注 (param_entry_name, 见 iniparser 后端)。
+     * 反转 (后端指挥框架), 会与框架的锁域冲突。允许的例外只有"单条只读
+     * 元数据", 目前见 iniparser 后端的两处:
+     *   - param_entry_name: 值里的人类可读名称标注 (纯装饰, 不参与身份);
+     *   - param_entry_find + entry_type: 保存时按类型选落盘文本形态
+     *     (uint/float/string..., 类型只有条目自己知道)。
+     * 二者都只读单条、不回调、不改缓存, 因此不构成控制流反转。
      *
      * ctx 指针使同一套回调函数支持多个物理存储实例
      * (如多分区/Bank 切换)，每个实例传入不同的 ctx 即可。

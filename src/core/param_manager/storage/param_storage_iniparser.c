@@ -11,10 +11,17 @@
  *     读取 param_boot 文件 → 选择目标用户分区 → 空则回退 factory
  *
  * 每个参数以一行键值对存储在 [params] 段下, 键为 param_id 的 32 位 hex 形态,
- * 值由"参数名"与"hex 字节流"组成 (参数名仅作可读标注, 不参与身份):
- *   0x00020000 = g_boot_index:03000000
+ * 值为"<参数名>:<类型标签>:<字面量>"三段式 (参数名仅作可读标注, 不参与身份)。
+ * 目标是 cat 一眼可读, 不必回头查 hex 转储:
+ *   [params]
+ *   0x00020000 = "boot_index:uint:3"
+ *   0x00020001 = "exposure_gain:float:0.75"
+ *   0x00020002 = "device_name:string:"CAM-01""
+ *   0x00020003 = "calibration:blob:0A1B2C3D"
+ * (最外层双引号是 iniparser 自己的转义, 不属于值文本)
  * 高 16 位 = module_id, 低 16 位 = local_id, 便于对照 module_ids.h。
- * 键与值格式均为本后端第一版定义, 无历史格式包袱。
+ * 标签与字面量约定见下文 "值文本编解码" 一节; 无标签的旧形态
+ * "<参数名>:<hex>" 仍按 hex 字节流解码, 因此格式演进不会丢旧数据。
  *
  * 每次 save() 全量重写 INI 文件，通过写临时文件 + rename 保证原子性。
  *
@@ -31,8 +38,11 @@
 
 #include "param_storage_iniparser.h"
 #include "param_storage_common.h"
-/* 值是"名称:hex"形式, 名称经 param_entry_name() 取自条目本身 (调试名),
-   这是本后端对框架内部 API 的唯一依赖 (纯装饰用途, 不参与身份)。
+/* 本后端对框架内部 API 的依赖只有两处, 且都只读:
+   - param_entry_name(): 值的可读标注 (纯装饰, 不参与身份);
+   - param_entry_find() + entry_type(): 保存时按类型选落盘文本形态
+     (uint/int/float/... 只有条目类型知道)。解码侧不看条目表, 落盘文本
+     自描述 (见"值文本编解码"), 因此条目清单变化不会污染读取路径。
    批量通路分别走 sink 注入 (恢复) 与 save_begin/save_commit (保存),
    本后端不遍历框架条目、也不直调条目 vtable。 */
 #include "param_manager_internal.h"
@@ -60,19 +70,42 @@
 /** @brief 参数名缓冲区 (调试名即 C 变量名, 超出则截断) */
 #define INI_NAME_MAX 32
 
-/** @brief hex 值缓冲区大小 (支持 ≤255 字节的原始数据: 255*2+1=511)
+/** @brief 字面量缓冲区大小 (hex 形态支持 ≤255 字节的原始数据: 255*2+1=511)
  *
- * 此限制决定单个参数持久化的最大字节数:
- *   - FLOAT / UINT / INT / BOOL / ENUM / EXEC  → sizeof(param_value_t) = 4~8 字节, 完全不受限
- *   - STRING → max_len+1 字节, 受限于此值的一半 (≤255 字节)
- *   - BLOB   → blob_size 字节, 受限于此值的一半 (≤255 字节)
+ * 此限制决定单个参数持久化的最大字节数, 具体随落盘形态变化:
+ *   - UINT / INT / FLOAT / BOOL / ENUM → 十进制/布尔文本, 几十字节, 完全不受限
+ *   - STRING → 明文形态 ≤ (HEX_VAL_MAX-3) 字符 (比 hex 形态大一倍);
+ *              含控制字符而退化为 hex 时, 仍受限于此值的一半左右
+ *   - BLOB   → hex 形态, 受限于此值的一半 (≤255 字节)
  *
  * 如需支持更大的 BLOB/STRING，将此值改为 2*N+1 (N 为目标最大字节数)
  * 或改用动态分配。 */
 #define HEX_VAL_MAX 512
 
-/** @brief 完整值缓冲区大小: "<name>:<hex>" (名称 + ':' + hex 部分) */
-#define INI_VAL_MAX (INI_NAME_MAX + 1 + HEX_VAL_MAX)
+/** @brief 类型标签最大长度 (含 '\\0'), 最长者是 "string" */
+#define INI_TAG_MAX 8
+
+/** @brief 完整值缓冲区大小: "<name>:<tag>:<literal>" */
+#define INI_VAL_MAX (INI_NAME_MAX + 1 + INI_TAG_MAX + 1 + HEX_VAL_MAX)
+
+/**
+ * @name 值文本标签
+ *
+ * 值 = "<name>:<tag>:<literal>", tag 直接采用 param_type_t 的小写名,
+ * "hex" 是"原始字节流"的兜底标签 (类型未知 / 无法文本化时)。
+ * 编码侧按条目类型选标签 (类型仅用于选格式), 解码侧只看标签、不回查
+ * 条目表 —— 这样 storage 层不依赖"当前固件的条目清单", 落盘文本自描述。
+ * @{
+ */
+#define INI_TAG_UINT   "uint"
+#define INI_TAG_INT    "int"
+#define INI_TAG_FLOAT  "float"
+#define INI_TAG_BOOL   "bool"
+#define INI_TAG_ENUM   "enum"
+#define INI_TAG_STRING "string"
+#define INI_TAG_BLOB   "blob"
+#define INI_TAG_HEX    "hex"
+/** @} */
 
 /** @brief param_boot 文件名 (存储启动分区索引) */
 #define BOOT_FILE "param_boot"
@@ -158,6 +191,286 @@ static int hex_decode(const char *hex, uint8_t *data, uint16_t max_len, uint16_t
     }
     if (out_len) *out_len = byte_len;
     return PARAM_OK;
+}
+
+/* ================================================================
+ *  值文本编解码 — 把 ini 从"hex 转储"变成 cat 可读的文本
+ *
+ *  值格式: "<name>:<tag>:<literal>", 例:
+ *     g_boot_index:uint:3        sensitivity:float:0.75
+ *     device_name:string:"CAM-01"   calibration:blob:0A1B2C3D
+ *
+ *  编码侧按条目类型 (param_entry_find → entry_type) 选标签与字面量形态;
+ *  解码侧只看标签, 不回查条目表。格式损坏/标签不识/超容量一律上报
+ *  PARAM_ERR_OUT_OF_RANGE, 而不是把错类型的字节硬塞进缓存。
+ *
+ *  兼容: 无标签的旧形态 "<name>:<hex>" 仍按 hex 字节流解码。
+ * ================================================================ */
+
+/** @brief 无符号文本解析 (十进制或 0x 十六进制; 整串必须消费完) */
+static bool parse_u32(const char *s, uint32_t *out)
+{
+    if (!s || *s == '\0' || *s == '-') return false; /* strtoul 会静默取负 */
+    char *end = NULL;
+    errno = 0;
+    unsigned long v = strtoul(s, &end, 0);
+    if (errno == ERANGE || end == s || *end != '\0') return false;
+    if (v > 0xFFFFFFFFul) return false;
+    *out = (uint32_t)v;
+    return true;
+}
+
+/** @brief 有符号文本解析 (十进制或 0x 十六进制; 整串必须消费完) */
+static bool parse_i32(const char *s, int32_t *out)
+{
+    if (!s || *s == '\0') return false;
+    char *end = NULL;
+    errno = 0;
+    long v = strtol(s, &end, 0);
+    if (errno == ERANGE || end == s || *end != '\0') return false;
+    if (v < (long)INT32_MIN || v > (long)INT32_MAX) return false;
+    *out = (int32_t)v;
+    return true;
+}
+
+/** @brief bool 文本解析: true/false (大写亦可) 或 0/1/0x1 */
+static bool parse_bool_text(const char *s, bool *out)
+{
+    if (strcmp(s, "true") == 0 || strcmp(s, "TRUE") == 0) { *out = true;  return true; }
+    if (strcmp(s, "false") == 0 || strcmp(s, "FALSE") == 0) { *out = false; return true; }
+
+    uint32_t v;
+    if (!parse_u32(s, &v)) return false;
+    *out = (v != 0);
+    return true;
+}
+
+/** @brief 字符串能否按明文落盘 — 控制字符 (含 '\n') 会破坏 INI 行结构 */
+static bool str_is_plain(const uint8_t *s, uint16_t len)
+{
+    for (uint16_t i = 0; i < len; i++) {
+        if (s[i] < 0x20u || s[i] == 0x7Fu) return false;
+    }
+    return true;
+}
+
+/** @brief 标签比较: tag 区间为 [tag, end) */
+static bool tag_is(const char *tag, const char *end, const char *name)
+{
+    size_t n = strlen(name);
+    return (size_t)(end - tag) == n && strncmp(tag, name, n) == 0;
+}
+
+/** @brief 把值类型的 4 字节位型回填到 data, 其余字节清零 (与保存侧布局同源) */
+static void store_bits32(uint8_t *data, uint16_t len, uint32_t bits)
+{
+    memset(data, 0, len);
+    memcpy(data, &bits, sizeof(bits));
+}
+
+/**
+ * @brief 按条目类型把原始字节编码为标签 + 字面量
+ *
+ * @param e        参数条目 (类型的唯一来源); NULL = 按原始字节流处理
+ * @param data     原始字节
+ * @param len      字节数
+ * @param tag      [out] 标签 (静态字符串, 不解引用 data)
+ * @param lit      [out] 字面量缓冲区
+ * @param lit_size 缓冲区容量
+ * @return true 编码成功; false 无法文本化 (调用方退回 hex 兜底)
+ */
+static bool encode_literal(param_entry_t *e, const uint8_t *data, uint16_t len,
+                           const char **tag, char *lit, size_t lit_size)
+{
+    if (!e || !data || len == 0) return false;
+
+    switch (entry_type(e)) {
+    case PARAM_TYPE_UINT: {
+        if (len < 4) return false;
+        uint32_t v;
+        memcpy(&v, data, sizeof(v));
+        snprintf(lit, lit_size, "%u", (unsigned)v);
+        *tag = INI_TAG_UINT;
+        return true;
+    }
+    case PARAM_TYPE_ENUM: {
+        /* ENUM 的缓存按 int32 定义 (PARAM_ENTRY_ENUM 用 .i32, 校验也按
+           enum_values[i] 的有符号比较), 与 param_dump 的 "ENUM=%ld" 对齐:
+           负枚举值显示成 -1 而不是 4294967295 */
+        if (len < 4) return false;
+        int32_t v;
+        memcpy(&v, data, sizeof(v));
+        snprintf(lit, lit_size, "%d", (int)v);
+        *tag = INI_TAG_ENUM;
+        return true;
+    }
+    case PARAM_TYPE_INT: {
+        if (len < 4) return false;
+        int32_t v;
+        memcpy(&v, data, sizeof(v));
+        snprintf(lit, lit_size, "%d", (int)v);
+        *tag = INI_TAG_INT;
+        return true;
+    }
+    case PARAM_TYPE_FLOAT: {
+        if (len < 4) return false;
+        float v;
+        memcpy(&v, data, sizeof(v));
+        /* 回读自校验: 目标 libc 若裁掉 printf 浮点 (如 newlib-nano) 或精度
+           不足以还原原值, 就退回 hex —— 宁可不可读, 不可写坏。 */
+        snprintf(lit, lit_size, "%.9g", (double)v);
+        char *end = NULL;
+        float back = (float)strtod(lit, &end);
+        uint32_t raw, got;
+        memcpy(&raw, &v, sizeof(raw));
+        memcpy(&got, &back, sizeof(got));
+        if (end == lit || *end != '\0' || raw != got) return false;
+        *tag = INI_TAG_FLOAT;
+        return true;
+    }
+    case PARAM_TYPE_BOOL:
+        /* bool 为 1 字节; param_value_t 联合体的其余字节是填充, 只取首字节。
+           只有规范的 0/1 才写成 true/false: 越界字节 (raw 写入留下的脏值)
+           退回 hex, 否则"存一次就把 2 改成 1", 违反无损落盘 */
+        if (data[0] > 1) return false;
+        snprintf(lit, lit_size, "%s", data[0] ? "true" : "false");
+        *tag = INI_TAG_BOOL;
+        return true;
+    case PARAM_TYPE_STRING: {
+        /* 字符串以首个 '\0' 结尾 (与 string_save/string_load 同语义);
+           尾部零填充不必落盘, 读出侧会补零 */
+        const uint8_t *nul = (const uint8_t *)memchr(data, '\0', len);
+        uint16_t n = nul ? (uint16_t)(nul - data) : len;
+        *tag = INI_TAG_STRING;
+
+        if (str_is_plain(data, n) && (size_t)n + 3u <= lit_size) {
+            lit[0] = '"';                    /* 明文: "内容" */
+            memcpy(lit + 1, data, n);
+            lit[n + 1] = '"';
+            lit[n + 2] = '\0';
+            return true;
+        }
+
+        /* 含控制字符 ('\n' 会破坏 INI 行结构) → 退化为 hex 字节流,
+           仍算 string 类型: 只编码 内容+'\0' 这么长, 与明文形态同源 */
+        uint16_t bytes = nul ? (uint16_t)(n + 1u) : n;
+        if ((uint32_t)bytes * 2u + 3u > lit_size) return false;
+        lit[0] = '0';
+        lit[1] = 'x';
+        hex_encode(data, bytes, lit + 2);
+        return true;
+    }
+    case PARAM_TYPE_BLOB:
+        if ((uint32_t)len * 2u + 1u > lit_size) return false;
+        hex_encode(data, len, lit);
+        *tag = INI_TAG_BLOB;
+        return true;
+    default:
+        return false;  /* EXEC / 未知类型: 不落盘或按原始字节流 */
+    }
+}
+
+/**
+ * @brief 解码 "<name>:<tag>:<literal>" → 原始字节
+ *
+ * @param val     字典中的值文本
+ * @param data    输出缓冲区
+ * @param len     输出缓冲区容量 (= 条目数据区字节数; STRING 为 max_len+1)
+ * @param out_len [out] 写出的字节数 (可 NULL)
+ * @return PARAM_OK 成功; PARAM_ERR_OUT_OF_RANGE 格式损坏 / 超容量 / 标签不识;
+ *         PARAM_ERR_INVALID_ID val 为 NULL
+ */
+static int decode_value(const char *val, uint8_t *data, uint16_t len, uint16_t *out_len)
+{
+    if (!val) return PARAM_ERR_INVALID_ID;
+
+    const char *sep = strchr(val, ':');
+    if (!sep || sep[1] == '\0') return PARAM_ERR_OUT_OF_RANGE;
+
+    const char *body = sep + 1;             /* "<tag>:<literal>" */
+    const char *tag_end = strchr(body, ':');
+    if (!tag_end)                           /* 旧形态 "<name>:<hex>" */
+        return hex_decode(body, data, len, out_len);
+
+    const char *lit = tag_end + 1;
+
+    if (tag_is(body, tag_end, INI_TAG_HEX) || tag_is(body, tag_end, INI_TAG_BLOB))
+        return hex_decode(lit, data, len, out_len);
+
+    if (tag_is(body, tag_end, INI_TAG_STRING)) {
+        uint16_t n;
+        if (lit[0] == '"') {
+            /* 取最后一对引号: 字符串内容本身可以含 '"' */
+            const char *close = strrchr(lit, '"');
+            if (!close || close == lit) return PARAM_ERR_OUT_OF_RANGE;
+            n = (uint16_t)(close - (lit + 1));
+            if ((uint32_t)n + 1u > (uint32_t)len) return PARAM_ERR_OUT_OF_RANGE;
+            memmove(data, lit + 1, n);
+        } else if (lit[0] == '0' && (lit[1] == 'x' || lit[1] == 'X')) {
+            /* 含控制字符时的退化形态: string:0x<hex> */
+            return hex_decode(lit + 2, data, len, out_len);
+        } else {
+            /* 手写明文 (未加引号): 原样视作字符串内容 */
+            n = (uint16_t)strlen(lit);
+            if ((uint32_t)n + 1u > (uint32_t)len) return PARAM_ERR_OUT_OF_RANGE;
+            memcpy(data, lit, n);
+        }
+        data[n] = '\0';                     /* 容量已扣除结尾 '\0' 的 1 字节 */
+        if (out_len) *out_len = n;
+        return PARAM_OK;
+    }
+
+    if (tag_is(body, tag_end, INI_TAG_UINT)) {
+        uint32_t v;
+        if (len < 4 || !parse_u32(lit, &v)) return PARAM_ERR_OUT_OF_RANGE;
+        store_bits32(data, len, v);
+        if (out_len) *out_len = 4;
+        return PARAM_OK;
+    }
+    if (tag_is(body, tag_end, INI_TAG_ENUM)) {
+        /* 按有符号解析 (与保存侧一致), 同时容忍手写的无符号/0x 形式 */
+        if (len < 4) return PARAM_ERR_OUT_OF_RANGE;
+        uint32_t bits;
+        int32_t si;
+        if (parse_i32(lit, &si))
+            memcpy(&bits, &si, sizeof(bits));
+        else if (!parse_u32(lit, &bits))
+            return PARAM_ERR_OUT_OF_RANGE;
+        store_bits32(data, len, bits);
+        if (out_len) *out_len = 4;
+        return PARAM_OK;
+    }
+    if (tag_is(body, tag_end, INI_TAG_INT)) {
+        int32_t v;
+        if (len < 4 || !parse_i32(lit, &v)) return PARAM_ERR_OUT_OF_RANGE;
+        uint32_t bits;
+        memcpy(&bits, &v, sizeof(bits));
+        store_bits32(data, len, bits);
+        if (out_len) *out_len = 4;
+        return PARAM_OK;
+    }
+    if (tag_is(body, tag_end, INI_TAG_FLOAT)) {
+        if (len < 4) return PARAM_ERR_OUT_OF_RANGE;
+        char *end = NULL;
+        double d = strtod(lit, &end);
+        if (end == lit || *end != '\0') return PARAM_ERR_OUT_OF_RANGE;
+        float v = (float)d;
+        uint32_t bits;
+        memcpy(&bits, &v, sizeof(bits));
+        store_bits32(data, len, bits);
+        if (out_len) *out_len = 4;
+        return PARAM_OK;
+    }
+    if (tag_is(body, tag_end, INI_TAG_BOOL)) {
+        bool b;
+        if (!parse_bool_text(lit, &b)) return PARAM_ERR_OUT_OF_RANGE;
+        memset(data, 0, len);
+        data[0] = b ? 1u : 0u;
+        if (out_len) *out_len = 1;
+        return PARAM_OK;
+    }
+
+    return PARAM_ERR_OUT_OF_RANGE;          /* 未知标签: 视为记录损坏 */
 }
 
 /* ================================================================
@@ -259,13 +572,14 @@ static void make_key(uint32_t param_id, char *key, size_t key_size)
 }
 
 /**
- * @brief 构建值 "<参数名>:<hex>" — 参数名仅作可读标注, 不参与身份
+ * @brief 构建值 "<参数名>:<类型标签>:<字面量>" — 参数名仅作可读标注, 不参与身份
  *
  * @note 名称为空或条目未注册时用 "?" 占位 (PARAM_DEBUG_NAME_ENABLE=0 时
  *       param_entry_name 本身就返回 "?")。调试名是 C 变量名, 只含
  *       [A-Za-z0-9_], 不会与分隔符 ':' 冲突。
  */
-static void make_value(uint32_t param_id, const char *hex, char *out, size_t out_size)
+static void make_value(uint32_t param_id, const char *tag, const char *lit,
+                       char *out, size_t out_size)
 {
     const param_entry_t *e = param_entry_find(param_id);
     const char *src = "?";
@@ -276,12 +590,13 @@ static void make_value(uint32_t param_id, const char *hex, char *out, size_t out
             src = nm;
     }
 
-    /* 先独立截断名称: 直接把长名称拼进 out 会挤掉 hex 部分, 静默损坏值。
-       截断后总长上限 = (INI_NAME_MAX-1) + 1 + strlen(hex) + 1, 恒 < INI_VAL_MAX */
+    /* 先独立截断名称: 直接把长名称拼进 out 会挤掉值部分, 静默损坏值。
+       截断后总长上限 = (INI_NAME_MAX-1) + 1 + (INI_TAG_MAX-1) + 1
+                      + strlen(lit) + 1, 恒 < INI_VAL_MAX (lit 恒短于 HEX_VAL_MAX) */
     char name[INI_NAME_MAX];
     snprintf(name, sizeof(name), "%s", src);
 
-    snprintf(out, out_size, "%s:%s", name, hex);
+    snprintf(out, out_size, "%s:%s:%s", name, tag, lit);
 }
 
 /* ================================================================
@@ -350,16 +665,13 @@ static int iniparser_load_cb(void *ctx, uint32_t param_id,
     const char *val = iniparser_getstring(c->dict, key, NULL);
     if (!val) return PARAM_ERR_NOT_FOUND;
 
-    /* 值格式固定为 "<参数名>:<hex>"; 缺分隔符或 hex 为空均属记录损坏 */
-    const char *sep = strchr(val, ':');
-    if (!sep || sep[1] == '\0') return PARAM_ERR_OUT_OF_RANGE;
-
-    /* 损坏/超长记录上报明确的错误码, 不冒充"键不存在" */
-    return hex_decode(sep + 1, data, len, read_len);
+    /* 记录存在即代表"有值": 交由值文本解码器还原字节流 (新旧格式统一入口)。
+       损坏/超长记录上报明确的错误码, 不冒充"键不存在" */
+    return decode_value(val, data, len, read_len);
 }
 
 /**
- * @brief 保存: hex 编码 → 更新字典 → 全量重写 INI 文件
+ * @brief 保存: 原始字节 → 类型化文本 → 更新字典 → 全量重写 INI 文件
  *
  * @return 0 成功, -1 失败
  */
@@ -370,24 +682,31 @@ static int iniparser_save_cb(void *ctx, uint32_t param_id,
     if (!c || !c->dict_ready || !c->dict || !data || len == 0)
         return -1;
 
-    /* 检查 hex 编码后是否超出缓冲区 */
-    if (((uint32_t)len * 2 + 1) > HEX_VAL_MAX)
-        return -1;
+    /* 1. 按条目类型选落盘形态 (uint/int/float/bool/enum/string/blob);
+          类型未知 / 长度不足 / 超长 / EXEC 等无法文本化的情况退回 hex
+          原始字节流, 保证任何字节都能存下来 */
+    char lit[HEX_VAL_MAX];
+    const char *tag = INI_TAG_HEX;
 
-    /* 1. hex 编码, 并组装成 "<参数名>:<hex>" (名称仅供人读) */
-    char hex_val[HEX_VAL_MAX];
-    hex_encode(data, len, hex_val);
+    if (!encode_literal(param_entry_find(param_id), data, len, &tag, lit, sizeof(lit))) {
+        /* hex 兜底也要检查编码后是否超出缓冲区 */
+        if ((uint32_t)len * 2u + 1u > HEX_VAL_MAX)
+            return -1;
+        hex_encode(data, len, lit);
+        tag = INI_TAG_HEX;
+    }
 
+    /* 2. 组装成 "<参数名>:<tag>:<字面量>" (名称仅供人读) */
     char val[INI_VAL_MAX];
-    make_value(param_id, hex_val, val, sizeof(val));
+    make_value(param_id, tag, lit, val, sizeof(val));
 
-    /* 2. 更新字典 */
+    /* 3. 更新字典 */
     char key[INI_KEY_MAX];
     make_key(param_id, key, sizeof(key));
     if (iniparser_set(c->dict, key, val) != 0)
         return -1;
 
-    /* 3. 全量写入 INI 文件 (原子); 批量模式 (defer_dump) 下仅改字典, 由调用方落盘一次 */
+    /* 4. 全量写入 INI 文件 (原子); 批量模式 (defer_dump) 下仅改字典, 由调用方落盘一次 */
     return c->defer_dump ? 0 : atomic_dump_ini(c);
 }
 
