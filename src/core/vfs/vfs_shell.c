@@ -16,7 +16,8 @@
  * 命令是在协议接收线程里同步执行的 (通信串口切到 shell 模式后, 由
  * protocol_parser_thread 直接 shell_rx_feed)。一条命令按住该线程几秒
  * 等于协议停摆, 所以:
- *   - `cat` 单次最多 VFS_SH_CAT_MAX 字节;
+ *   - `cat` 单次最多 VFS_SH_CAT_MAX 字节 —— 三种形态 (默认 / [off] [len] /
+ *     -r 尾部窗口) 都封顶, 窗口只是换起点, 不放开上限;
  *   - `hexdump` 单次最多 VFS_SH_HD_MAX 字节;
  *   - `ls` 单目录最多 VFS_SH_LS_MAX 项。
  *
@@ -40,6 +41,7 @@
 
 #include <string.h>
 #include <errno.h>
+#include <stdbool.h>
 
 /* ================================================================
  *  容量与状态
@@ -55,6 +57,9 @@
 #define VFS_SH_LS_MAX     64
 /** @brief cat 行缓冲: 攒够一行再一次性打印, 避免每字符一次 vsnprintf */
 #define VFS_SH_LINE_BUF   96u
+/** @brief cat 用法 (三种形态共用同一串, 失败与 help 一致) */
+#define VFS_SH_CAT_USAGE \
+    "usage: cat <file> [off] [len] | cat -r <file> [len]\r\n"
 
 /** @brief shell 侧当前目录 (VFS 无 chdir, 这里只做路径拼接用) */
 static char s_cwd[VFS_PATH_MAX] = "/";
@@ -370,8 +375,24 @@ static void vfs_sh_cat_flush(char *line, size_t *len)
 /**
  * @brief cat —— 以文本形式打印文件 (不可打印字符记 '.')
  *
+ * @par 三种形态
+ * @code
+ *   cat <file>               从文件头起, 最多 VFS_SH_CAT_MAX 字节
+ *   cat <file> [off] [len]   从 off 起取 len 字节 (参数风格与 hexdump 一致)
+ *   cat -r <file> [len]      只看尾部: 末尾 len 字节 (tail -c 语义)
+ * @endcode
+ * `-r` 只接受"尾部窗口"这一种形式, 不与显式偏移组合 (语义冲突, 直接报用法);
+ * 窗口内按文件原序输出 —— 看日志尾部要的就是这个, 不是逐行倒着打。
+ *
+ * @note 三种形态都封顶 VFS_SH_CAT_MAX: 命令在协议接收线程里同步跑, 出口是
+ *       逐字节 uart_poll_out, 放开上限等于让交互与协议停摆几分钟 (见文件头
+ *       "输出必须封顶")。要看大文件的别处, 用窗口。
+ * @note 需要后端的 lseek (VFS_CAP_SEEK): 长度靠 SEEK_END 取, 窗口靠
+ *       SEEK_SET 定位。现有三个后端 (littlefs / fatfs / rawflash) 都提供;
+ *       将来的纯流式后端没有它, 本命令会直接报 ENOTSUP 而不是给出错的内容。
+ *
  * @param argc 参数个数
- * @param argv argv[1] = 文件路径
+ * @param argv argv[1] = 文件路径 或 "-r"; 其余参数见上
  * @return 0 成功; -1 失败 (已打印原因)
  */
 static int vfs_sh_cat(int argc, char *argv[])
@@ -380,16 +401,64 @@ static int vfs_sh_cat(int argc, char *argv[])
     char line[VFS_SH_LINE_BUF];
     uint8_t buf[VFS_SH_IO_CHUNK];
     size_t ln = 0;
-    uint32_t total = 0;
+    uint32_t off = 0;
+    uint32_t want = VFS_SH_CAT_MAX;
+    uint32_t printed = 0;
+    bool tail = false;
+    int argi = 1;
     vfs_fd_t fd;
 
     if (argc < 2)
     {
-        shell_printf("usage: cat <file>\r\n");
+        shell_printf(VFS_SH_CAT_USAGE);
         return -1;
     }
-    if (vfs_sh_arg_path("cat", argv[1], path) != 0)
+
+    /* ---- 参数: "-r" 只换窗口算法 (从尾部量), 不改变其它语义 ---- */
+    if (strcmp(argv[1], "-r") == 0)
+    {
+        tail = true;
+        argi = 2;
+        if (argc <= argi)
+        {
+            shell_printf(VFS_SH_CAT_USAGE);
+            return -1;
+        }
+    }
+    if (vfs_sh_arg_path("cat", argv[argi], path) != 0)
         return -1;
+
+    if (tail)
+    {
+        if (argc > argi + 1 && !shell_arg_u32(argv[argi + 1], &want))
+        {
+            shell_printf("cat: bad length\r\n");
+            return -1;
+        }
+        if (argc > argi + 2) /* 尾部窗口不接受偏移 */
+        {
+            shell_printf(VFS_SH_CAT_USAGE);
+            return -1;
+        }
+    }
+    else
+    {
+        if (argc > argi + 1 && !shell_arg_u32(argv[argi + 1], &off))
+        {
+            shell_printf("cat: bad offset\r\n");
+            return -1;
+        }
+        if (argc > argi + 2 && !shell_arg_u32(argv[argi + 2], &want))
+        {
+            shell_printf("cat: bad length\r\n");
+            return -1;
+        }
+    }
+    if (want == 0)
+    {
+        shell_printf("cat: length 0\r\n");
+        return -1;
+    }
 
     fd = vfs_open(path, VFS_O_RDONLY);
     if (fd < 0)
@@ -398,9 +467,59 @@ static int vfs_sh_cat(int argc, char *argv[])
         return -1;
     }
 
-    while (total < VFS_SH_CAT_MAX)
+    /* ---- 定窗口 [off, off+want): 文件长度用 SEEK_END 取, 尾部模式反推起点 ---- */
+    const off_t end = vfs_lseek(fd, 0, VFS_SEEK_END);
+    if (end < 0)
     {
-        ssize_t n = vfs_read(fd, buf, sizeof(buf));
+        shell_printf("cat: %s\r\n", vfs_sh_err_name((int)end));
+        (void)vfs_close(fd);
+        return -1;
+    }
+    const uint32_t size = (uint32_t)end;
+
+    if (size == 0)
+    {
+        shell_printf("(empty)\r\n");
+        (void)vfs_close(fd);
+        return 0;
+    }
+
+    /* 单次上限先落地 (对尾部模式尤其重要): `-r 999999` 要的是"最后 N 个、
+       但最多一个上限", 而不是"尾部窗口的前 4096 字节" */
+    if (want > VFS_SH_CAT_MAX)
+        want = VFS_SH_CAT_MAX;
+
+    if (tail)
+        off = (want < size) ? (size - want) : 0;
+    if (off >= size)
+    {
+        shell_printf("cat: offset beyond EOF (offset=%u size=%u)\r\n",
+                     (unsigned)off, (unsigned)size);
+        (void)vfs_close(fd);
+        return -1;
+    }
+
+    /* 文件剩余不足 → 缩短窗口 */
+    const uint32_t avail = size - off;
+    if (want > avail)
+        want = avail;
+
+    /* 定位到窗口起点 —— 必须无条件做: 上面 SEEK_END 取长度已把偏移停在文件尾,
+       off==0 时若跳过这一步就会从 EOF 开始读 (什么都不打印) */
+    if (vfs_lseek(fd, (off_t)off, VFS_SEEK_SET) < 0)
+    {
+        shell_printf("cat: seek failed\r\n");
+        (void)vfs_close(fd);
+        return -1;
+    }
+
+    while (printed < want)
+    {
+        size_t chunk = (size_t)(want - printed);
+        if (chunk > sizeof(buf))
+            chunk = sizeof(buf);
+
+        ssize_t n = vfs_read(fd, buf, chunk);
         if (n < 0)
         {
             shell_printf("cat: %s\r\n", vfs_sh_err_name((int)n));
@@ -425,17 +544,22 @@ static int vfs_sh_cat(int argc, char *argv[])
                 vfs_sh_cat_flush(line, &ln);
             line[ln++] = c;
         }
-        total += (uint32_t)n;
+        printed += (uint32_t)n;
     }
 
     vfs_sh_cat_flush(line, &ln);
     (void)vfs_close(fd);
 
-    if (total >= VFS_SH_CAT_MAX)
+    /* 封顶提示: 只在"确实被上限切掉"时出现 —— 判定的是"窗口外侧还有没有
+       数据", 而不是"请求是否大于上限": 默认形态 (want==上限) 与 `-r` 默认
+       都要能提示; 反过来"文件比窗口短"不是截断, 不提示。
+       正序看窗口之后 (size > off+printed), 尾部看窗口之前 (off > 0)。 */
+    const bool more_beyond = tail ? (off > 0) : (size > off + printed);
+    if (more_beyond && printed >= VFS_SH_CAT_MAX)
         shell_printf("... truncated at %u bytes\r\n", (unsigned)VFS_SH_CAT_MAX);
     return 0;
 }
-SHELL_CMD_MAIN(cat, vfs_sh_cat, print file as text - cat <file>);
+SHELL_CMD_MAIN(cat, vfs_sh_cat, print file as text - cat <f> [off] [len] | -r <f> [len]);
 
 /**
  * @brief hexdump —— 十六进制 + ASCII 打印文件片段
