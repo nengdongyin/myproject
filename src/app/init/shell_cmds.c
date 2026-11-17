@@ -20,6 +20,7 @@
  */
 
 #include "shell_api.h"
+#include "shell_parse.h"
 #include "app_config.h"
 #include "file_transfer.h"
 #include "param_dump.h"
@@ -80,13 +81,9 @@ static int shell_cmd_dump(int argc, char *argv[])
 
     if (argc > 1)
     {
-        /* 手写十进制解析: 不为一条调试命令引入 stdlib */
-        const char *p = argv[1];
-        while (*p >= '0' && *p <= '9')
-        {
-            module = (uint16_t)(module * 10u + (uint16_t)(*p - '0'));
-            p++;
-        }
+        uint32_t tmp;
+        if (shell_arg_u32(argv[1], &tmp))
+            module = (uint16_t)tmp;
     }
 
     param_dump(module, NULL);

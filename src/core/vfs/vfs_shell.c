@@ -27,6 +27,7 @@
 
 #include "vfs_config.h"
 #include "shell_api.h"
+#include "shell_parse.h"
 #include "vfs.h"
 
 /*
@@ -89,44 +90,10 @@ static const char *vfs_sh_err_name(int err)
     }
 }
 
-/**
- * @brief 解析无符号整数 (支持十进制与 0x 十六进制)
- * @param s   输入字符串
- * @param out 输出值
- * @return 0 成功; -EINVAL 非法
+/*
+ * 参数解析统一走 shell_parse.h 的 shell_arg_u32 (整串消费 + 溢出检测)。
+ * 原 vfs_sh_parse_u32 已删除 —— 与 mem_access.c / shell_cmds.c 的手写版重复。
  */
-static int vfs_sh_parse_u32(const char *s, uint32_t *out)
-{
-    uint32_t v = 0;
-    int base = 10;
-
-    if (!s || !*s)
-        return -EINVAL;
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
-    {
-        base = 16;
-        s += 2;
-        if (!*s)
-            return -EINVAL;
-    }
-
-    for (; *s; s++)
-    {
-        uint32_t d;
-        if (*s >= '0' && *s <= '9')
-            d = (uint32_t)(*s - '0');
-        else if (base == 16 && *s >= 'a' && *s <= 'f')
-            d = (uint32_t)(*s - 'a') + 10u;
-        else if (base == 16 && *s >= 'A' && *s <= 'F')
-            d = (uint32_t)(*s - 'A') + 10u;
-        else
-            return -EINVAL;
-        v = v * (uint32_t)base + d;
-    }
-
-    *out = v;
-    return 0;
-}
 
 /**
  * @brief 把用户输入解析成 VFS 绝对路径 (相对路径基于 s_cwd)
@@ -494,12 +461,12 @@ static int vfs_sh_hexdump(int argc, char *argv[])
     }
     if (vfs_sh_arg_path("hexdump", argv[1], path) != 0)
         return -1;
-    if (argc > 2 && vfs_sh_parse_u32(argv[2], &off) != 0)
+    if (argc > 2 && !shell_arg_u32(argv[2], &off))
     {
         shell_printf("hexdump: bad offset\r\n");
         return -1;
     }
-    if (argc > 3 && vfs_sh_parse_u32(argv[3], &len) != 0)
+    if (argc > 3 && !shell_arg_u32(argv[3], &len))
     {
         shell_printf("hexdump: bad length\r\n");
         return -1;

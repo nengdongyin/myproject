@@ -19,6 +19,7 @@ extern const test_suite_t _ts_vfs_core;
 extern const test_suite_t _ts_vfs_format;
 extern const test_suite_t _ts_mkv;
 extern const test_suite_t _ts_file_transfer;
+extern const test_suite_t _ts_shell_parse;
 
 int main(void)
 {
@@ -42,6 +43,7 @@ int main(void)
     test_suite_add(&_ts_vfs_format);
     test_suite_add(&_ts_mkv);
     test_suite_add(&_ts_file_transfer);
+    test_suite_add(&_ts_shell_parse);
 
     int failures = test_suite_run_all();
 #ifdef PORT_OS_LIBC

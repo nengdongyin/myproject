@@ -112,6 +112,7 @@ target_sources(app PRIVATE
       src/core/file_transfer/file_transfer_param.c
       src/core/log/log_elog_port.c
       src/core/shell/shell_letter_port.c
+      src/core/shell/shell_parse.c
       src/core/console/console_mode.c
       src/core/debug/mem_access.c
       src/core/debug/rtos_shell.c

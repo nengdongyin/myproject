@@ -11,6 +11,7 @@
 
 #include "mem_access.h"
 #include "shell_api.h"
+#include "shell_parse.h"
 #include <errno.h>
 
 /* ================================================================
@@ -77,45 +78,10 @@ int mem_access_check(uintptr_t addr, size_t len, int want_write)
 /** @brief 每行字节数 */
 #define MEM_DUMP_PER_LINE    16u
 
-/**
- * @brief 解析无符号整数 (支持 0x 十六进制)
- *
- * @param s   输入
- * @param out 输出
- * @return 0 成功; -EINVAL 非法
+/*
+ * 参数解析统一走 shell_parse.h 的 shell_arg_u32 (整串消费 + 溢出检测)。
+ * 原 mem_parse_u32 已删除 —— 与 vfs_shell.c / shell_cmds.c 的手写版重复。
  */
-static int mem_parse_u32(const char *s, uint32_t *out)
-{
-    uint32_t v = 0;
-    int base = 10;
-
-    if (s == NULL || *s == '\0')
-        return -EINVAL;
-    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
-    {
-        base = 16;
-        s += 2;
-        if (*s == '\0')
-            return -EINVAL;
-    }
-
-    for (; *s != '\0'; s++)
-    {
-        uint32_t d;
-        if (*s >= '0' && *s <= '9')
-            d = (uint32_t)(*s - '0');
-        else if (base == 16 && *s >= 'a' && *s <= 'f')
-            d = (uint32_t)(*s - 'a') + 10u;
-        else if (base == 16 && *s >= 'A' && *s <= 'F')
-            d = (uint32_t)(*s - 'A') + 10u;
-        else
-            return -EINVAL;
-        v = v * (uint32_t)base + d; /* 溢出不回绕检测: 调试命令, 输入由人把关 */
-    }
-
-    *out = v;
-    return 0;
-}
 
 /**
  * @brief 打印白名单拒绝的原因 (带上下文, 便于现场判断是"没配"还是"越界")
@@ -149,12 +115,12 @@ static int mem_cmd_md(int argc, char *argv[])
         shell_printf("usage: md <addr> [len]    (addr supports 0x)\r\n");
         return -1;
     }
-    if (mem_parse_u32(argv[1], &addr) != 0)
+    if (!shell_arg_u32(argv[1], &addr))
     {
         shell_printf("md: bad address '%s'\r\n", argv[1]);
         return -1;
     }
-    if (argc > 2 && mem_parse_u32(argv[2], &len) != 0)
+    if (argc > 2 && !shell_arg_u32(argv[2], &len))
     {
         shell_printf("md: bad length '%s'\r\n", argv[2]);
         return -1;
@@ -222,12 +188,12 @@ static int mem_cmd_mw(int argc, char *argv[])
         shell_printf("usage: mw <addr> <value> [b|h|w]\r\n");
         return -1;
     }
-    if (mem_parse_u32(argv[1], &addr) != 0)
+    if (!shell_arg_u32(argv[1], &addr))
     {
         shell_printf("mw: bad address '%s'\r\n", argv[1]);
         return -1;
     }
-    if (mem_parse_u32(argv[2], &val) != 0)
+    if (!shell_arg_u32(argv[2], &val))
     {
         shell_printf("mw: bad value '%s'\r\n", argv[2]);
         return -1;

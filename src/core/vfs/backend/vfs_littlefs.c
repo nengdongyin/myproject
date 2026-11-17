@@ -355,7 +355,12 @@ static int lfs_vfs_open(vfs_file_t *f, const char *rel, int flags)
     if (!s)
         return -ENFILE;
 
-    int rc = lfs_file_opencfg(&m->lfs, &s->file, rel, of, &s->cfg);
+    /* core 用**空串**表示"挂载点根" (见 vfs.h 的 rel 契约); littlefs 的根要写成
+       "/"。翻译一次的好处: 打开根目录本身会得到 LFS_ERR_ISDIR → -EISDIR,
+       比把空串丢给 littlefs 拿到 -ENOENT 好排查。 */
+    const char *path = (rel[0] == '\0') ? "/" : rel;
+
+    int rc = lfs_file_opencfg(&m->lfs, &s->file, path, of, &s->cfg);
     if (rc < 0)
     {
         lfs_slot_free(s);
@@ -537,8 +542,12 @@ static int lfs_vfs_opendir(vfs_dir_t *d, const char *rel)
     if (slot < 0)
         return -ENFILE;
 
+    /* 根目录必须翻成 "/": core 传空串表示挂载点根, 而 lfs_dir_open 不接受空串
+       —— 这正是 `ls /lfs` 曾经打不开的原因 (目录只认 "/", 文件两种都收)。 */
+    const char *path = (rel[0] == '\0') ? "/" : rel;
+
     /* 目录 I/O 不持后端池锁（避免跨卷瓶颈） */
-    int rc = lfs_dir_open(&m->lfs, &g_lfs_dirs[slot].dir, rel);
+    int rc = lfs_dir_open(&m->lfs, &g_lfs_dirs[slot].dir, path);
     if (rc < 0)
     {
         sys_mutex_lock(g_lfs_pool_lock);

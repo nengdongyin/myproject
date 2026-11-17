@@ -18,7 +18,7 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
-
+#if SHELL_BACKEND_LETTER
 /* ================================================================
  *  letter-shell 实例: 静态分配, 零堆依赖
  *
@@ -180,3 +180,4 @@ void shell_task(void)
        保留此入口: 换"任务自旋读"后端时调用点不变。 */
     shellTask(&s_shell);
 }
+#endif/* SHELL_BACKEND_LETTER */  

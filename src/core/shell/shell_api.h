@@ -123,7 +123,7 @@ extern "C" {
  *  后端选择
  * ================================================================ */
 
-#if !defined(SHELL_BACKEND_LETTER) && !defined(SHELL_BACKEND_NONE)
+#ifndef SHELL_BACKEND_LETTER
     #define SHELL_BACKEND_LETTER 1
 #endif
 
@@ -138,27 +138,7 @@ typedef void (*shell_sink_fn)(const uint8_t *data, uint32_t len);
  *  门面 API —— 调用面唯一入口
  * ================================================================ */
 
-#if defined(SHELL_BACKEND_NONE)
-
-    /* ---- 关 shell: 全部编译为空 ----
-     * 命令注册宏在文件作用域使用, 必须展开为空 (而非 ((void)0) 表达式),
-     * 与 letter-shell 自身 SHELL_USING_CMD_EXPORT=0 分支的空宏一致。 */
-    #define SHELL_CMD(_name, _func, _desc)
-    #define SHELL_CMD_MAIN(_name, _func, _desc)
-    #define SHELL_VAR_INT(_name, _var, _desc)
-    #define SHELL_VAR_STRING(_name, _var, _desc)
-
-    #define shell_sink_set(fn)                       ((void)(fn))
-    #define shell_init()                             (0)
-    #define shell_deinit()                           ((void)0)
-    #define shell_rx_feed(data, len)                 ((void)(data), (void)(len))
-    #define shell_write(data, len)                   ((void)(data), (void)(len))
-    #define shell_printf(...)                        ((void)0)
-    #define shell_exec(cmd)                          (0)
-    #define shell_task()                             ((void)0)
-
-#else
-
+#if SHELL_BACKEND_LETTER
     /* ---- letter-shell ---- */
     /* SHELL_CFG_USER 通常由 CMake 全局注入 (letter-shell 官方 overlay 方式),
        确保 shell.c / shell_ext.c 等后端自身 TU 也能拿到配置; 此处兜底,
@@ -224,6 +204,24 @@ typedef void (*shell_sink_fn)(const uint8_t *data, uint32_t len);
     #define SHELL_VAR_STRING(_name, _var, _desc) \
         SHELL_EXPORT_VAR(SHELL_CMD_PERMISSION(0)|SHELL_CMD_TYPE(SHELL_TYPE_VAR_STRING), \
                          _name, _var, _desc)
+#else
+    /* ---- 关 shell: 全部编译为空 ----
+     * 命令注册宏在文件作用域使用, 必须展开为空 (而非 ((void)0) 表达式),
+     * 与 letter-shell 自身 SHELL_USING_CMD_EXPORT=0 分支的空宏一致。 */
+    #define SHELL_CMD(_name, _func, _desc)
+    #define SHELL_CMD_MAIN(_name, _func, _desc)
+    #define SHELL_VAR_INT(_name, _var, _desc)
+    #define SHELL_VAR_STRING(_name, _var, _desc)
+
+    #define shell_sink_set(fn)                       ((void)(fn))
+    #define shell_init()                             (0)
+    #define shell_deinit()                           ((void)0)
+    #define shell_rx_feed(data, len)                 ((void)(data), (void)(len))
+    #define shell_write(data, len)                   ((void)(data), (void)(len))
+    #define shell_printf(...)                        ((void)0)
+    #define shell_exec(cmd)                          (0)
+    #define shell_task()                             ((void)0)
+
 
 #endif /* SHELL_BACKEND_NONE */
 

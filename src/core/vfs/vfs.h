@@ -206,6 +206,17 @@ extern "C"
      * 必需回调：mount/unmount（若文件系统需要初始化）、open/read/write/lseek/close。
      * 可选回调：置 NULL 表示不支持，core 分派前返回 -ENOTSUP。
      * 所有回调的路径参数 rel 均为**挂载点内的相对路径**（不含挂载前缀）。
+     *
+     * @attention **rel == ""（空串）表示"挂载点根"，不是 "/"。**
+     *            这与 POSIX 直觉相反，但全工程一致：core 的 stat/unlink/mkdir
+     *            都用 `rel[0] == '\0'` 判定"路径就是挂载点本身"。
+     *            后端必须自己把空串翻成所属文件系统认的根写法：
+     *              - littlefs：目录 API 只认 "/"（文件 API 两种都收）→ 后端翻译；
+     *              - FatFs   ：盘符前缀本身就代表根，空串直接用前缀；
+     *              - rawflash：扁平命名空间，空串即根，非空即文件名。
+     *            可能从 core 收到空串的入口：**open / opendir / rename**
+     *            （stat / unlink / mkdir 的"路径就是挂载点本身"情况已由 core 拦掉，
+     *            不会下发到后端）。
      */
     typedef struct vfs_fs_ops
     {
