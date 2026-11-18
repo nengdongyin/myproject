@@ -329,6 +329,17 @@ extern "C"
         return &((const param_entry_head_t *)e)->default_val;
     }
 
+    /**
+     * @brief 获取默认值指针（可写）— 仅供 param_set_default 覆盖项目默认值
+     *
+     * @note 与 entry_cache_ptr 对称: cache 与 default_val 是两个字段,
+     *       写入 default_val **不会**改变当前生效值, 调用方负责同步 cache。
+     */
+    static inline param_value_t *entry_default_ptr(param_entry_t *e)
+    {
+        return &((param_entry_head_t *)e)->default_val;
+    }
+
 #if PARAM_DEBUG_NAME_ENABLE
     /** @brief 获取参数调试名称 */
     static inline const char *param_entry_name(const param_entry_t *e)

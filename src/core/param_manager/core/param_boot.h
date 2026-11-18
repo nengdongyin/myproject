@@ -35,14 +35,22 @@ extern "C"
         /** 模块注册 (PARAM_MODULE_AUTO_REGISTER_ENABLE=0 时必须提供;
          *  开启自动注册时被忽略) */
         void (*register_modules)(void);
+        /** 项目默认值覆盖表 (可 NULL = 本产品不做覆盖)
+         *
+         *  @note 应用时机: **模块注册之后、param_load_all 之前**。
+         *        因此有存储记录的参数随后会被存储值覆盖 (用户值胜出),
+         *        无记录的参数得到这里的默认值。详见 param_set_default 的说明。*/
+        const param_default_t *defaults;
+        /** 项目默认值表条目数 (defaults 为 NULL 时忽略) */
+        uint16_t defaults_count;
     } param_boot_hooks_t;
 
     /**
      * @brief 标准启动序列 (一次调用)
      *
      * 顺序: 存储后端 → param_init → param_service_init (元数据+迁移+旋钮)
-     *      → 模块注册 (自动或手动) → param_load_all → 注册完整性自检
-     *      → param_validate_all → param_flush
+     *      → 模块注册 (自动或手动) → **项目默认值覆盖** → param_load_all
+     *      → 注册完整性自检 → param_validate_all → param_flush
      *
      * @note 收集首个失败错误码 (不中断, 与各步骤"继续处理"的语义一致);
      *       自检只在启动执行一次 —— param_load_all 保持纯恢复语义

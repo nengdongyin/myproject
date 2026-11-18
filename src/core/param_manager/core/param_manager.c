@@ -2633,6 +2633,76 @@ int param_reset_one(uint32_t param_id)
 }
 
 /**
+ * @brief 覆盖单个参数的默认值 (需已持锁) — param_set_default 的实现体
+ *
+ * @details
+ * 做两件事, 都不触碰 dirty/notify (那是"用户修改"的语义):
+ *   1. 写条目表的 default_val —— 之后 param_reset_one/all 恢复出的就是新默认值;
+ *   2. 写缓存 —— 让"无存储记录"的参数从上电起就是新默认值。
+ *
+ * 类型限制 (见头文件声明): EXEC 无值; BLOB/STRING 单缓冲下 cache 与 default
+ * 指向同一缓冲区, "换默认值"没有独立存储位置 → 一律 NOT_SUPPORTED。
+ *
+ * @param e     参数条目
+ * @param value 新默认值
+ * @return PARAM_OK / PARAM_ERR_TYPE_MISMATCH / PARAM_ERR_NOT_SUPPORTED /
+ *         PARAM_ERR_OUT_OF_RANGE
+ */
+static int param_set_default_locked(param_entry_t *e, param_value_t value)
+{
+    param_type_t t = entry_type(e);
+    if (t >= PARAM_TYPE_COUNT)
+        return PARAM_ERR_TYPE_MISMATCH;
+
+    /* 命令无值; BLOB/STRING 单缓冲无法承载独立默认值 */
+    if ((entry_flags(e) & PARAM_FLAG_EXEC) ||
+        t == PARAM_TYPE_BLOB || t == PARAM_TYPE_STRING)
+        return PARAM_ERR_NOT_SUPPORTED;
+
+    /* 与写入路径同一套校验 (范围/枚举), 但只校验不改值:
+       非法的项目默认值属于配置错误, 拒绝而非静默裁剪 */
+    if (!g_param_pre_write[t](e, &value))
+        return PARAM_ERR_OUT_OF_RANGE;
+
+    *entry_default_ptr(e) = value;               /* 1) 默认值 */
+    g_param_data_ops[t].cache_update(e, value);  /* 2) 缓存 (不标脏/不 notify) */
+    return PARAM_OK;
+}
+
+int param_set_default(uint32_t param_id, param_value_t value)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_INITIALIZED;
+
+    system_lock(SYS_LOCK_PARAM);
+    param_entry_t *e = param_entry_find(param_id);
+    int ret = e ? param_set_default_locked(e, value) : PARAM_ERR_INVALID_ID;
+    system_unlock(SYS_LOCK_PARAM);
+
+    return ret;
+}
+
+int param_apply_defaults(const param_default_t *table, uint16_t count)
+{
+    if (!g_pm.initialized)
+        return PARAM_ERR_NOT_INITIALIZED;
+
+    /* 空表 = 本产品不做覆盖, 不是错误 (让调用方免于特判) */
+    if (!table || count == 0)
+        return PARAM_OK;
+
+    int first_err = PARAM_OK;
+    for (uint16_t i = 0; i < count; i++)
+    {
+        int ret = param_set_default(table[i].param_id, table[i].value);
+        /* 单条配置写错不连带丢掉整张表: 记首个错误, 继续应用其余条目 */
+        if (ret != PARAM_OK && first_err == PARAM_OK)
+            first_err = ret;
+    }
+    return first_err;
+}
+
+/**
  * @brief 错误码转可读字符串 — 排障/日志用
  *
  * 全系统只有一个数字错误码表, 没有本函数时调用方要自己维护码表。

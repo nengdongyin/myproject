@@ -205,6 +205,26 @@ void param_manager_init(void)
 
     lwevt_init();
 
+    /* 项目默认值覆盖表 (产品差异集中点)
+     *
+     * 本工程暂不做覆盖 → .defaults / .defaults_count 留空 (NULL/0 = 空操作)。
+     * 需要按产品改默认值时, 在该产品自己的文件里写一张静态表填进来:
+     *
+     *   static const param_default_t s_product_defaults[] = {
+     *       { PID_AE_TARGET_LUMA, { .u32 = 160 } },
+     *   };
+     *   ... .defaults       = s_product_defaults,
+     *       .defaults_count = PARAM_COUNT(s_product_defaults),
+     *
+     * ⚠ STRING / BLOB / EXEC 不支持 (单缓冲 / 无值), 这些请用编译期默认值宏
+     *   + 工程 config.h 覆盖。
+     *
+     * 语义 (由 param_boot_standard 的第 5 步保证):
+     *   - 应用时机: 模块注册之后、param_load_all 之前;
+     *   - 有存储记录的参数随后被存储值覆盖 (用户值胜出, 不会被冲掉);
+     *   - 无记录的参数得到这里的默认值, 且 param_reset_one/all 也回到它;
+     *   - 不标脏、不 notify —— 它不是"用户修改"。
+     */
     param_boot_hooks_t hooks = {
         .storage_factory  = param_storage_create_selected,
         .notify           = on_param_changed,

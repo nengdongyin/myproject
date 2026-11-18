@@ -1274,6 +1274,69 @@ extern "C"
     int param_reset_one(uint32_t param_id);
 
     /* ================================================================
+     *  项目默认值覆盖 (编译期默认值之上的产品级默认值)
+     *
+     *  用途: core 作为共享库/submodule 时, 不同项目需要不同的"出厂默认值"。
+     *  希望集中配置而不改各模块的参数表 —— 用本组 API 在启动期把默认值覆盖掉。
+     *
+     *  与"用 param_write_cache 写一遍"的关键差别:
+     *    - 改的是**默认值本身**, 因此 param_reset_one/all 恢复出的也是项目默认值;
+     *    - **不标脏、不 notify**: 这不是"用户修改", 不会混进 dirty/持久化语义;
+     *    - 只在缓存与默认值上生效, 硬件由后续 INIT/flush 下发。
+     *
+     *  @par 正确用法 (顺序契约)
+     *  @code
+     *    register_modules();          // 条目已注册, ID 可解析
+     *    param_apply_defaults(tbl, n); // ★ 在这两步之间
+     *    param_load_all();            // LOAD: 有存储记录的参数覆盖缓存 → 用户值胜出
+     *  @endcode
+     *  结果: **有存储记录的参数保留存储值; 没有记录的参数得到项目默认值**。
+     *  因此无需再判断"存储里有没有这条记录"。param_boot_standard 的
+     *  `defaults` 钩子已按此顺序插入。
+     *
+     *  @par 不支持的类型 (返回 PARAM_ERR_NOT_SUPPORTED)
+     *   - BLOB / STRING: 单缓冲设计下 cache 与 default 指向同一缓冲区,
+     *     "换个默认值"没有独立存储位置; 请改用编译期默认值宏 (config.h 覆盖);
+     *   - EXEC: 命令没有值。
+     * ================================================================ */
+
+    /** @brief 一条"参数 → 新的默认值" */
+    typedef struct param_default
+    {
+        uint32_t      param_id; /**< 目标参数 ID */
+        param_value_t value;    /**< 新的默认值 (按参数类型取联合体字段) */
+    } param_default_t;
+
+    /**
+     * @brief 覆盖单个参数的默认值 (同步更新缓存, 不标脏/不 notify)
+     *
+     * @param param_id 参数 ID
+     * @param value    新的默认值
+     * @return PARAM_OK 成功;
+     *         PARAM_ERR_NOT_INITIALIZED 框架未初始化;
+     *         PARAM_ERR_INVALID_ID 参数不存在;
+     *         PARAM_ERR_OUT_OF_RANGE 值超出该参数的 [min,max] / 枚举非法;
+     *         PARAM_ERR_NOT_SUPPORTED BLOB/STRING/EXEC (见上)
+     *
+     * @note 校验用的是写入路径同一套 pre_write 表 (范围/枚举), 但**不改值**:
+     *       非法的项目默认值是配置错误, 直接拒绝而不是静默裁剪。
+     */
+    int param_set_default(uint32_t param_id, param_value_t value);
+
+    /**
+     * @brief 批量应用项目默认值表 (逐条 param_set_default)
+     *
+     * @param table 表 (可 NULL)
+     * @param count 条目数
+     * @return PARAM_OK 全部成功; 否则为**首个**失败的错误码 (其余条目仍会被应用,
+     *         一条配置写错不会连带丢掉整张表)
+     *
+     * @note NULL 表或 count==0 视为空操作 (返回 PARAM_OK): 让"本产品不做覆盖"
+     *       与"配了空表"两条路径同构, 调用方不必特判。
+     */
+    int param_apply_defaults(const param_default_t *table, uint16_t count);
+
+    /* ================================================================
      *  统计 / 遍历 / 工具
      * ================================================================ */
 

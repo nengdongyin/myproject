@@ -49,17 +49,23 @@ int param_boot_standard(const param_boot_hooks_t *hooks)
     hooks->register_modules();
 #endif
 
-    /* 步骤 5: 从存储加载所有参数 (LOAD + INIT 两阶段) */
+    /* 步骤 5: 项目默认值覆盖 (应用专属表)
+       必须在模块注册之后 —— 条目已存在才能按 ID 解析;
+       必须在 param_load_all 之前 —— 有存储记录的参数随后会被存储值覆盖,
+       无记录的参数则保留这里的项目默认值 (顺序由本 8 步骨架保证)。 */
+    TRACK_ERR(param_apply_defaults(hooks->defaults, hooks->defaults_count));
+
+    /* 步骤 6: 从存储加载所有参数 (LOAD + INIT 两阶段) */
     TRACK_ERR(param_load_all());
 
-    /* 步骤 6: 注册完整性自检 — 仅启动执行一次
+    /* 步骤 7: 注册完整性自检 — 仅启动执行一次
        (不放进 load_all: 分区热切换会反复调用 load_all) */
     TRACK_ERR(param_check_module_order());
 
-    /* 步骤 7: 裁剪所有越界值 (维护语义) */
+    /* 步骤 8: 裁剪所有越界值 (维护语义) */
     TRACK_ERR(param_validate_all());
 
-    /* 步骤 8: 将恢复的参数刷入硬件 */
+    /* 步骤 9: 将恢复的参数刷入硬件 */
     TRACK_ERR(param_flush());
 
 #undef TRACK_ERR
