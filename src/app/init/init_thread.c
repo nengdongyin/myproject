@@ -1,6 +1,8 @@
 #include "init_thread.h"
 #include "protocol_parser_thread.h"
 #include "app_config.h"
+#include "bsp_uart.h"
+#include "diag_init.h"
 #include "protocol_chain_init.h"
 #include "file_storage_init.h"
 #include "param_manager_init.h"
@@ -33,21 +35,51 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
 
     memset(ctx, 0, sizeof(app_ctx_t));
 
-    /* 平台互斥锁初始化：param/file 等子系统的 system_lock(id) 依赖此步 */
+    /* ================================================================
+     *  装配顺序表 (改顺序前请逐条确认)
+     *
+     *  1. 平台互斥锁 —— param/file/vfs 的 system_lock(id) 依赖它;
+     *  2. 串口就绪   —— log/shell 的字节出口指向这个口, 中断也开始往管道灌字节;
+     *  3. 诊断设施   —— log 必须早于后面任何 LOG_*; shell 早于一切命令入口;
+     *  4. 协议链     —— 建链 + 挂 ymodem/imperx/camyu (内部会打日志);
+     *  5. 存储挂载   —— littlefs 可用之后参数才能读旧值;
+     *  6. 参数初始化 —— 读参数缓存/备份分区 (shell 的 ft 命令依赖参数);
+     *  7. 协议解析线程 —— 最后起, 它消费第 2 步开始灌入管道的字节。
+     *
+     *  失败路径逆序: 协议链拆卸 → 诊断设施拆卸 (先断 shell 入口)。
+     * ================================================================ */
+
+    /* 1) 平台互斥锁 */
     system_mutex_init();
 
-    if (!protocol_chain_init(ctx))
+    /* 2) 串口 (设备/波特率/中断)。失败就没必要往下走 —— 没有出口可报错 */
+    if (bsp_uart_start(TEST_BAUD_RATE) != 0)
     {
-        LOG_ERR("Protocol chain init failed");
         return;
     }
 
+    /* 3) 诊断设施: 日志 → shell → md/mw 白名单 */
+    if (!diag_init())
+    {
+        return;
+    }
+
+    /* 4) 协议链 */
+    if (!protocol_chain_init(ctx))
+    {
+        LOG_ERR("Protocol chain init failed");
+        diag_deinit();
+        return;
+    }
+
+    /* 5) 存储挂载 */
     if (!file_storage_init(ctx))
     {
         LOG_ERR("File storage init failed");
         goto fail_fp;
     }
 
+    /* 6) 参数加载/初始化 */
     param_manager_init();
 
     LOG_INF("===== Protocol Chain Test Started =====");
@@ -89,4 +121,5 @@ void init_thread_entry(void *arg1, void *arg2, void *arg3)
 
 fail_fp:
     protocol_chain_cleanup(ctx);
+    diag_deinit();
 }

@@ -1,9 +1,11 @@
 #include "protocol_parser_thread.h"
 #include "app_config.h"
+#include "bsp_uart.h" /* bsp_uart_pipe(): 接收管道由 bsp 提供 */
 #include "ymodem_common.h"
 #include "file_transfer.h"
 #include "console_mode.h"
 #include "shell_api.h"
+#include <zephyr/kernel.h> /* k_pipe_read / K_MSEC: 不靠 app_config.h 传递 */
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(protocol_parser_thread, LOG_LEVEL_DBG);
@@ -26,12 +28,12 @@ void protocol_parser_thread_entry(void *arg1, void *arg2, void *arg3)
            其余状态逐字节读, 便于协议链按首字节匹配。 */
         if (file_transfer_wants_bulk_rx())
         {
-            n = k_pipe_read(&uart_pipe, data_buf,
+            n = k_pipe_read(bsp_uart_pipe(), data_buf,
                             sizeof(data_buf), K_MSEC(100));
         }
         else
         {
-            n = k_pipe_read(&uart_pipe, data_buf,
+            n = k_pipe_read(bsp_uart_pipe(), data_buf,
                             1, K_MSEC(100));
             if (n > 0)
             {

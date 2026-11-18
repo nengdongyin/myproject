@@ -18,6 +18,7 @@
 #include <string.h>
 #include "param_manager.h"
 #include "param_boot.h"
+#include "log_api.h" /* dump 输出接日志门面 (不直接用 Zephyr log.h) */
 #include "lwevt/lwevt.h"
 #include "param_storage_flashdb.h"
 #include "param_storage_iniparser.h"
@@ -28,15 +29,23 @@
 #include "param_service.h"
 
 /**
- * @brief dump 输出回调 — 将格式化文本行输出到控制台
+ * @brief dump 输出回调 — 把参数 dump 接到日志门面
  *
  * @param line      格式化后的参数行
- * @param user_data 用户上下文（本实现忽略）
+ * @param user_data 本实现忽略
+ *
+ * @note 为何注册在*本文件*而不是诊断设施 (diag_init):
+ *       `param_dump()` 的**第一个调用者就是本文件的 `param_manager_init()` 尾部**
+ *       (启动后整表 dump), 所以这条接线属于参数子系统自己的配置。放在这里后,
+ *       “谁先谁后”不再影响 dump 是否能输出 —— 原先放在 diag_init 里时,
+ *       一旦两者顺序被调换, 启动 dump 就会被静默丢掉。
+ * @note 走 `LOG_I` 而非 `printf`: printf 直写 Zephyr console, 会绕开
+ *       diag 的出口选路 (协议模式下不该往通讯口写东西)。
  */
-static void dump_cb(const char *line, void *user_data)
+static void dump_to_log(const char *line, void *user_data)
 {
     (void)user_data;
-    printf("%s\n", line);
+    LOG_I("dump", "%s", line);
 }
 
 /** @brief 参数变化通知的防重入深度计数器 */
@@ -190,6 +199,10 @@ static void register_modules(void)
 
 void param_manager_init(void)
 {
+    /* dump 输出接线必须在任何 param_dump() 之前 —— 本函数尾部就有一发
+       (整表 dump), 所以这里是最自然的注册点 (见 dump_to_log 的注释)。 */
+    param_dump_set_output(dump_to_log);
+
     lwevt_init();
 
     param_boot_hooks_t hooks = {

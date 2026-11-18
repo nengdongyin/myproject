@@ -78,6 +78,7 @@ zephyr_linker_sources(SECTIONS ${CMAKE_CURRENT_SOURCE_DIR}/src/core/shell/shell_
 target_sources(app PRIVATE
       src/app/main.c
       src/app/init/init_thread.c
+      src/app/init/diag_init.c
       src/app/init/protocol_chain_init.c
       src/app/init/param_manager_init.c
       src/app/init/file_storage_init.c
@@ -93,6 +94,7 @@ target_sources(app PRIVATE
       src/core/param_manager/core/param_service.c
       src/core/param_manager/core/param_boot.c
       src/platform/port/port_impl.c
+      src/platform/bsp/bsp_uart.c
       src/core/param_manager/storage/param_storage_flashdb.c
       src/core/param_manager/storage/param_storage_mkv.c
       src/lib/mkv/mkv.c

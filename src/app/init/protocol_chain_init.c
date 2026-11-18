@@ -1,46 +1,29 @@
 #include "protocol_chain_init.h"
 #include <zephyr/logging/log.h>
-#include <zephyr/drivers/uart.h>
 #include "imperx_cmd_map.h"
 #include "param_manager.h"
 #include <string.h>
 #include "param_dump.h"
-#include <stdio.h>
 #include "file_transfer.h"
-#include "log_api.h"
-#include "shell_api.h"
-#include "mem_regions.h"
+#include "bsp_uart.h" /* bsp_comm_write: 协议帧出口 */
 
 LOG_MODULE_REGISTER(chain_test, LOG_LEVEL_DBG);
 
 /* shell 的字节入口不走协议透传帧了: 通信串口由 core/console 的 console_mode
    在“协议解析 / shell”之间时分复用 (WRITE 0xF003 切 shell, shell 内
-   `uart_mode proto` 切回)。本文件只负责注入字节出口与初始化 shell。 */
+   `uart_mode proto` 切回)。
 
-/* ================================================================
- *  平台出口 —— 本文件是唯一认识 uart1_dev 的地方
- * ================================================================ */
+   本文件的职责只剩"协议链": 建链 → 挂 ymodem → 建/挂 imperx、camyu (+各自
+   回调) → 拆卸。以下三件事**不在这里** (曾在, 已拆走):
+     - 串口设备/波特率/中断/三路出口  → platform/bsp/bsp_uart.c
+     - param_dump 输出 / 日志 / shell / md-mw 白名单 → diag_init.c
+     - 装配顺序                        → init_thread.c (唯一的顺序表) */
 
-/** @brief 字节流出口: 供 file_transfer 组件与各协议 tx_ready 共用 */
-static void uart_tx_write(const uint8_t *data, uint32_t len)
-{
-    for (uint32_t i = 0; i < len; i++)
-    {
-        uart_poll_out(uart1_dev, data[i]);
-    }
-}
-
-/** @brief 各协议共用的发送就绪回调 */
+/** @brief 各协议共用的发送就绪回调 (协议帧出口, 不做任何模式判断) */
 static void on_tx_ready(protocol_parser_t *parser, void *user_ctx)
 {
     (void)user_ctx;
-    uart_tx_write(parser->tx.buffer, parser->tx.data_len);
-}
-
-static void dump_cb(const char *line, void *user_data)
-{
-    (void)user_data;
-    LOG_INF("%s", line);
+    bsp_comm_write(parser->tx.buffer, parser->tx.data_len);
 }
 
 /* ================================================================
@@ -147,27 +130,6 @@ static void camyu_on_frame_ready(protocol_parser_t *parser,
 
 bool protocol_chain_init(app_ctx_t *ctx)
 {
-    param_dump_set_output(dump_cb);
-
-    /* 日志: 注入串口字节出口并初始化 (EasyLogger elog_init + elog_start) */
-    log_sink_set(uart_tx_write);
-    log_init();
-    LOG_I("boot", "EasyLogger up");
-
-    /* shell: 只注入字节出口 + 初始化。字节**入口**由 core/console 的
-       console_mode 分流 (协议模式不喂 shell), 详见本文件头的说明。
-       sink 签名与 log_sink_fn / ft_tx_fn 一致, 故 uart_tx_write 一函数多用。 */
-    shell_sink_set(uart_tx_write);
-    shell_init();
-    LOG_I("boot", "letter-shell up (WRITE 0xF003 -> shell)");
-
-    /* md/mw 的地址白名单: 板级表 → core/debug。不注入的话两条命令一律拒绝
-       (fail-closed), 这是故意的不做"默认全放开"。 */
-    if (mem_regions_configure() != 0)
-    {
-        LOG_WRN("mem whitelist not configured, md/mw will be refused");
-    }
-
     ctx->chain = protocol_chain_create(4); /* ymodem×2 + imperx + camyu */
     if (!ctx->chain)
     {
@@ -181,7 +143,7 @@ bool protocol_chain_init(app_ctx_t *ctx)
        组件内部负责创建收/发两个 parser、设置回调并 add_parser。 */
     file_transfer_cfg_t ft_cfg = {
         .chain    = ctx->chain,
-        .tx_write = uart_tx_write,
+        .tx_write = bsp_comm_write, /* 协议帧出口: 只进通讯口, 不做模式判断 */
     };
     int ft_ret = file_transfer_attach(&ft_cfg);
     if (ft_ret != PARAM_OK)
@@ -234,10 +196,8 @@ fail_ft:
 
 void protocol_chain_cleanup(app_ctx_t *ctx)
 {
-    /* shell 先关: 之后不再有任何入口能把字节喂进 shellHandler */
-    shell_deinit();
-
-    /* 组件必须先拆: remove_parser 需要 chain 存活, 且会顺手清掉链上的锁定。
+    /* 注: shell/log 的关闭属于诊断设施, 由编排层调 diag_deinit() —— 本函数只管协议链。
+       组件必须先拆: remove_parser 需要 chain 存活, 且会顺手清掉链上的锁定。
        现有顺序是 destroy chain → destroy parser, 这里必须反过来。 */
     file_transfer_detach();
 

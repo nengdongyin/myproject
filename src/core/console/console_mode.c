@@ -67,6 +67,11 @@ int console_mode_set(console_mode_t mode)
         return PARAM_OK; /* 幂等 */
     }
 
+    /* 先落状态再打印: shell 的出口按"写入时刻"的模式选路 (见 app 层的
+       log_shell_tx_fanout), 若先打印后赋值, 进入 shell 的那句欢迎语会被判成
+       协议模式而只送到调试口 —— 操作者在自己敲命令的那个口上就看不到它。 */
+    s_mode = mode;
+
     /* 提示: letter-shell 只在每条命令之后打提示符, 切换瞬间不会自己输出,
        操作者需要一处可见的落脚点。切回协议时也打一行, 便于确认已离开。 */
     if (mode == CONSOLE_MODE_SHELL)
@@ -79,7 +84,6 @@ int console_mode_set(console_mode_t mode)
         shell_printf("\r\n[protocol mode]\r\n");
     }
 
-    s_mode = mode;
     return PARAM_OK;
 }
 

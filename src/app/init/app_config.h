@@ -10,7 +10,7 @@
 #define STACK_SIZE 12288
 #define INIT_STACK_SIZE 4096
 #define THREAD_PRIORITY 7
-#define PIPE_BUFFER_SIZE 2048
+/* 接收管道长度属于 bsp 内部细节 (BSP_UART_PIPE_SIZE, 见 platform/bsp/bsp_uart.c) */
 
 #define IMPERX_RX_BUF_SIZE 32
 #define IMPERX_TX_BUF_SIZE 32
@@ -40,5 +40,5 @@ typedef struct
 } app_ctx_t;
 
 extern app_ctx_t app_ctx;
-extern const struct device *const uart1_dev;
-extern struct k_pipe uart_pipe;
+/* 串口设备/接收管道 不再暴露给 app: 它们属于 platform/bsp (见 bsp_uart.h 的
+   bsp_uart_pipe())。app 层只经 bsp_uart.h 的接口取用。 */
