@@ -31,11 +31,22 @@
 
 static console_mode_t s_mode = CONSOLE_MODE_PROTO;
 
+/**
+ * @brief 借用槽 —— 谁 save_set 谁 restore。
+ *
+ * 只有一份: 同一时刻只允许一个"临时占用串口的活动" (目前只有 ymodem 文件
+ * 传输)。槽为空时 save_set 抢到并返回 true; 已占用则什么都不做并返回 false。
+ */
+static struct
+{
+    console_mode_t saved; /**< save_set 前的模式 (仅在 valid 时有效) */
+    bool valid;           /**< 槽是否被占用 */
+} s_slot;
+
 console_mode_t console_mode_get(void)
 {
     return s_mode;
 }
-
 int console_mode_set(console_mode_t mode)
 {
     if (mode != CONSOLE_MODE_PROTO && mode != CONSOLE_MODE_SHELL)
@@ -70,6 +81,30 @@ int console_mode_set(console_mode_t mode)
 
     s_mode = mode;
     return PARAM_OK;
+}
+
+bool console_mode_save_set(console_mode_t target)
+{
+    if (s_slot.valid)
+        return false; /* 已有借用者: 不覆盖它的原始模式 */
+
+    s_slot.saved = s_mode;
+    s_slot.valid = true;
+
+    /* 切换失败 (target 非法 / shell 被编译关闭) 也照样占槽:
+       restore 会把状态还回去, 串口不会停在半切换状态 */
+    (void)console_mode_set(target);
+    return true;
+}
+
+void console_mode_restore(void)
+{
+    if (!s_slot.valid)
+        return; /* 幂等: 没有借用就别动串口 */
+
+    const console_mode_t saved = s_slot.saved;
+    s_slot.valid = false;
+    (void)console_mode_set(saved); /* 幂等: 已是该模式则不打印、不改状态 */
 }
 
 /* ================================================================

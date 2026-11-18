@@ -29,6 +29,7 @@
 #include "port.h"
 #include "protocol_parser_ymodem.h"
 #include "ymodem_common.h"
+#include "console_mode.h" /* 会话期间借用串口: console_mode_save_set / restore */
 
 /* ================================================================
  *  日志 —— core/ 目录整体零 printf 依赖, 沿用 param_service.c 的策略:
@@ -91,6 +92,26 @@ static uint8_t s_send_tx[YMODEM_STX_FRAME_LEN_BYTE]; /**< 1029 */
 /** @brief 会话锁 (sys_mutex_lock/unlock 对 NULL 安全) */
 static void ft_lock(void) { sys_mutex_lock(g_ft.lock); }
 static void ft_unlock(void) { sys_mutex_unlock(g_ft.lock); }
+
+/* ================================================================
+ *  串口模式: 会话期间必须是协议流 (借用 / 归还, 类似 irq_save / irq_restore)
+ *
+ *  会话一旦开动, 线上就是纯 ymodem 字节; 若串口还在 shell 模式, 这些字节会被
+ *  shellHandler 逐字节回显、把 0x0A 当回车执行命令行。所以:
+ *     启动 → console_mode_save_set(PROTO): 保存当前模式 + 切到 PROTO
+ *     收尾 → console_mode_restore():       恢复保存的那个模式
+ *
+ *  状态由 console_mode 内部的借用槽维护, 本组件**不存副本** —— 两份状态必然
+ *  分叉。唯一要记的是"这次是不是我抢到的槽" (save_set 的返回值), 而且只在
+ *  本次调用内有效, 用于启动失败时决定要不要立刻归还。
+ *
+ *  为什么恢复点在 ft_release_chain(): 会话结束是异步的 (由 RX 线程的帧事件
+ *  触发), 那时 shell 命令早就返回了; 而 ft_release_chain() 是**所有**收尾路径
+ *  (正常完成 / 协议中止 / 本机 I/O 失败) 的唯一汇聚点。
+ *
+ *  为什么不能"无脑恢复成 shell": 协议侧 (WRITE 0xF000/0xF001) 发起的会话本来
+ *  就在 PROTO 模式, 结束时把它踢进 shell 会把上行链路静音。存什么还什么。
+ * ================================================================ */
 
 /** @brief 拼 "dir/name" 到 out, 超长返回 -1 */
 static int ft_join(char *out, size_t n, const char *dir, const char *name)
@@ -244,6 +265,12 @@ static void ft_release_chain(protocol_parser_t *parser)
 {
     if (g_ft.chain && protocol_chain_get_locked_parser(g_ft.chain) == parser)
         protocol_chain_set_locked_parser(g_ft.chain, NULL);
+
+    /* 会话到此为止 → 把串口交还给会话开始前的消费者 (save_set 的归还端)。
+       放在这里而不是各事件分支里: 正常完成 / 协议中止 / 本机 I/O 失败
+       五条收尾路径都经过本函数, 少写一处就是"模式卡在 PROTO 直到重启"。
+       幂等: 本组件没借过 (槽为空) 时是空操作。 */
+    console_mode_restore();
 }
 
 /**
@@ -633,6 +660,10 @@ void file_transfer_detach(void)
 {
     ft_reset_session();
 
+    /* 装配撤销 = 组件不再占用串口: 若还有未归还的借用 (会话中途拆链), 在这里
+       兜底归还, 免得串口停在 PROTO 而无人再负责切回。 */
+    console_mode_restore();
+
     /* remove 顺手清锁定, 且必须早于 chain destroy */
     if (g_ft.chain)
     {
@@ -702,8 +733,18 @@ int file_transfer_start_recv(void)
 
     ft_reset_session(); /* 清掉上一会话可能残留的句柄与统计 */
 
+    /* 会话期间串口必须是协议流: 借用并切到 PROTO (save_set 的保存端)。
+       放在握手之前 —— recv 的启动会立刻发 'C'。
+       saved_now=false 表示上一会话尚未收尾、槽已被它占着: 本次不负责归还。 */
+    const bool console_saved_now = console_mode_save_set(CONSOLE_MODE_PROTO);
+
     if (!ymodem_adapter_start_receiver(g_ft.recv_parser))
+    {
+        /* 没握手上线就失败 → 只归还本次抢到的槽 */
+        if (console_saved_now)
+            console_mode_restore();
         return PARAM_ERR_NOT_SUPPORTED;
+    }
 
     protocol_chain_set_locked_parser(g_ft.chain, (protocol_parser_t *)g_ft.recv_parser);
     FT_LOG("[FT] start_recv: armed, waiting for '%c' handshake\n", YMODEM_C);
@@ -727,8 +768,15 @@ int file_transfer_start_send(void)
 
     ft_reset_session();
 
+    /* 同 recv: 会话期间串口归协议链 (send 在此只是进入"等对端 'C'") */
+    const bool console_saved_now = console_mode_save_set(CONSOLE_MODE_PROTO);
+
     if (!ymodem_adapter_start_sender(g_ft.send_parser))
+    {
+        if (console_saved_now)
+            console_mode_restore();
         return PARAM_ERR_NOT_SUPPORTED;
+    }
 
     protocol_chain_set_locked_parser(g_ft.chain, (protocol_parser_t *)g_ft.send_parser);
     FT_LOG("[FT] start_send: armed, waiting for peer 'C'\n");

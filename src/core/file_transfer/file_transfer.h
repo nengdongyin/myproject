@@ -12,10 +12,15 @@
  *
  * 协议层只做 `地址 → param_id → param_read/write/exec`, 不需要专用命令通道。
  *
- * @par 组件边界 (三条)
+ * @par 组件边界 (四条)
  *  - **不认识 UART**: 字节出口经 @ref ft_tx_fn 注入, 组件只管把 tx buffer 交出去。
  *  - **不认识 chain 生命周期**: chain 句柄由调用方注入, 组件只 add/remove parser。
  *  - **不认识协议帧格式**: 触发点由上层做地址映射后调 param_exec()。
+ *  - **会借用串口消费者 (console_mode)**: 会话期间线上必须是纯 ymodem 字节,
+ *    所以在启动时 console_mode_save_set(PROTO) 借走串口、在收尾时
+ *    console_mode_restore() 归还 (irq_save / irq_restore 语义)。借用槽由
+ *    console_mode 内部维护, 本组件不存副本 —— 但恢复点只能由本组件持有,
+ *    因为会话结束是异步的, 触发它的命令早已返回。
  *
  * @par 没有周期性维护入口
  * 会话状态不单独存储, 由协议链当前锁定的 parser 派生: 启动时组件把链锁到

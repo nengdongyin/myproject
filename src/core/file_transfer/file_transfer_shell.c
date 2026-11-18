@@ -26,14 +26,23 @@
  * 路径合法性校验也只在一个地方 (param 的 write 回调) —— 不会出现"shell 绕过了
  * 校验"这种分叉。
  *
- * @par 发起后自动切回协议模式
- * 启动会话后本函数立刻把串口模式切回 `CONSOLE_MODE_PROTO`: 之后的字节流就是纯
- * ymodem, 不需要操作者再敲 `uart_mode proto` (少了那段手敲时间就是一个真正的
- * 竞争窗口 —— 对端一回帧就会进 `shellHandler`)。
+ * @par 发起后自动切回协议模式, 结束后自动还原
+ * 启动会话后串口交给协议链: 之后的字节流就是纯 ymodem, 不需要操作者再敲
+ * `uart_mode proto` (少了那段手敲时间就是一个真正的竞争窗口 —— 对端一回帧就会
+ * 进 `shellHandler`)。**会话结束 (正常 / 中止 / 本机 I/O 失败) 时自动恢复启动前
+ * 的模式**: 从 shell 发起就回到 shell, 于是可以直接 `ft` / `ls` 看结果, 不用再
+ * 用 WRITE 0xF003 重新进一次。
  *
- * 代价: 切回协议模式后 shell 在这条串口上就**静音**了, 传输结果看不到;
- * 想查结果需重新用 WRITE 0xF003 进 shell 模式再看 `ft` / `ls`。
- * 若 shell 本来就在独立调试串口上 (串口模式本来就是 protocol), 则什么也不做。
+ * 实现: console_mode 的 console_mode_save_set / console_mode_restore (irq_save /
+ * irq_restore 语义, 借用槽在 console_mode 内部)。保存点在
+ * file_transfer_start_*、归还在会话收尾 —— 恢复点必须由会话引擎持有, 因为
+ * 会话结束是异步的。
+ * 若 shell 本来就在独立调试串口上 (模式本来就是 protocol), 则全程什么都不做。
+ *
+ * @par 例外: 会话不收尾则模式不还原
+ * 对端静默消失时接收器会停在 TRANSFERRING/FINISHING (刻意不自动放弃, 见
+ * file_transfer.h), 此时会话不算结束, 串口也就仍归协议链; 逃生通道依旧是
+ * WRITE 0xF003 进 shell。
  *
  * @par 握手方向 (ymodem: 'C' 由接收方发)
  *   - `ft recv` → 本机是接收方 → 立即发 'C', 对端要跑发送端 (sb / lsz --ymodem)
@@ -43,7 +52,6 @@
 #include "shell_api.h"
 #include "file_transfer.h"
 #include "param_manager.h"
-#include "console_mode.h"
 
 #if !defined(SHELL_BACKEND_NONE)
 
@@ -109,37 +117,36 @@ static int ft_shell_set_path(uint32_t id, const char *value)
  * @param is_recv 非 0 = 接收; 0 = 发送
  * @return 0 已发起; -1 失败 (已打印原因)
  *
- * @par 为什么先把模式切回协议链再启动
+ * @par 串口模式由 file_transfer 负责, 本函数不再自己切
  * 启动之后线上就是纯 ymodem 字节流 (recv 立刻发 'C', send 收到对端 'C' 后开始
- * 发帧), 任何 shell 打印混进去都属于污染协议流。所以顺序是:
- *   1. 打完所有提示 → 2. 切回 CONSOLE_MODE_PROTO → 3. param_exec 启动
- * 启动成功后**不再打印任何东西**; 失败则切回 shell 再报错 —— 此时没有握手,
- * 线上干净, 且操作者需要留在 shell 里改路径重试。
+ * 发帧), 任何 shell 打印混进去都属于污染协议流。模式切换因此发生在
+ * `param_exec` 内部 (file_transfer_start_*): 那里做 save(当前模式) + 切 PROTO,
+ * 会话收尾时在 ft_release_chain() 里 restore —— **恢复点只有会话引擎知道**
+ * (结束是异步的, 那时本函数早已返回)。两处各切一次必然分叉, 所以这里只管打印,
+ * 不碰 console_mode。
+ *
+ * @par 顺序
+ *   1. 打完提示 (此时还是 shell 模式, 打印不会污染协议流)
+ *   2. param_exec 启动 → 内部保存模式 + 切 PROTO → 握手布置
+ * 启动成功后**不再打印任何东西**; 失败则 file_transfer 已把模式还原, 这里直接
+ * 报错, 操作者留在 shell 里改路径重试。
  *
  * @note 返回成功只代表"握手已布置", 不代表传输完成。
+ * @note 传输结束后模式会自动恢复到启动前的样子: 从 shell 发起的会话回到 shell
+ *       (可以直接 `ft` / `ls` 看结果), 协议侧发起的会话留在协议模式。
  */
 static int ft_shell_start(int is_recv)
 {
-    int was_shell = (console_mode_get() == CONSOLE_MODE_SHELL);
     int rc;
 
     /* 1) 提示必须在握手上线之前打完 */
-    shell_printf("ft: %s starting%s\r\n", is_recv ? "recv" : "send",
-                 was_shell ? ", uart -> protocol mode" : "");
+    shell_printf("ft: %s starting\r\n", is_recv ? "recv" : "send");
 
-    if (was_shell)
-    {
-        /* 2) 切回协议链 (内部会打印 [protocol mode], 同样在握手之前) */
-        (void)console_mode_set(CONSOLE_MODE_PROTO);
-    }
-
-    /* 3) 启动: recv 会在此发 'C'; send 在此进入等 'C' 状态 */
+    /* 2) 启动: recv 会在此发 'C'; send 在此进入等 'C' 状态 */
     rc = param_exec(is_recv ? PID_FT_RECV_START : PID_FT_SEND_START, NULL);
     if (rc != PARAM_OK)
     {
-        /* 启动失败 → 没有握手上线: 切回 shell 再报错, 让操作者能改路径重试 */
-        if (was_shell)
-            (void)console_mode_set(CONSOLE_MODE_SHELL);
+        /* 启动失败 → 没有握手上线, 且 file_transfer 已还原原模式: 就地报错 */
         shell_printf("ft: start failed (%s)\r\n", param_strerror(rc));
         return -1;
     }

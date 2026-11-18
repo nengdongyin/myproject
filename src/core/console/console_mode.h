@@ -71,6 +71,36 @@ console_mode_t console_mode_get(void);
  */
 int console_mode_set(console_mode_t mode);
 
+/**
+ * @brief 保存当前模式并切到 target —— **irq_save 语义**, 保存槽由本模块内部维护
+ *
+ * 给"临时占用串口的活动"用 (目前只有 ymodem 文件传输): 活动期间线上必须是纯
+ * 协议字节流, 活动结束用 console_mode_restore() 还回去。
+ *
+ * @param target 活动期间要用的模式 (通常是 CONSOLE_MODE_PROTO)
+ * @return **true = 本次调用抢到了保存槽**, 随后的 restore 由调用方负责;
+ *         **false = 槽已被别的调用占着**, 本次什么都没做 (也不要调 restore,
+ *         否则会把别人的借用提前还掉)。
+ *
+ * @note 为什么要有返回值: 上一会话尚未收尾就被重新启动时 (协议侧重试),
+ *       第二次 save_set 返回 false —— 如果那次启动随后失败并无条件 restore,
+ *       就会把还活着的第一次会话"还"回 shell, 让它的接收流被 shell 吃掉。
+ * @note 槽只有一份 → 同一时刻只允许一个借用者。需要更复杂的所有权请改造成
+ *       返回令牌的形式, 而不是在这里叠引用计数。
+ * @note 切换失败 (target 非法 / shell 被编译关闭) 也照样占槽: 后续 restore
+ *       会把状态还回去, 串口不会停在半切换状态。
+ */
+bool console_mode_save_set(console_mode_t target);
+
+/**
+ * @brief 恢复保存槽里的模式并清空槽 —— **irq_restore 语义**
+ *
+ * @note 幂等: 槽为空时什么都不做 (不打印、不改状态)。
+ * @note 只有 console_mode_save_set() 返回 true 的那一方该调它; 另外"组件卸载"
+ *       这类兜底路径也可以调 (清掉可能残留的借用)。
+ */
+void console_mode_restore(void);
+
 /* ================================================================
  *  参数 ID (MODULE_CONSOLE)
  *
