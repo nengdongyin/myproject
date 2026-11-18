@@ -55,7 +55,28 @@ target_include_directories(app PRIVATE
     src/camera/drivers/ip/histogram
 )
 
-target_compile_definitions(app PRIVATE PARAM_MKV_ENABLE=1)
+# 产品配置覆盖层: 强制预处理工程根目录的 config.h
+#
+# 机制: 各模块头把旋钮写成 `#ifndef X / #define X 默认 / #endif`, 而 -include
+# 会在每个 TU 的任何 #include 之前展开 config.h —— 于是"在 config.h 里定义一次"
+# 就覆盖了模块默认值, 模块文件零修改 (升级可整体覆盖模块目录)。
+#
+# 用绝对路径: config.h 是通用名, 走 -I 搜索有可能命中第三方库的同名文件。
+# 校验见 tools/check_config_overlay.py (只能覆盖带 #ifndef 守卫的宏)。
+target_compile_options(app PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/config.h)
+
+# 参数存储后端的选择已迁至 config.h (PARAM_MKV_ENABLE=1), 不再在此重复定义 ——
+# "选哪个后端"只保留一个决策点, 避免 -D 与 overlay 两处容易分叉。
+
+# 覆盖层自检 (可选目标): `ninja -C build check-config`
+# 校验 config.h 里每个宏都在其归属头带 #ifndef 守卫、且不属于禁止覆盖的契约类宏。
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+  add_custom_target(check-config
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/check_config_overlay.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "checking config.h overlay")
+endif()
 
 # letter-shell 配置覆盖层: 全局注入, 使 shell.c / shell_ext.c 等后端自身
 # 编译单元也能拿到 shell_config.h (其中含 port.h → stddef.h, 顺带修复

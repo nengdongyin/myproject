@@ -48,15 +48,25 @@
  * ================================================================ */
 
 /** @brief 单次读的块大小 */
+#ifndef VFS_SH_IO_CHUNK
 #define VFS_SH_IO_CHUNK   128u
-/** @brief cat 单次最多输出的字节数 */
+#endif
+/** @brief cat 单次最多输出的字节数 (覆盖前请评估同步输出的阻塞时间) */
+#ifndef VFS_SH_CAT_MAX
 #define VFS_SH_CAT_MAX    4096u
+#endif
 /** @brief hexdump 单次最多输出的字节数 */
+#ifndef VFS_SH_HD_MAX
 #define VFS_SH_HD_MAX     512u
+#endif
 /** @brief ls 单目录最多列出的条目数 */
+#ifndef VFS_SH_LS_MAX
 #define VFS_SH_LS_MAX     64
+#endif
 /** @brief cat 行缓冲: 攒够一行再一次性打印, 避免每字符一次 vsnprintf */
+#ifndef VFS_SH_LINE_BUF
 #define VFS_SH_LINE_BUF   96u
+#endif
 /** @brief cat 用法 (三种形态共用同一串, 失败与 help 一致) */
 #define VFS_SH_CAT_USAGE \
     "usage: cat <file> [off] [len] | cat -r <file> [len]\r\n"

@@ -6,16 +6,44 @@
 #include "protocol_parser_imperx.h"
 #include "protocol_parser_camyu.h"
 
+/* ================================================================
+ *  应用级常量 —— 全部用 #ifndef 守卫, 以便被工程根目录的 config.h 覆盖
+ *  (config.h 由构建系统强制预处理: -include config.h。模块内保留默认值,
+ *   所以升级时模块目录可整体覆盖, 产品差异只留在 config.h 一处)
+ * ================================================================ */
+
+#ifndef TEST_BAUD_RATE
 #define TEST_BAUD_RATE 460800
-#define STACK_SIZE 12288
-#define INIT_STACK_SIZE 4096
-#define THREAD_PRIORITY 7
+#endif
 /* 接收管道长度属于 bsp 内部细节 (BSP_UART_PIPE_SIZE, 见 platform/bsp/bsp_uart.c) */
 
+#ifndef STACK_SIZE
+#define STACK_SIZE 12288
+#endif
+
+#ifndef INIT_STACK_SIZE
+#define INIT_STACK_SIZE 4096
+#endif
+
+#ifndef THREAD_PRIORITY
+#define THREAD_PRIORITY 7
+#endif
+
+#ifndef IMPERX_RX_BUF_SIZE
 #define IMPERX_RX_BUF_SIZE 32
+#endif
+
+#ifndef IMPERX_TX_BUF_SIZE
 #define IMPERX_TX_BUF_SIZE 32
+#endif
+
+#ifndef CAMYU_RX_BUF_SIZE
 #define CAMYU_RX_BUF_SIZE 320
+#endif
+
+#ifndef CAMYU_TX_BUF_SIZE
 #define CAMYU_TX_BUF_SIZE 320
+#endif
 
 /**
  * @brief 应用上下文

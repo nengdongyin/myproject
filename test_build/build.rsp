@@ -3,6 +3,11 @@
 -O0
 -Wall
 -DPORT_OS_LIBC
+-DSHELL_BACKEND_LETTER=0
+-DSHELL_BACKEND_NONE
+-I.
+-include
+config.h
 -Isrc
 -Isrc/platform
 -Isrc/platform/port
@@ -35,6 +40,7 @@
 -Isrc/core/protocol_parser
 -Isrc/core/file_transfer
 -Isrc/core/shell
+-Isrc/core/console
 -Isrc/core/vfs
 -Isrc/core/vfs/backend
 -Isrc/core/vfs/rawflash
@@ -93,6 +99,7 @@ src/protocols/ymodem/src/ymodem_receiver.c
 src/protocols/ymodem/adapter/protocol_parser_ymodem.c
 src/core/file_transfer/file_transfer.c
 src/core/file_transfer/file_transfer_param.c
+src/core/console/console_mode.c
 src/core/shell/shell_parse.c
 src/protocols/imperx/protocol_parser_imperx.c
 src/protocols/camyu/protocol_parser_camyu.c
